@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planner</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7384; --line: #e2e5eb;
+  --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
+  --open: #6b7384; --doing: #c77700; --done: #2f9e5b; --bad: #d63c3c; --bad-bg: #fde8e8;
+  --code: #eef0f4;
+}
+:root[data-theme="dark"] {
+  --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
+  --accent: #6d93ff; --accent-text: #0e1220; --bar: #6d93ff; --bar-off: #252a37;
+  --open: #98a0b3; --doing: #f0a63a; --done: #4cc47f; --bad: #ff7b7b; --bad-bg: #3a2024;
+  --code: #252a37;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+       display: flex; flex-direction: column; }
+header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px;
+         background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 17px; margin: 0 6px 0 0; }
+button, .btn, input[type=text], select { font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+button:hover, .btn:hover { border-color: var(--accent); }
+input[type=text] { cursor: text; width: 7.5em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on, .tabs button.on { background: var(--accent); color: var(--accent-text); }
+label.chk { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); cursor: pointer; }
+.spacer { flex: 1; }
+.hint { color: var(--muted); font-size: 13px; }
+main { flex: 1; min-height: 0; display: flex; }
+.pane { flex: 1; min-width: 0; overflow: auto; }
+#editorPane { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+#editorPane.solo { border-right: 0; }
+textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 16px; background: var(--panel);
+  color: var(--text); font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
+#viewPane { padding: 18px 24px 40px; }
+.hidden { display: none !important; }
+.drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
+
+/* planner views */
+.tabs { display: inline-flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.tabs button.on { border-color: var(--accent); }
+h2.sec { margin: 26px 0 2px; font-size: 18px; }
+h2.sec:first-child { margin-top: 0; }
+.sec .when, .when { color: var(--muted); font-weight: normal; font-size: 13px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+.card h3 { margin: 0 0 6px; font-size: 16px; display: flex; gap: 10px; align-items: baseline; }
+.count { color: var(--muted); font-weight: normal; font-size: 13px; }
+.task { padding: 2px 0; }
+.kids { margin-left: 22px; border-left: 1px solid var(--line); padding-left: 12px; }
+.box { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
+.s-open .box { color: var(--open); } .s-doing .box { color: var(--doing); } .s-done .box { color: var(--done); }
+.s-done .ttl { color: var(--muted); text-decoration: line-through; }
+.who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
+.who { color: var(--accent); border-color: var(--accent); }
+.flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bad-bg); color: var(--bad); margin-left: 4px; }
+.note { color: var(--muted); font-size: 13.5px; margin-left: 1.4em; }
+.note::before { content: "— "; }
+.proj { color: var(--muted); font-size: 13px; margin-right: 6px; }
+table.tl { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+table.tl th, table.tl td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.tl th.m { text-align: center; font-size: 12px; color: var(--muted); width: 3.2%; }
+table.tl td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+table.tl td.c { padding: 4px 2px; } table.tl td.c i { display: block; height: 14px; background: var(--bar-off); }
+table.tl td.c i.on { background: var(--bar); }
+table.tl td.c i.edge { border-radius: 7px; }
+.empty { color: var(--muted); font-style: italic; padding: 4px 0; }
+.err { color: var(--bad); background: var(--bad-bg); padding: 12px 16px; border-radius: 8px; }
+h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.line { padding: 3px 0; border-bottom: 1px solid var(--line); }
+.line .d { display: inline-block; min-width: 8.5em; color: var(--muted); }
+
+/* markdown view */
+.md { max-width: 760px; }
+.md h1, .md h2, .md h3 { line-height: 1.25; margin: 1.2em 0 .4em; }
+.md code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+.md pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow: auto; }
+.md pre code { padding: 0; background: none; }
+.md blockquote { margin: .6em 0; padding: 0 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); }
+.md a { color: var(--accent); }
+.md ul, .md ol { padding-left: 1.5em; } .md ul.tasks { list-style: none; padding-left: .3em; }
+.md table { border-collapse: collapse; } .md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Planner</h1>
+  <label class="btn">Open file<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
+  <button id="save">Save</button>
+  <span class="seg" id="modes">
+    <button data-mode="plain">Plain</button>
+    <button data-mode="planner">Planner</button>
+    <button data-mode="markdown">Markdown</button>
+  </span>
+  <label class="chk" id="splitWrap"><input type="checkbox" id="split"> Edit alongside</label>
+  <span class="spacer"></span>
+  <label class="chk" id="todayWrap">Today <input type="text" id="today" placeholder="Oct12 or 2026-10-12"></label>
+  <button id="theme" title="Toggle dark mode">Dark</button>
+</header>
+<main>
+  <section class="pane" id="editorPane">
+    <textarea id="editor" spellcheck="false" placeholder="Paste your notes here, or open a .txt / .md file. Drag and drop works too."></textarea>
+  </section>
+  <section class="pane hidden" id="viewPane"></section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0 };
+
+/* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
+function h(tag, cls, ...kids) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  for (const k of kids) if (k != null && k !== false) n.append(k);
+  return n;
+}
+const span = (cls, text) => h("span", cls, text);
+
+/* ---------- theme ---------- */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("theme").textContent = t === "dark" ? "Light" : "Dark";
+}
+applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+$("theme").onclick = () => {
+  const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(t); store.set("theme", t);
+};
+
+/* ---------- editor, files ---------- */
+const editor = $("editor");
+editor.value = store.get("text", "");
+editor.addEventListener("input", () => { store.set("text", editor.value); schedule(); });
+editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
+  if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
+  e.preventDefault();
+  const { selectionStart: a, selectionEnd: b, value: v } = editor;
+  if (a === b || !v.slice(a, b).includes("\n")) {
+    editor.setRangeText("\t", a, b, "end");
+  } else {                                           // multi-line: indent / outdent every line
+    const start = v.lastIndexOf("\n", a - 1) + 1;
+    const block = v.slice(start, b).split("\n").map(l => e.shiftKey ? l.replace(/^(\t| {1,4})/, "") : "\t" + l).join("\n");
+    editor.setRangeText(block, start, b, "select");
+  }
+  editor.dispatchEvent(new Event("input"));
+});
+
+function loadText(text, name) {
+  editor.value = text; store.set("text", text);
+  if (name) state.fileName = name;
+  schedule();
+}
+$("file").onchange = async e => {
+  const f = e.target.files[0];
+  if (f) loadText(await f.text(), f.name);
+  e.target.value = "";
+};
+$("save").onclick = () => {
+  const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
+  a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
+};
+for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
+  e.preventDefault();
+  document.body.classList.toggle("drop", ev === "dragover");
+  if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
+});
+$("today").value = store.get("today", "");
+$("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };
+
+/* ---------- modes ---------- */
+function setMode(m) {
+  state.mode = m; store.set("mode", m);
+  render(true);
+}
+$("modes").onclick = e => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); };
+$("split").checked = store.get("split", "0") === "1";
+$("split").onchange = () => { store.set("split", $("split").checked ? "1" : "0"); layout(); };
+
+function layout() {
+  const plain = state.mode === "plain", split = $("split").checked;
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
+  $("editorPane").classList.toggle("hidden", !plain && !split);
+  $("editorPane").classList.toggle("solo", plain);
+  $("viewPane").classList.toggle("hidden", plain);
+  $("splitWrap").classList.toggle("hidden", plain);
+  $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
+}
+
+let timer;
+function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 200); }
+
+async function render(relayout) {
+  if (relayout) layout();
+  const view = $("viewPane");
+  if (state.mode === "plain") return;
+  if (state.mode === "markdown") {
+    view.replaceChildren(h("div", "md"));
+    view.firstChild.innerHTML = markdown(editor.value);    // markdown() escapes all input first
+    return;
+  }
+  const seq = ++state.seq;
+  try {
+    const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null }) });
+    const data = await r.json();
+    if (seq !== state.seq) return;
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    state.data = data;
+    plannerView();
+  } catch (err) {
+    if (seq !== state.seq) return;
+    view.replaceChildren(h("div", "err", "Could not parse: " + err.message +
+      ". Planner mode needs the server: run  python planner.py --serve"));
+  }
+}
+
+/* ---------- planner views ---------- */
+const BOX = { open: "[ ]", doing: "[~]", done: "[x]" };
+const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"]];
+
+function plannerView() {
+  const d = state.data, view = $("viewPane");
+  const tabs = h("div", "tabs");
+  for (const [id, label] of TABS) {
+    const b = h("button", id === state.tab ? "on" : "", label);
+    b.onclick = () => { state.tab = id; store.set("tab", id); plannerView(); };
+    tabs.append(b);
+  }
+  const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
+  view.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), body);
+}
+
+function taskNode(t, showProject, showSpan) {
+  const row = h("div", "task s-" + t.status);
+  row.append(span("box", BOX[t.status]), " ");
+  if (showProject) row.append(span("proj", "@" + t.project));
+  row.append(span("ttl", t.title));
+  for (const a of t.assignees) row.append(span("who", a));
+  const when = showSpan ? (t.span && t.span.label + (t.span.how === "parent" ? " (via parent)" : "")) : t.when;
+  if (when) row.append(span("when", "  " + when));
+  if (t.overdue) row.append(span("flag", "OVERDUE"));
+  for (const r of t.reminders) row.append(span("rem", "*" + r.spec));
+  return row;
+}
+function treeNode(t) {
+  const wrap = h("div", "", taskNode(t, false, false));
+  for (const n of t.notes) wrap.append(h("div", "note", n));
+  if (t.children.length) wrap.append(h("div", "kids", ...t.children.map(treeNode)));
+  return wrap;
+}
+
+function vProjects(d) {
+  const out = h("div");
+  for (const sec of d.projects) {
+    if (sec.title) out.append(h("h2", "sec", sec.title, sec.when && span("when", "  " + sec.when)));
+    for (const p of sec.projects) {
+      const card = h("div", "card", h("h3", "", "@" + p.name, span("count", p.done + "/" + p.total + " done")));
+      for (const n of p.notes) card.append(h("div", "note", n));
+      for (const t of p.tasks) card.append(treeNode(t));
+      if (!p.tasks.length) card.append(h("div", "empty", "No tasks"));
+      out.append(card);
+    }
+  }
+  if (!out.children.length) out.append(h("div", "empty", "No projects or tasks found."));
+  return out;
+}
+
+function vTimeline(d) {
+  const tl = d.timeline, out = h("div");
+  if (!tl.rows.length) out.append(h("div", "empty", "Nothing scheduled."));
+  else {
+    const head = h("tr", "", h("th", "", "Task"));
+    tl.months.forEach((m, i) => head.append(h("th", "m", m.label[0] + (i === 0 || m.label === "Jan" ? " " + String(m.year).slice(2) : ""))));
+    head.append(h("th", "", "When"));
+    const table = h("table", "tl", head);
+    for (const t of tl.rows) {
+      const nm = h("td", "name", t.status === "doing" ? "~ " : "", span("proj", "@" + t.project), t.title +
+        (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : ""));
+      nm.title = nm.textContent;
+      const tr = h("tr", "", nm);
+      t.bar.forEach((on, i) => {
+        const prev = t.bar[i - 1], next = t.bar[i + 1];
+        const cell = h("i", on ? "on" : "");
+        if (on && (!prev || !next)) cell.classList.add("edge");
+        tr.append(h("td", "c", cell));
+      });
+      tr.append(h("td", "", span("when", t.span.label + (t.span.how === "parent" ? " (via parent)" : "")), t.overdue && span("flag", "OVERDUE")));
+      table.append(tr);
+    }
+    out.append(h("div", "", table));
+  }
+  if (tl.unscheduled.length) {
+    out.append(h("h4", "grp", "Unscheduled"));
+    for (const t of tl.unscheduled) out.append(h("div", "line", taskNode(t, true, false)));
+  }
+  return out;
+}
+
+function vPeople(d) {
+  const out = h("div");
+  for (const g of d.people) {
+    const card = h("div", "card", h("h3", "", g.name, span("count", g.tasks.length + " task(s)")));
+    for (const t of g.tasks) card.append(taskNode(t, true, true));
+    out.append(card);
+  }
+  if (!d.people.length) out.append(h("div", "empty", "No open tasks."));
+  return out;
+}
+
+function vUpcoming(d) {
+  const u = d.upcoming, out = h("div", "", span("hint", `Looking ahead ${u.days} days to ${u.horizon}`));
+  const group = (title, items, line) => {
+    out.append(h("h4", "grp", title));
+    if (!items.length) out.append(h("div", "empty", "(none)"));
+    for (const t of items) out.append(h("div", "line", line(t)));
+  };
+  const dated = t => { const n = taskNode(t, true, false); n.prepend(span("d", t.span.label)); return n; };
+  group("Overdue", u.overdue, dated);
+  group("Due soon", u.due, dated);
+  group("Reminders", u.reminders, t => { const n = taskNode(t, true, false); n.prepend(span("d", t.date)); n.append(span("when", "  *" + t.spec)); return n; });
+  group("In progress", u.doing, t => taskNode(t, true, false));
+  return out;
+}
+
+/* ---------- markdown (small, safe: everything is escaped before any tag is added) ---------- */
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function inline(s) {
+  s = esc(s);
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => "\u0000" + (codes.push("<code>" + c + "</code>") - 1) + "\u0000");
+  s = s.replace(/!?\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+       .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => "<strong>" + (a || b) + "</strong>")
+       .replace(/(^|[^\w*])\*([^*\s][^*]*?)\*(?!\w)|(^|[^\w_])_([^_\s][^_]*?)_(?!\w)/g,
+                (m, p1, a, p2, b) => (p1 ?? p2) + "<em>" + (a || b) + "</em>")
+       .replace(/~~(.+?)~~/g, "<del>$1</del>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[+i]);
+}
+function markdown(src) {
+  const lines = src.replace(/\r\n?/g, "\n").split("\n"), out = [];
+  let i = 0;
+  const isBlock = l => /^(#{1,6}\s|```|>|\s*([-*+]|\d+\.)\s|(-{3,}|\*{3,})\s*$|\|)/.test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    let m;
+    if (/^```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push("<pre><code>" + esc(buf.join("\n")) + "</code></pre>");
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(l))) {
+      out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); i++;
+    } else if (/^(-{3,}|\*{3,})\s*$/.test(l)) { out.push("<hr>"); i++; }
+    else if (/^>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^>/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ""));
+      out.push("<blockquote>" + markdown(buf.join("\n")) + "</blockquote>");
+    } else if (/^\|/.test(l) && /^\|?\s*:?-+/.test(lines[i + 1] || "")) {
+      const row = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let t = "<table><tr>" + row(l).map(c => "<th>" + inline(c) + "</th>").join("") + "</tr>"; i += 2;
+      while (i < lines.length && /^\|/.test(lines[i])) t += "<tr>" + row(lines[i++]).map(c => "<td>" + inline(c) + "</td>").join("") + "</tr>";
+      out.push(t + "</table>");
+    } else if (/^\s*([-*+]|\d+\.)\s/.test(l)) {
+      const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s/.test(lines[i])) items.push(lines[i++]);
+      out.push(list(items));
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !(buf.length && isBlock(lines[i]))) buf.push(lines[i++]);
+      out.push("<p>" + buf.map(inline).join("<br>") + "</p>");
+    }
+  }
+  return out.join("\n");
+}
+function list(items) {                                  // nested by indent (tab = 4 spaces)
+  const parse = l => { const m = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(l.replace(/\t/g, "    ")); return { d: m[1].length, ord: /\d/.test(m[2]), text: m[3] }; };
+  const rows = items.map(parse);
+  let pos = 0;
+  function build(depth) {
+    const ord = rows[pos].ord;
+    const tasks = rows[pos] && /^\[[ xX]\]\s/.test(rows[pos].text);
+    let html = `<${ord ? "ol" : "ul"}${tasks ? ' class="tasks"' : ""}>`;
+    while (pos < rows.length && rows[pos].d >= depth) {
+      if (rows[pos].d > depth) { html = html.replace(/<\/li>$/, "") + build(rows[pos].d) + "</li>"; continue; }
+      let text = rows[pos++].text, box = "";
+      const c = /^\[([ xX])\]\s+(.*)$/.exec(text);
+      if (c) { box = `<input type="checkbox" disabled${c[1] === " " ? "" : " checked"}> `; text = c[2]; }
+      html += "<li>" + box + inline(text) + "</li>";
+    }
+    return html + `</${ord ? "ol" : "ul"}>`;
+  }
+  return build(rows[0].d);
+}
+
+/* ---------- start ---------- */
+if (!["plain", "planner", "markdown"].includes(state.mode)) state.mode = "plain";
+render(true);
+</script>
+</body>
+</html>
