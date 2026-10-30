@@ -67,6 +67,12 @@ button.box:disabled { opacity: .5; cursor: wait; }
 .ask { margin-left: 8px; font-size: 13px; padding: 1px 7px; width: 16em; }
 #fileStatus button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
 #fileStatus.bad { color: var(--bad); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: -4px 0 14px; }
+.filters input[type=search] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 11px; width: 16em; max-width: 100%; }
+.filters select { padding: 4px 8px; max-width: 12em; }
+.filters button:disabled { opacity: .45; cursor: default; }
+.dim > .ttl, .dim > .who, .dim > .when, .dim > .rem { opacity: .5; }
 .msg { margin-left: 12px; font-size: 13px; }
 .msg.bad { color: var(--bad); }
 .msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
@@ -414,8 +420,69 @@ function statusBox(t) {
   return b;
 }
 
+/* ---------- filters (display only: they pick from the server's data, they never parse notes) ---------- */
+const FKEYS = { q: "fq", who: "fwho", proj: "fproj", done: "fdone" };
+const filt = { q: store.get("fq", ""), who: store.get("fwho", ""), proj: store.get("fproj", ""), done: store.get("fdone", "1") === "1" };
+const filterOn = () => !!(filt.q.trim() || filt.who || filt.proj || !filt.done);
+
+function filtered(d) {
+  if (!filterOn()) return d;
+  const q = filt.q.trim().toLowerCase();
+  const keep = (t, proj) => (!filt.proj || proj === filt.proj)
+    && (!filt.who || (filt.who === "(unassigned)" ? !t.assignees.length : t.assignees.includes(filt.who)))
+    && (!q || [t.title, ...t.notes, proj].join("\n").toLowerCase().includes(q));
+  const prune = (t, proj) => {                    // keep matching tasks, and their ancestors (dimmed) for context
+    const children = t.children.map(c => prune(c, proj)).filter(Boolean);
+    const self = keep(t, proj) && (filt.done || t.status !== "done");
+    return self || children.length ? { ...t, children, dim: !self } : null;
+  };
+  const flat = list => list.filter(t => keep(t, t.project));
+  const u = d.upcoming;
+  return { ...d, filtered: true,
+    projects: d.projects.map(sec => ({ ...sec,
+      projects: sec.projects.map(p => ({ ...p, tasks: p.tasks.map(t => prune(t, p.name)).filter(Boolean) }))
+        .filter(p => p.tasks.length) })).filter(sec => sec.projects.length),
+    timeline: { ...d.timeline, rows: flat(d.timeline.rows), unscheduled: flat(d.timeline.unscheduled) },
+    people: d.people.filter(g => !filt.who || g.name === filt.who)
+      .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) } };
+}
+
+const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input"), fClear = h("button", "", "Clear");
+fQ.type = "search"; fQ.placeholder = "Search tasks and notes"; fQ.value = filt.q;
+fDone.type = "checkbox"; fDone.checked = filt.done;
+const filterBar = h("div", "filters", fQ, fWho, fProj, h("label", "chk", fDone, "Show done"), fClear);
+const tabsBox = h("div"), plannerBody = h("div");
+function setFilt(k, v) {
+  filt[k] = v; store.set(FKEYS[k], k === "done" ? (v ? "1" : "0") : v);
+  plannerView();
+}
+fQ.oninput = () => setFilt("q", fQ.value);
+fQ.onkeydown = e => { if (e.key === "Escape") { fQ.value = ""; setFilt("q", ""); } };
+fWho.onchange = () => setFilt("who", fWho.value);
+fProj.onchange = () => setFilt("proj", fProj.value);
+fDone.onchange = () => setFilt("done", fDone.checked);
+fClear.onclick = () => {
+  fQ.value = ""; fWho.value = ""; fProj.value = ""; fDone.checked = true;
+  for (const [k, v] of [["q", ""], ["who", ""], ["proj", ""]]) { filt[k] = v; store.set(FKEYS[k], v); }
+  setFilt("done", true);
+};
+function options(sel, names, current, all) {     // a chosen name stays listed even if it has no tasks right now
+  const list = [...new Set([...names, ...(current ? [current] : [])])];
+  const key = list.join("\n");
+  if (sel.dataset.opts !== key) {
+    sel.replaceChildren(h("option", "", all), ...list.map(n => h("option", "", n)));
+    sel.firstChild.value = "";
+    sel.dataset.opts = key;
+  }
+  sel.value = current;
+}
+
 function plannerView() {
-  const d = state.data, view = $("viewPane");
+  const view = $("viewPane"), d = filtered(state.data);
+  options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
+  options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");
+  fClear.disabled = !filterOn();
   const tabs = h("div", "tabs");
   for (const [id, label] of TABS) {
     const b = h("button", id === state.tab ? "on" : "", label);
@@ -425,7 +492,9 @@ function plannerView() {
   const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
   const msg = state.msg && span("msg" + (state.msg.bad ? " bad" : ""), state.msg.text);
   if (msg && state.msg.undo) { const u = h("button", "", "Undo"); u.onclick = undo; msg.append(u); }
-  view.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), msg, body);
+  tabsBox.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), msg);
+  plannerBody.replaceChildren(body);
+  if (view.children.length !== 3 || view.firstChild !== tabsBox) view.replaceChildren(tabsBox, filterBar, plannerBody);
 }
 
 function taskNode(t, showProject, showSpan) {
@@ -444,7 +513,9 @@ function taskNode(t, showProject, showSpan) {
   return row;
 }
 function treeNode(t) {
-  const wrap = h("div", "", taskNode(t, false, false));
+  const row = taskNode(t, false, false);
+  if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
+  const wrap = h("div", "", row);
   for (const n of t.notes) wrap.append(h("div", "note", n));
   if (t.children.length) wrap.append(h("div", "kids", ...t.children.map(treeNode)));
   return wrap;
@@ -462,13 +533,13 @@ function vProjects(d) {
       out.append(card);
     }
   }
-  if (!out.children.length) out.append(h("div", "empty", "No projects or tasks found."));
+  if (!out.children.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No projects or tasks found."));
   return out;
 }
 
 function vTimeline(d) {
   const tl = d.timeline, out = h("div");
-  if (!tl.rows.length) out.append(h("div", "empty", "Nothing scheduled."));
+  if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
   else {
     const head = h("tr", "", h("th", "", "Task"));
     tl.months.forEach((m, i) => head.append(h("th", "m", m.label[0] + (i === 0 || m.label === "Jan" ? " " + String(m.year).slice(2) : ""))));
@@ -504,7 +575,7 @@ function vPeople(d) {
     for (const t of g.tasks) card.append(taskNode(t, true, true));
     out.append(card);
   }
-  if (!d.people.length) out.append(h("div", "empty", "No open tasks."));
+  if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
   return out;
 }
 

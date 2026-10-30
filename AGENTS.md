@@ -113,7 +113,8 @@ Each task has at most one date span. Later date tokens on the same line stay in 
 One self-contained file (inline CSS and JS, no dependencies). Three modes, chosen with the toggle in the header:
 
 - **Plain:** editable text area only; text is never changed. Tab indents (Shift-Tab outdents) because the format is tab-based.
-- **Planner:** the four views as tabs, drawn from `/api/parse`. Clicking a task's status box (in any tab, including timeline rows) cycles open → in progress → done → open through `/api/edit`. The page swaps in only the changed characters, so the cursor and scroll in the side editor stay put, and shows a message with **Undo** (which works while the text is unchanged since). If the user typed while the request was out, the edit is dropped. Task rows (not timeline rows) also show **date**, **+who** and **+sub** on hover, each opening a one-line input (Enter applies, Esc cancels; the date input starts with the current token from `date_text`, and empty clears it). Every edit gets the same message and Undo. Nothing else in the views edits text. "Edit alongside" shows the text area next to it. The "Today" field is the web form of `--today`.
+- **Planner:** the four views as tabs, drawn from `/api/parse`. Clicking a task's status box (in any tab, including timeline rows) cycles open → in progress → done → open through `/api/edit`. The page swaps in only the changed characters, so the cursor and scroll in the side editor stay put, and shows a message with **Undo** (which works while the text is unchanged since). If the user typed while the request was out, the edit is dropped. Task rows (not timeline rows) also show **date**, **+who** and **+sub** on hover, each opening a one-line input (Enter applies, Esc cancels; the date input starts with the current token from `date_text`, and empty clears it). Every edit gets the same message and Undo. Nothing else in the views edits text.
+- **Filters** (above the Planner content, all tabs): a search box (case-insensitive, over task titles, task notes and project names; Esc clears), a person picker (initials from `people`, plus `(unassigned)`), a project picker, **Show done** (Projects tab only; the other tabs never show done tasks) and **Clear**. `filtered(d)` applies them to a copy of the `/api/parse` data before the views draw it, so the views stay unchanged. In the Projects tree, a non-matching parent of a matching task stays visible but dimmed; projects and sections with no matches are hidden. Filters only select from fields the server already sent (`title`, `notes`, `assignees`, `project`, `status`), so the page still never reads the note format. Filter choices are remembered in `localStorage`. They are page-only: if the CLI gets filters, move this logic into `planner.py` so it exists once. "Edit alongside" shows the text area next to it. The "Today" field is the web form of `--today`.
 - **Markdown:** a built-in renderer (`markdown()`). It escapes all input before adding tags and only allows `http(s)` links. Works offline.
 
 Files come in through "Open file" or drag and drop and go out through "Save" (a download). **File mode** (`--serve notes.txt`): the page loads that file, hides "Open file", ignores drops, and "Save" (or Ctrl/⌘-S) writes it through `/api/file` with the version it last loaded or saved. The header shows the name and "saved" / "• unsaved". If the file changed on disk, Save offers "Load disk version" (with a confirm if there are unsaved edits) or "Keep mine and overwrite". When the window regains focus the page re-checks the file: it reloads silently if there are no unsaved edits, otherwise shows the same choice. Unsaved edits from the last session are kept only if they were made on the exact version now on disk. Leaving with unsaved edits asks first. Nothing is saved automatically. Text, mode, tab and theme are remembered in `localStorage`. Dark mode follows the OS until the toggle is used. All note text is inserted as text, never as HTML, in Planner mode. Each task row carries `data-line` and shows `line N` on hover.
@@ -150,9 +151,46 @@ Then check these against `example.txt`:
 
 When you add behaviour, add a line to `example.txt` that exercises it.
 
-## Known limitations / open ideas
+## Roadmap
+
+The improvement plan agreed with the user. Work through it in order unless the user says otherwise; each step follows the ground rules, gets tests, and updates the docs listed in rule 4.
+
+### Done
+
+1. **Groundwork:** `test_planner.py`; source line numbers on tasks (`Task.line`); one-line CLI errors instead of tracebacks.
+2. **Edits from the views:** status (click the box), date, add initials, add subtask (`/api/edit`), each with Undo.
+3. **File mode:** `--serve notes.txt` loads and saves that file, with version checks so an outside change is never overwritten silently.
+6. **Filters:** search, person, project and show-done in the web page.
+
+### 4. `check` view: warnings for likely mistakes (next)
+
+The parser silently ignores what it doesn't understand: the text just stays in the title, or a line becomes something the user didn't mean. `check` lists those places with line numbers. It only reads; it never fixes anything itself.
+
+- **Code:** `check(text) -> list[(line, code, message)]` in `planner.py`. It walks the raw lines with the same classification as `parse` and compares them with the parse result (line numbers come from `Task.line`). It must reuse the `RE_*` constants and `parse` rather than define a second grammar; new regexes are only for the near misses below. `view_check` prints it, `VIEWS` gets `check`, and `to_data` gets a `check` list. The CLI view needs the text as well as the projects, so `main` passes it.
+- **Warnings** (code: example → message):
+  - `date-space`: `Oct 24` → "a date has no space: Oct24".
+  - `date-spelling`: `oct24`, `Sept5`, `October24` → "months are Jan…Dec, capitalised: Oct24".
+  - `bad-date`: `Feb30`, `Oct32` → "no such date; it stays in the title".
+  - `extra-date`: a second date token left in the title → "only the first date on a line counts".
+  - `backwards-range`: `Oct26--20` (resolves to next year) → "the range ends before it starts".
+  - `bad-loose`: `~Q5`, `~wk54`, `~ Nov` → "loose dates are ~Q1-4, ~Jan…Dec, ~wk1-53".
+  - `bad-reminder`: `*weekly Fry`, `*monthly 32nd`, `*tomorrow` → "this reminder never fires".
+  - `bad-initials`: `(ka)`, `(KAREN)` → "initials are 1-4 capital letters".
+  - `skipped-level`: a subtask indented two or more levels below its parent, or an indented task with no parent → "indent one tab per level".
+  - `missing-dash`: a left-edge line with no marker that has initials or a date, or a heading followed directly by tasks with no `@project` (they land in `(no project)`) → "this became a heading; did you mean `- …`?"
+  - `dash-lookalike`: a line starting with `–`, `—` or `•` → "only `-` marks a task".
+  - `orphan-note`: a note before any project or task → "this note has nothing to attach to".
+- **Web page:** a fifth tab, "Check (N)". Clicking a warning opens Edit alongside and selects that line in the text box.
+- **Tests:** one per warning; `example.txt` must produce no warnings (it is the clean reference, so the bad cases live in the tests, not in `example.txt`).
+- **Later, with the user's agreement:** a "fix" button per warning, done as one more `/api/edit` op under rule 3.
+
+### 5. Calendar export (`.ics`)
+
+`python planner.py notes.txt --ics plan.ics`, plus a download button on the page: one event per dated open task (all-day; a range spans its days; a loose date spans its period, marked "sometime in"), and reminders as events, with `*daily`, `*weekly Fri` and `*monthly 1st` as repeating events (`RRULE`). Each event's `UID` comes from project + title so re-importing updates rather than duplicates. Stdlib only (`.ics` is plain text).
+
+### Other open ideas
 
 - Assignee inheritance (decide with the user).
-- Edits from the views: status, date, adding initials and adding a subtask. Not yet: removing initials, editing titles or notes, deleting or moving tasks. Each new edit must follow rule 3 and get the same "only this line changed" tests.
-- Editing from the CLI is not supported yet.
+- More edits: removing initials, editing a title or note, deleting or moving a task. Each must follow rule 3 and get the same "only this line changed" tests.
+- Editing and filtering from the CLI.
 - A date in a note (`-- … Oct24`) is not parsed. That is intended.
