@@ -9,7 +9,7 @@ Instructions for AI agents (and developers) working in this repo. Human-facing d
 ## Ground rules
 
 1. **The note format belongs to the user.** It is a light layer over how they already write notes. Do not add, rename or repurpose markers unless the user asks. Propose format changes in plain words first.
-2. **Keep it stdlib-only.** No `pip` dependencies, in Python or in the page (no CDN scripts, no JS libraries). Parsing lives only in `planner.py`; the page never re-implements the note format, it asks the server. Keep the repo small: `planner.py`, `web/index.html`, the docs and the example.
+2. **Keep it stdlib-only.** No `pip` dependencies, in Python or in the page (no CDN scripts, no JS libraries). Parsing lives only in `planner.py`; the page never re-implements the note format, it asks the server. Keep the repo small: `planner.py`, `web/index.html`, `test_planner.py`, the docs and the example.
 3. **Never rewrite the user's notes when parsing.** The tool reads them only. When you edit or generate notes for the user, follow the grammar below exactly and preserve their wording, order and tab indentation.
 4. **Keep `README.md` (humans), this file (machines) and the docstring at the top of `planner.py` in sync** whenever behaviour changes. A new view or field must reach `to_data` and `web/index.html` as well as the CLI.
 5. **Verify every change** by running the commands in [Testing](#testing).
@@ -116,7 +116,15 @@ To add a view, write `view_x(projects) -> list[str]`, register it in `VIEWS`, an
 
 ## Testing
 
-There is no test suite yet. At minimum, run:
+Run the test suite (stdlib `unittest`, no installs). It must pass before any change is done:
+
+```
+python -m unittest -v
+```
+
+`test_planner.py` pins TODAY to 2026-10-12 and covers line classification, inline tokens, date resolution, derived semantics, the `example.txt` checklist below, `to_data` and the CLI. When you add or change behaviour, add a test for it.
+
+Also run the CLI by hand:
 
 ```
 python planner.py example.txt --today Oct12
