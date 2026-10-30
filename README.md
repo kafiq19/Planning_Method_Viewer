@@ -127,5 +127,6 @@ To see the views as of another day, use `--today`, for example `python planner.p
 | `web/index.html` | The web page (editor, three modes, dark mode), served by `planner.py --serve` |
 | `example.txt` | Sample notes that use every rule |
 | `test_planner.py` | Automated tests: run `python -m unittest` |
+| `changelog.txt` | What changed in each version |
 | `README.md` | This guide |
 | `AGENTS.md` | The exact format spec and code map, for AI agents and anyone changing the code |

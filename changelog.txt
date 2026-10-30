@@ -1,0 +1,94 @@
+Planner - changelog
+===================
+
+Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
+for people using the tool, then notes for anyone working on the code.
+
+
+1.2.6  2026-10-29  Filters
+--------------------------
+- Planner mode has a filter bar above the tabs: search (task titles, notes
+  and project names; Esc clears), a person picker (including "(unassigned)"),
+  a project picker, "Show done" and "Clear". Works in all four tabs.
+- In the Projects tab, a parent that doesn't match stays visible, faded, when
+  one of its subtasks matches.
+- Filter choices are remembered in the browser.
+- Added this changelog.
+Code: filtered() in web/index.html narrows a copy of the /api/parse data, so
+the page still never reads the note format. AGENTS.md has a new Roadmap
+section with the designs for the check view and calendar export.
+
+
+1.2.5  2026-10-29  Edit a notes file in place
+---------------------------------------------
+- New: python planner.py --serve notes.txt opens that file in the page, and
+  Save (or Ctrl/Cmd-S) writes straight back to it. Without a file, Save still
+  downloads.
+- The header shows "saved" or "unsaved".
+- If the file changed on disk since it was loaded, nothing is overwritten:
+  choose "Load disk version" or "Keep mine and overwrite". Returning to the
+  page after editing the file elsewhere picks up the change.
+- The page asks before closing with unsaved changes. Nothing saves by itself.
+- Files with Windows (CRLF) line endings keep them. Saves are atomic and keep
+  the file's permissions. The file may be new (created on first Save).
+- Security: the local server now refuses requests from other websites.
+Code: read_notes, write_notes, file_version, FileConflict;
+make_server(port, notes_path); GET/POST /api/file; Host/Origin checks and
+JSON-only POSTs on every /api/* request.
+
+
+1.2.4  2026-10-29  Dates, initials and subtasks from the views
+--------------------------------------------------------------
+- Hover a task (Projects, People, Upcoming, Unscheduled) for "date", "+who"
+  and "+sub". Type and press Enter; Esc cancels.
+  - date: sets or replaces the task's date in place; an empty box clears it.
+  - +who: adds initials to the existing (...) group, or adds a new group
+    before the date, as in "finish proposal (KA) Oct24".
+  - +sub: adds a subtask after the task's last subtask, one tab deeper.
+- Every edit can be undone, and is refused rather than guessed at if it
+  wouldn't read back as intended.
+Code: Task.at, Task.date_text and Task.col record where each token sits;
+set_date, add_assignees, add_subtask; /api/edit now takes {op, value}.
+
+
+1.2.3  2026-10-29  Change status from the views
+-----------------------------------------------
+- In Planner mode, click a task's box ([ ], [~], [x]) to cycle it open ->
+  in progress -> done -> open. Works in every tab, including the timeline.
+- Only the mark at the start of that line changes in your text. An Undo
+  button appears after each change.
+- Rule change (agreed with the user): the tool may now edit notes, but only on
+  an explicit user action, touching only what it must. See AGENTS.md rule 3.
+Code: set_status, EditError, POST /api/edit; make_server split out of serve
+so tests can run a real server.
+
+
+1.2.2  2026-10-29  Line numbers and clearer errors
+--------------------------------------------------
+- Mistakes on the command line now print a one-line message instead of a
+  Python traceback: a mistyped view name (e.g. "timline"), a missing file,
+  two files, or a missing or invalid --today / --port value.
+- View names work in any case (PEOPLE, people).
+- Hovering a task in the web page shows its line number.
+Code: Task.line (1-based) for tasks and headings, sent by to_data;
+take_option in main.
+
+
+1.2.1  2026-10-29  Automated tests
+----------------------------------
+- New test_planner.py (standard library only): python -m unittest -v
+- Covers the note format, date resolution, the example.txt checklist, the
+  web page data and the command line.
+
+
+1.2.0  2026-10-12  Initial version
+----------------------------------
+- planner.py reads plain-text planning notes and prints four views:
+  projects, timeline, people and upcoming.
+- Note format: headings, @projects, tab-indented tasks with open / ~ in
+  progress / ! done, -- notes, (initials), dates without years (Oct24,
+  Oct23--26, ~Q1, ~Nov, ~wk43) and reminders (*Oct17, *daily, *weekly Fri,
+  *monthly 1st).
+- --today to view as of another day.
+- --serve opens a local web page with Plain, Planner and Markdown modes,
+  Open file / drag and drop, Save (download) and dark mode.

@@ -9,9 +9,9 @@ Instructions for AI agents (and developers) working in this repo. Human-facing d
 ## Ground rules
 
 1. **The note format belongs to the user.** It is a light layer over how they already write notes. Do not add, rename or repurpose markers unless the user asks. Propose format changes in plain words first.
-2. **Keep it stdlib-only.** No `pip` dependencies, in Python or in the page (no CDN scripts, no JS libraries). Parsing lives only in `planner.py`; the page never re-implements the note format, it asks the server. Keep the repo small: `planner.py`, `web/index.html`, `test_planner.py`, the docs and the example.
+2. **Keep it stdlib-only.** No `pip` dependencies, in Python or in the page (no CDN scripts, no JS libraries). Parsing lives only in `planner.py`; the page never re-implements the note format, it asks the server. Keep the repo small: `planner.py`, `web/index.html`, `test_planner.py`, the docs, `changelog.txt` and the example.
 3. **Parsing never changes the notes.** The tool edits them only on an explicit user action (clicking a task's status box, or its date / +who / +sub actions). An edit touches only its target line and only the characters it must; adding a subtask inserts one new line and changes no existing line (except giving a final line with no line ending one). Wording, order, indentation, trailing whitespace and line endings stay exactly as they were. An edit made from an out-of-date view is refused, not guessed at. When you edit or generate notes for the user, follow the grammar below exactly and preserve the same things.
-4. **Keep `README.md` (humans), this file (machines) and the docstring at the top of `planner.py` in sync** whenever behaviour changes. A new view or field must reach `to_data` and `web/index.html` as well as the CLI.
+4. **Keep `README.md` (humans), this file (machines) and the docstring at the top of `planner.py` in sync** whenever behaviour changes, and add an entry at the top of `changelog.txt` (current series: 1.2.x; bump the patch number for each change unless the user picks another version). A new view or field must reach `to_data` and `web/index.html` as well as the CLI.
 5. **Verify every change** by running the commands in [Testing](#testing).
 
 ---
