@@ -28,6 +28,7 @@ python planner.py                     # paste your notes, then press
 python planner.py notes.txt           # or read your notes from a file
 python planner.py notes.txt timeline  # show just one view
 python planner.py --serve             # open the web page (see below)
+python planner.py --serve notes.txt   # ...and edit notes.txt directly
 ```
 
 To try it on the included sample:
@@ -42,10 +43,15 @@ python planner.py example.txt
 
 ```
 python planner.py --serve             # opens http://localhost:8765
+python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
 ```
 
-Paste your notes, or use **Open file** (or drag a file onto the page) to load a `.txt` or `.md`. **Save** downloads your edited text. Pick how to view it:
+Paste your notes, or use **Open file** (or drag a file onto the page) to load a `.txt` or `.md`. **Save** downloads your edited text.
+
+If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows whether you have unsaved changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
+
+Pick how to view it:
 
 | Mode | Shows |
 |---|---|
@@ -53,7 +59,7 @@ Paste your notes, or use **Open file** (or drag a file onto the page) to load a 
 | **Planner** | Your notes in the planner format, with tabs for Projects, Timeline, People and Upcoming. Click a task's box (`[ ]`, `[~]`, `[x]`) to move it to in progress, then done, then back to open: only the mark at the start of that line changes in your text, and **Undo** puts it back. Hover a task for **date** (set, change, or clear with an empty box), **+who** (add initials) and **+sub** (add a subtask at the end of its subtasks); type and press Enter. These change only what they must: the date token, the `(...)` group, or one new tab-indented line. Tick **Edit alongside** to edit while you look. The **Today** box works like `--today`. |
 | **Markdown** | Your text as rendered markdown. |
 
-The **Dark / Light** button switches themes (it starts from your system setting). The page only talks to your own computer, and it remembers your text and settings in the browser. Clicking a status box changes the text in the page; use **Save** to keep it in a file.
+The **Dark / Light** button switches themes (it starts from your system setting). The page only talks to your own computer, and it remembers your text and settings in the browser. Clicking a status box changes the text in the page; use **Save** to keep it.
 
 ---
 

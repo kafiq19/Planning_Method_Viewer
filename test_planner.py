@@ -5,7 +5,9 @@ Every test pins TODAY (default Oct 12 2026) because dates are written without ye
 """
 import json
 import os
+import stat
 import subprocess
+import tempfile
 import sys
 import threading
 import unittest
@@ -515,10 +517,75 @@ class TestAddSubtask(EditBase):
             planner.add_subtask("- a\n", 1, "x", "not a")
 
 
+class TestNotesFile(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "notes.txt")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def put(self, data):
+        with open(self.path, "wb") as f:
+            f.write(data)
+
+    def get(self):
+        with open(self.path, "rb") as f:
+            return f.read()
+
+    def test_read_is_exact(self):
+        self.put(b"@P\r\n\t- a\r\n")
+        text, version = planner.read_notes(self.path)
+        self.assertEqual(text, "@P\r\n\t- a\r\n")
+        self.assertEqual(version, planner.file_version(b"@P\r\n\t- a\r\n"))
+
+    def test_missing_file_then_created(self):
+        self.assertEqual(planner.read_notes(self.path), ("", None))
+        v = planner.write_notes(self.path, "- a\n", None)
+        self.assertEqual((self.get(), v), (b"- a\n", planner.file_version(b"- a\n")))
+
+    def test_save_and_conflict(self):
+        self.put(b"- a\n")
+        _, v = planner.read_notes(self.path)
+        v2 = planner.write_notes(self.path, "!- a\n", v)
+        self.assertEqual(self.get(), b"!- a\n")
+        with self.assertRaises(planner.FileConflict):           # v is stale now
+            planner.write_notes(self.path, "~- a\n", v)
+        self.put(b"- changed elsewhere\n")
+        with self.assertRaises(planner.FileConflict):
+            planner.write_notes(self.path, "~- a\n", v2)
+        self.assertEqual(self.get(), b"- changed elsewhere\n")
+        planner.write_notes(self.path, "~- a\n", v2, force=True)
+        self.assertEqual(self.get(), b"~- a\n")
+
+    def test_crlf_kept(self):
+        self.put(b"@P\r\n- a\r\n")
+        _, v = planner.read_notes(self.path)
+        planner.write_notes(self.path, "@P\n!- a\n- b\n", v)        # what a browser text box sends back
+        self.assertEqual(self.get(), b"@P\r\n!- a\r\n- b\r\n")
+
+    def test_lf_and_mixed_left_alone(self):
+        self.put(b"@P\r\n- a\n")
+        _, v = planner.read_notes(self.path)
+        planner.write_notes(self.path, "@P\n- a\n", v)
+        self.assertEqual(self.get(), b"@P\n- a\n")
+
+    def test_unicode_and_permissions(self):
+        self.put("- café ✓\n".encode())
+        os.chmod(self.path, 0o640)
+        text, v = planner.read_notes(self.path)
+        planner.write_notes(self.path, "!" + text, v)
+        self.assertEqual(self.get().decode(), "!- café ✓\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o640)
+        self.assertEqual(os.listdir(self.dir.name), ["notes.txt"])      # no temp files left
+
+
 class TestServer(Base):
+    notes = None
+
     def setUp(self):
         super().setUp()
-        self.server = planner.make_server(0)
+        self.server = planner.make_server(0, self.notes)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -527,15 +594,32 @@ class TestServer(Base):
         self.server.server_close()
         super().tearDown()
 
-    def post(self, path, payload):
+    def post(self, path, payload, headers=None):
         req = urllib.request.Request(self.url + path, json.dumps(payload).encode(),
-                                     {"Content-Type": "application/json"})
+                                     dict({"Content-Type": "application/json"}, **(headers or {})))
+        return self.send(req)
+
+    def send(self, req):
         try:
             with urllib.request.urlopen(req) as r:
                 return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:
             with e:
                 return e.code, json.loads(e.read())
+
+    def test_other_sites_are_refused(self):
+        for headers, code in [({"Origin": "https://evil.example"}, 403), ({"Host": "evil.example:80"}, 403),
+                              ({"Content-Type": "text/plain"}, 415),
+                              ({"Origin": self.url.replace("127.0.0.1", "localhost")}, 200)]:
+            with self.subTest(headers=headers):
+                self.assertEqual(self.post("/api/parse", {"text": "- a"}, headers)[0], code)
+        req = urllib.request.Request(self.url + "/api/file", headers={"Origin": "https://evil.example"})
+        self.assertEqual(self.send(req)[0], 403)
+
+    def test_no_notes_file(self):
+        with urllib.request.urlopen(self.url + "/api/file") as r:
+            self.assertEqual(json.loads(r.read()), {"name": None})
+        self.assertEqual(self.post("/api/file", {"text": "x", "version": None})[0], 409)
 
     def test_page(self):
         with urllib.request.urlopen(self.url + "/") as r:
@@ -577,6 +661,35 @@ class TestServer(Base):
             self.assertEqual((code, d["text"]), (200, want))
 
 
+class TestServerWithFile(TestServer):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.notes = os.path.join(self.dir.name, "plan.txt")
+        with open(self.notes, "wb") as f:
+            f.write(b"@P\r\n- a\r\n")
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self.dir.cleanup()
+
+    def test_no_notes_file(self):
+        pass
+
+    def test_load_save_conflict(self):
+        with urllib.request.urlopen(self.url + "/api/file") as r:
+            d = json.loads(r.read())
+        self.assertEqual((d["name"], d["text"]), ("plan.txt", "@P\r\n- a\r\n"))
+        code, s = self.post("/api/file", {"text": "@P\n!- a\n", "version": d["version"]})
+        self.assertEqual(code, 200)
+        with open(self.notes, "rb") as f:
+            self.assertEqual(f.read(), b"@P\r\n!- a\r\n")
+        code, c = self.post("/api/file", {"text": "@P\n~- a\n", "version": d["version"]})   # stale
+        self.assertEqual((code, c["conflict"], c["version"]), (409, True, s["version"]))
+        self.assertEqual(self.post("/api/file", {"text": "@P\n~- a\n", "version": None, "force": True})[0], 200)
+        self.assertEqual(self.post("/api/file", {"text": 5, "version": None})[0], 400)
+
+
 # ---------- CLI ----------
 
 class TestCLI(unittest.TestCase):
@@ -597,6 +710,9 @@ class TestCLI(unittest.TestCase):
             (("--serve", "--port"), "--port needs a value"),
             (("--serve", "--port", "abc"), "bad --port value"),
             (("--serve", "--port", "70000"), "bad --port value"),
+            (("--serve", EXAMPLE, "timeline"), "at most one notes file"),
+            (("--serve", HERE), "not a file in an existing folder"),
+            (("--serve", os.path.join(HERE, "no-such-dir", "x.txt")), "not a file in an existing folder"),
         ]
         for args, msg in cases:
             with self.subTest(args=args):

@@ -11,7 +11,7 @@ USAGE
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming
   --today Oct10                        pretend today is another date (for testing)
-  --serve [--port 8765]                open the web page (paste/open/edit notes, dark mode;
+  --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it (paste/open/edit notes, dark mode;
                                        click a task's box to change its status, or
                                        hover it to set a date, add initials or a subtask)
 
@@ -718,6 +718,66 @@ def add_subtask(text, line, task_text, title=None):
 EDITS = {"status": set_status, "date": set_date, "assign": add_assignees, "subtask": add_subtask}
 
 
+# ---------- the notes file (--serve notes.txt) ----------
+
+class FileConflict(Exception):
+    """The file on disk is not the version the page last loaded or saved."""
+
+
+def file_version(data):
+    import hashlib
+    return None if data is None else hashlib.sha256(data).hexdigest()
+
+
+def read_notes(path):
+    """-> (text, version); ("", None) if the file doesn't exist yet. Text is exact (no newline translation)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        return "", None
+    return data.decode("utf-8"), file_version(data)
+
+
+def write_notes(path, text, version, force=False):
+    """Write `text` to `path` if the file is still at `version` (or `force`); -> new version.
+
+    Browsers turn every line ending in a text box into \\n, so if the file on disk
+    uses \\r\\n throughout, the text is written back with \\r\\n. The write is atomic
+    (temp file, then rename) and keeps the file's permissions.
+    """
+    import tempfile
+    try:
+        with open(path, "rb") as f:
+            old = f.read()
+    except FileNotFoundError:
+        old = None
+    if not force and file_version(old) != version:
+        raise FileConflict("the file changed on disk since it was loaded")
+    if old and b"\r\n" in old and old.count(b"\r\n") == old.count(b"\n") and "\r" not in text:
+        text = text.replace("\n", "\r\n")
+    data = text.encode("utf-8")
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".planner-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if old is not None:
+            os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return file_version(data)
+
+
 # ---------- web page ----------
 
 def set_today(val):
@@ -727,8 +787,12 @@ def set_today(val):
     TODAY = date(date.today().year, MONTHS[m.group(1)], int(m.group(2))) if m else date.fromisoformat(val)
 
 
-def make_server(port):
-    """The local server (127.0.0.1 only). Port 0 picks a free port."""
+def make_server(port, notes_path=None):
+    """The local server (127.0.0.1 only). Port 0 picks a free port.
+
+    With `notes_path`, GET/POST /api/file read and save that one file; no
+    other path can be read or written.
+    """
     import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from pathlib import Path
@@ -747,18 +811,44 @@ def make_server(port):
         def _json(self, code, obj):
             self._send(code, json.dumps(obj).encode(), "application/json")
 
+        def _trusted(self):
+            """Only this page may use the API: blocks other sites (Origin) and DNS rebinding (Host)."""
+            hosts = {f"localhost:{self.server.server_address[1]}", f"127.0.0.1:{self.server.server_address[1]}"}
+            origin = self.headers.get("Origin")
+            if self.headers.get("Host") in hosts and (origin is None or origin in {"http://" + h for h in hosts}):
+                return True
+            self._json(403, {"error": "forbidden"})
+            return False
+
         def do_GET(self):
-            if self.path.split("?")[0] in ("/", "/index.html"):
+            path = self.path.split("?")[0]
+            if path in ("/", "/index.html"):
                 self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            elif path == "/api/file":
+                if not self._trusted():
+                    return
+                if notes_path is None:
+                    return self._json(200, {"name": None})
+                try:
+                    text, version = read_notes(notes_path)
+                except (OSError, UnicodeDecodeError) as e:
+                    return self._json(500, {"error": f"can't read {notes_path}: {e}"})
+                self._json(200, {"name": os.path.basename(notes_path), "text": text, "version": version})
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file"):
                 return self._send(404, b"not found", "text/plain")
+            if not self._trusted():
+                return
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                return self._json(415, {"error": "send JSON"})
             global TODAY
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                if self.path == "/api/file":
+                    return self._save(req)
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
@@ -777,19 +867,35 @@ def make_server(port):
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
 
+        def _save(self, req):
+            if notes_path is None:
+                return self._json(409, {"error": "no notes file; start with  python planner.py --serve notes.txt"})
+            if not isinstance(req.get("text"), str):
+                return self._json(400, {"error": "bad request: text must be a string"})
+            try:
+                version = write_notes(notes_path, req["text"], req.get("version"), bool(req.get("force")))
+            except FileConflict as e:
+                _, current = read_notes(notes_path)
+                return self._json(409, {"error": str(e), "conflict": True, "version": current})
+            except OSError as e:
+                return self._json(500, {"error": f"can't save {notes_path}: {e}"})
+            self._json(200, {"version": version})
+
         def log_message(self, *args):
             pass
 
     return HTTPServer(("127.0.0.1", port), Handler)
 
 
-def serve(port):
+def serve(port, notes_path=None):
     import threading
     import webbrowser
 
-    server = make_server(port)
+    server = make_server(port, notes_path)
     url = f"http://localhost:{port}"
     print(f"Planner running at {url}  (Ctrl-C to stop)")
+    if notes_path:
+        print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
@@ -826,7 +932,17 @@ def main(argv):
         port = take_option(args, "--port") or "8765"
         if not port.isdigit() or not 0 < int(port) < 65536:
             sys.exit(f"planner.py: bad --port value {port!r}")
-        return serve(int(port))
+        if len(args) > 1 or any(a.lower() in VIEWS for a in args):
+            sys.exit("planner.py: --serve takes at most one notes file (and no view names)")
+        notes = os.path.realpath(args[0]) if args else None    # follow a symlink to the real file
+        if notes:
+            if os.path.isdir(notes) or not os.path.isdir(os.path.dirname(notes)):
+                sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
+            try:
+                read_notes(notes)
+            except (OSError, UnicodeDecodeError) as e:
+                sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
+        return serve(int(port), notes)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())

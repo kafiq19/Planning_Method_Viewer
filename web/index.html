@@ -65,6 +65,8 @@ button.box:disabled { opacity: .5; cursor: wait; }
 @media (hover: none) { .acts { visibility: visible; } }
 .acts button { padding: 0 7px; margin-left: 3px; font-size: 12px; color: var(--muted); }
 .ask { margin-left: 8px; font-size: 13px; padding: 1px 7px; width: 16em; }
+#fileStatus button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
+#fileStatus.bad { color: var(--bad); }
 .msg { margin-left: 12px; font-size: 13px; }
 .msg.bad { color: var(--bad); }
 .msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
@@ -105,8 +107,9 @@ h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-
 <body>
 <header>
   <h1>Planner</h1>
-  <label class="btn">Open file<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
+  <label class="btn" id="openWrap">Open file<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
   <button id="save">Save</button>
+  <span id="fileStatus" class="hint"></span>
   <span class="seg" id="modes">
     <button data-mode="plain">Plain</button>
     <button data-mode="planner">Planner</button>
@@ -156,7 +159,7 @@ $("theme").onclick = () => {
 /* ---------- editor, files ---------- */
 const editor = $("editor");
 editor.value = store.get("text", "");
-editor.addEventListener("input", () => { store.set("text", editor.value); state.msg = null; schedule(); });
+editor.addEventListener("input", () => { store.set("text", editor.value); state.msg = null; showFile(); schedule(); });
 editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
   if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
   e.preventDefault();
@@ -181,13 +184,95 @@ $("file").onchange = async e => {
   if (f) loadText(await f.text(), f.name);
   e.target.value = "";
 };
-$("save").onclick = () => {
+function download() {
   const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
   a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
-};
+}
+
+/* ---------- file mode (python planner.py --serve notes.txt): Save writes to that file ---------- */
+const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
+const unsaved = () => state.file && editor.value !== state.file.saved;
+
+function showFile(problem) {
+  const st = $("fileStatus");
+  st.classList.toggle("bad", !!problem);
+  if (!state.file) return st.replaceChildren();
+  if (problem) return st.replaceChildren(...problem);
+  st.replaceChildren(state.file.name + (unsaved() ? "  • unsaved" : "  saved"));
+}
+
+function setFile(text, version) {                           // the page now matches the file on disk
+  state.file.saved = nl(text); state.file.version = version;
+  store.set("fileVersion", version || "");
+  if (editor.value !== state.file.saved) { replaceText(state.file.saved); schedule(); }
+  showFile();
+}
+
+async function fileApi(body) {
+  const r = await fetch("/api/file", body ? { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) } : {});
+  return [r, await r.json()];
+}
+
+async function startFileMode() {
+  let r, d;
+  try { [r, d] = await fileApi(); } catch (e) { return; }  // page opened without the server
+  if (!r.ok || !d.name) return;
+  state.file = { name: d.name, version: d.version, saved: nl(d.text) };
+  state.fileName = d.name;
+  $("openWrap").classList.add("hidden");
+  // Keep unsaved edits from last time only if they were made on this exact version of this file.
+  const keep = store.get("fileName", "") === d.name && store.get("fileVersion", "") === (d.version || "")
+    && store.get("text", "") !== state.file.saved;
+  store.set("fileName", d.name);
+  if (keep) { showFile(); return; }
+  editor.value = state.file.saved; store.set("text", editor.value);
+  setFile(d.text, d.version);
+  render(false);
+}
+
+async function save(force) {
+  if (!state.file) return download();
+  const text = editor.value;
+  showFile(["Saving…"]);
+  try {
+    const [r, d] = await fileApi({ text, version: state.file.version, force: !!force });
+    if (r.status === 409 && d.conflict) return conflict();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    state.file.saved = text; state.file.version = d.version;
+    store.set("fileVersion", d.version);
+    showFile();
+  } catch (e) {
+    showFile(["Not saved: " + e.message]);
+  }
+}
+
+function conflict() {                                       // the file changed on disk under us
+  const b = (label, fn) => { const x = h("button", "", label); x.onclick = fn; return x; };
+  showFile([state.file.name + " changed on disk.",
+    b("Load disk version", async () => {
+      if (unsaved() && !confirm("Replace your unsaved changes with the version on disk?")) return;
+      const [, d] = await fileApi(); setFile(d.text, d.version);
+    }),
+    b("Keep mine and overwrite", () => save(true))]);
+}
+
+window.addEventListener("focus", async () => {              // pick up edits made in another editor
+  if (!state.file) return;
+  let d;
+  try { [, d] = await fileApi(); } catch (e) { return; }
+  if (d.version === state.file.version) return;
+  if (unsaved()) conflict(); else setFile(d.text, d.version);
+});
+window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+});
+$("save").onclick = () => save();
 for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
   e.preventDefault();
   document.body.classList.toggle("drop", ev === "dragover");
+  if (state.file) return document.body.classList.remove("drop");   // file mode: one file only
   if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
 });
 $("today").value = store.get("today", "");
@@ -257,6 +342,7 @@ function replaceText(text) {           // swap in the new text, keeping the curs
   editor.setRangeText(text.slice(a, text.length - b), a, old.length - b, "preserve");
   editor.scrollTop = top;
   store.set("text", text);
+  showFile();
 }
 
 async function editTask(t, op, value, btn, done) {
@@ -509,6 +595,7 @@ function list(items) {                                  // nested by indent (tab
 /* ---------- start ---------- */
 if (!["plain", "planner", "markdown"].includes(state.mode)) state.mode = "plain";
 render(true);
+startFileMode();
 </script>
 </body>
 </html>
