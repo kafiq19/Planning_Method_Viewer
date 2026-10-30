@@ -60,6 +60,11 @@ h2.sec:first-child { margin-top: 0; }
 button.box { width: 2.2em; padding: 0; border: 1px solid transparent; background: none; font-family: ui-monospace, Menlo, Consolas, monospace; }
 button.box:hover { border-color: var(--accent); }
 button.box:disabled { opacity: .5; cursor: wait; }
+.acts { visibility: hidden; margin-left: 8px; }
+.task:hover .acts, .task:focus-within .acts { visibility: visible; }
+@media (hover: none) { .acts { visibility: visible; } }
+.acts button { padding: 0 7px; margin-left: 3px; font-size: 12px; color: var(--muted); }
+.ask { margin-left: 8px; font-size: 13px; padding: 1px 7px; width: 16em; }
 .msg { margin-left: 12px; font-size: 13px; }
 .msg.bad { color: var(--bad); }
 .msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
@@ -254,24 +259,59 @@ function replaceText(text) {           // swap in the new text, keeping the curs
   store.set("text", text);
 }
 
-async function setStatus(t, status, btn) {
+async function editTask(t, op, value, btn, done) {
   const before = editor.value, seq = ++state.seq;
   clearTimeout(timer);
   if (btn) btn.disabled = true;
   try {
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: before, line: t.line, title: t.title, status, today: $("today").value.trim() || null }) });
+      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null }) });
     const res = await r.json();
     if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
     if (!r.ok) throw new Error(res.error || r.statusText);
     replaceText(res.text);
     state.data = res.data;
-    state.msg = { text: `Marked "${t.title}" ${STATUS_NAME[status]}.`, undo: { before, after: res.text } };
+    state.msg = { text: done, undo: { before, after: res.text } };
   } catch (err) {
     state.msg = { text: "Not changed: " + err.message, bad: true };
     if (seq === state.seq) return render(false);
   }
   if (seq === state.seq) plannerView();
+}
+const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
+
+/* one-line input in place of the action buttons; Enter applies, Esc or leaving cancels */
+function ask(acts, placeholder, initial, apply) {
+  const input = h("input", "ask");
+  input.type = "text"; input.placeholder = placeholder; input.value = initial || "";
+  const buttons = [...acts.childNodes];
+  const close = () => { if (input.isConnected) acts.replaceChildren(...buttons); };
+  input.onkeydown = e => {
+    if (e.key === "Enter") { e.preventDefault(); const v = input.value; input.onblur = null; close(); apply(v); }
+    else if (e.key === "Escape") close();
+  };
+  input.onblur = close;
+  acts.replaceChildren(input);
+  input.focus(); input.select();
+}
+
+function actions(t) {
+  const acts = span("acts");
+  const add = (label, tip, placeholder, initial, apply) => {
+    const b = h("button", "", label); b.title = tip;
+    b.onclick = () => ask(acts, placeholder, initial, apply);
+    acts.append(b);
+  };
+  add("date", "Set or change the date (empty clears it)", "Oct24, Oct23--26, ~Q1 (empty clears)", t.date_text, v => {
+    v = v.trim();
+    if (v === (t.date_text || "")) return;
+    editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
+  });
+  add("+who", "Add initials", "KA or KA, RT", "", v => v.trim() &&
+    editTask(t, "assign", v, null, `Assigned ${v.trim()} to "${t.title}".`));
+  add("+sub", "Add a subtask at the end of this task's subtasks", "new subtask (KA) Oct24", "", v => v.trim() &&
+    editTask(t, "subtask", v, null, `Added "${v.trim()}" under "${t.title}".`));
+  return acts;
 }
 
 function undo() {
@@ -314,6 +354,7 @@ function taskNode(t, showProject, showSpan) {
   if (when) row.append(span("when", "  " + when));
   if (t.overdue) row.append(span("flag", "OVERDUE"));
   for (const r of t.reminders) row.append(span("rem", "*" + r.spec));
+  row.append(actions(t));
   return row;
 }
 function treeNode(t) {

@@ -12,7 +12,8 @@ USAGE
                                        projects | timeline | people | upcoming
   --today Oct10                        pretend today is another date (for testing)
   --serve [--port 8765]                open the web page (paste/open/edit notes, dark mode;
-                                       click a task's box to change its status)
+                                       click a task's box to change its status, or
+                                       hover it to set a date, add initials or a subtask)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -155,18 +156,37 @@ def fspan(s, e, loose=None):
 class Task:
     def __init__(self, text, status="open", level=0, line=None):
         self.status, self.level, self.line = status, level, line   # line: 1-based, in the source text
+        self.col = 0                     # where `text` starts in that line (set by parse)
         self.assignees, self.reminders, self.notes, self.children = [], [], [], []
         self.start = self.end = self.loose = None
         self.parent = self.project = None
         self.title = self._parse(text)
 
     def _parse(self, text):
-        for m in RE_ASSIGN.finditer(text):
+        # Where each token sat in `text` (start, end), so an edit can change just that token.
+        self.at = {"assignees": [], "reminders": [], "date": None}
+        self.date_text = None
+        original, keep = text, list(range(len(text)))   # keep[i]: index in `original` of text[i]
+
+        def cut(ms):
+            nonlocal text, keep
+            spans = [(keep[m.start()], keep[m.end() - 1] + 1) for m in ms]
+            for m in reversed(ms):
+                text, keep = text[:m.start()] + text[m.end():], keep[:m.start()] + keep[m.end():]
+            return spans
+
+        def cut_date(m):
+            self.at["date"] = cut([m])[0]
+            self.date_text = original[self.at["date"][0]:self.at["date"][1]]
+
+        ms = list(RE_ASSIGN.finditer(text))
+        for m in ms:
             self.assignees += [a.strip() for a in m.group(1).split(",")]
-        text = RE_ASSIGN.sub("", text)
-        for m in RE_REMIND.finditer(text):
+        self.at["assignees"] = cut(ms)
+        ms = list(RE_REMIND.finditer(text))
+        for m in ms:
             self.reminders.append((m.group(1), next_reminder(m.group(1))))
-        text = RE_REMIND.sub("", text)
+        self.at["reminders"] = cut(ms)
 
         m = RE_RANGE.search(text)
         if m:
@@ -175,20 +195,20 @@ class Task:
             e = s and resolve_after(em, int(m.group(4)), s)
             if e:
                 self.start, self.end = s, e
-                text = text[:m.start()] + text[m.end():]
+                cut_date(m)
         if self.end is None:
             m = RE_LOOSE.search(text)
             span = m and loose_span(m.group(1))
             if span:
                 self.start, self.end = span
                 self.loose = m.group(1)
-                text = text[:m.start()] + text[m.end():]
+                cut_date(m)
         if self.end is None:
             m = RE_DATE.search(text)
             d = m and resolve(MONTHS[m.group(1)], int(m.group(2)))
             if d:
                 self.start = self.end = d
-                text = text[:m.start()] + text[m.end():]
+                cut_date(m)
         return " ".join(text.split())
 
     def walk(self):
@@ -271,6 +291,7 @@ def parse(text):
         if m:
             status = {"!": "done", "~": "doing", "": "open"}[m.group(1)]
             t = Task(m.group(2), status, level, n)
+            t.col = len(ws) + m.start(2)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -476,7 +497,7 @@ def iso(d):
 def task_data(t):
     sp = t.span()
     return {
-        "title": t.title, "status": t.status, "line": t.line, "assignees": t.assignees, "notes": t.notes,
+        "title": t.title, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "when": fspan(t.start, t.end, t.loose) if t.end else None,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
@@ -542,6 +563,25 @@ class EditError(ValueError):
     """The edit can't be applied to this text (stale line, not a task, bad status)."""
 
 
+def _task_at(text, line, title):
+    """-> (lines with their endings, the parsed task on `line`), or EditError."""
+    lines = text.splitlines(keepends=True)      # same split points as parse()
+    if type(line) is not int or not 1 <= line <= len(lines):
+        raise EditError(f"line {line!r} is not in the text")
+    task = _find(text, line)
+    if task is None or (title is not None and task.title != title):
+        raise EditError(f"line {line} is no longer that task (the text has changed)")
+    return lines, task
+
+
+def _find(text, line):
+    return next((t for p in parse(text) for t in p.all_tasks() if t.line == line), None)
+
+
+def _content_end(raw):
+    return len(raw.rstrip())                    # before trailing whitespace and the line ending
+
+
 def set_status(text, line, status, title=None):
     """Return `text` with the task on `line` (1-based) set to `status`.
 
@@ -552,12 +592,7 @@ def set_status(text, line, status, title=None):
     """
     if status not in STATUS_MARK:
         raise EditError(f"unknown status {status!r} (use open, doing or done)")
-    lines = text.splitlines(keepends=True)      # same split points as parse()
-    if type(line) is not int or not 1 <= line <= len(lines):
-        raise EditError(f"line {line!r} is not in the text")
-    task = next((t for p in parse(text) for t in p.all_tasks() if t.line == line), None)
-    if task is None or (title is not None and task.title != title):
-        raise EditError(f"line {line} is no longer that task (the text has changed)")
+    lines, _ = _task_at(text, line, title)
     raw = lines[line - 1]
     ws = raw[:len(raw) - len(raw.lstrip())]
     body = raw[len(ws):]
@@ -565,6 +600,122 @@ def set_status(text, line, status, title=None):
         body = body[1:]
     lines[line - 1] = ws + STATUS_MARK[status] + body
     return "".join(lines)
+
+
+def set_date(text, line, when, title=None):
+    """Set, replace or (with an empty `when`) clear the task's own date token.
+
+    An existing date token is replaced in place. A new one goes before the
+    first reminder, or at the end of the line. Nothing else on the line moves.
+    """
+    lines, t = _task_at(text, line, title)
+    when = when.strip()
+    probe = Task("x " + when) if when else None
+    if probe and (probe.end is None or probe.title != "x"):
+        raise EditError(f"{when!r} is not a date (use Oct24, Oct23--26, Oct23--Nov03, ~Q1, ~Nov or ~wk43)")
+    raw = lines[line - 1]
+    if t.at["date"]:
+        s, e = (t.col + i for i in t.at["date"])
+        if when:
+            raw = raw[:s] + when + raw[e:]
+        else:                                   # drop the token and the spaces before it
+            b = s
+            while b > t.col and raw[b - 1] in " \t":
+                b -= 1
+            raw = raw[:b] + raw[e:]
+    elif not when:
+        raise EditError("that task has no date to clear")
+    elif t.at["reminders"]:
+        p = t.col + t.at["reminders"][0][0]
+        raw = raw[:p] + when + " " + raw[p:]
+    else:
+        p = _content_end(raw)
+        raw = raw[:p] + " " + when + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    if (n.start, n.end) != ((probe.start, probe.end) if probe else (None, None)):
+        raise EditError(f"the line wouldn't read as {when or 'undated'!r}; another date-like word "
+                        "earlier in the line takes priority, so edit it by hand")
+    return out
+
+
+def add_assignees(text, line, initials, title=None):
+    """Add initials ("RT" or "RT, JS") to the task.
+
+    They join the task's last (...) group, or a new group goes before the
+    first date or reminder (as in `finish proposal (KA) Oct24`), or at the end.
+    """
+    lines, t = _task_at(text, line, title)
+    new = [a for a in re.split(r"[\s,]+", initials.strip()) if a]
+    bad = [a for a in new if not re.fullmatch(r"[A-Z]{1,4}", a)]
+    if not new or bad:
+        raise EditError(f"{initials!r}: initials are 1-4 capital letters, separated by commas")
+    new = [a for i, a in enumerate(new) if a not in t.assignees and a not in new[:i]]
+    if not new:
+        raise EditError("already assigned")
+    raw = lines[line - 1]
+    if t.at["assignees"]:
+        s, e = (t.col + i for i in t.at["assignees"][-1])
+        p = s + max(i for i, c in enumerate(raw[s:e]) if c.isupper()) + 1
+        raw = raw[:p] + ", " + ", ".join(new) + raw[p:]
+    else:
+        tokens = t.at["reminders"] + ([t.at["date"]] if t.at["date"] else [])
+        group = "(" + ", ".join(new) + ")"
+        if tokens:
+            p = t.col + min(s for s, _ in tokens)
+            raw = raw[:p] + group + " " + raw[p:]
+        else:
+            p = _content_end(raw)
+            raw = raw[:p] + " " + group + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    if _find(out, line).assignees != t.assignees + new:
+        raise EditError("the initials wouldn't read back correctly, so edit the line by hand")
+    return out
+
+
+def add_subtask(text, line, task_text, title=None):
+    """Add `- task_text` as the last subtask of the task on `line`.
+
+    The new line goes after the task's last subtask (and its notes), indented
+    one tab deeper than the task. Existing lines are not changed, except that
+    a final line with no line ending gets one.
+    """
+    lines, t = _task_at(text, line, title)
+    task_text = task_text.strip()
+    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+        raise EditError("a subtask is one line of text")
+    raw = lines[line - 1]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    indent = ws + ("    " if ws and "\t" not in ws else "\t")
+    ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
+    last = line                                 # last non-blank line of the task's subtree
+    for i in range(line, len(lines)):
+        r = lines[i]
+        c = r.strip()
+        if not c:
+            continue
+        rws = r[:len(r) - len(r.lstrip())]
+        lvl = rws.count("\t") + rws.count(" ") // 4
+        if c.startswith("@") or (not c.startswith("--") and re.match(r"^[!~]?-", c) and lvl <= t.level) \
+                or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
+            break
+        last = i + 1
+    if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
+        lines[last - 1] += ending
+        new_line = indent + "- " + task_text
+    else:
+        new_line = indent + "- " + task_text + ending
+    lines.insert(last, new_line)
+    out = "".join(lines)
+    n = _find(out, last + 1)
+    if n is None or n.parent is None or n.parent.line != line:
+        raise EditError("the new subtask wouldn't land under that task, so add it by hand")
+    return out
+
+
+EDITS = {"status": set_status, "date": set_date, "assign": add_assignees, "subtask": add_subtask}
 
 
 # ---------- web page ----------
@@ -614,7 +765,12 @@ def make_server(port):
                 text = req.get("text", "")
                 if self.path == "/api/parse":
                     return self._json(200, to_data(parse(text)))
-                text = set_status(text, req["line"], req["status"], req.get("title"))
+                op = EDITS.get(req["op"])
+                if op is None:
+                    raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
+                if not isinstance(req["value"], str):
+                    raise EditError("value must be text")
+                text = op(text, req["line"], req["value"], req.get("title"))
                 self._json(200, {"text": text, "data": to_data(parse(text))})
             except EditError as e:
                 self._json(409, {"error": str(e)})

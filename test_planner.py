@@ -398,6 +398,123 @@ class TestSetStatus(Base):
                 planner.set_status(text, line, status, title)
 
 
+class EditBase(Base):
+    def assert_one_line_changed(self, before, after, line, want):
+        a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+        self.assertEqual(len(a), len(b))
+        self.assertEqual([i + 1 for i, (x, y) in enumerate(zip(a, b)) if x != y], [line])
+        self.assertEqual(b[line - 1], want)
+
+
+class TestSetDate(EditBase):
+    def test_add_at_end(self):
+        out = planner.set_date("@P\n\t- a  (KA)   \r\n", 2, "Oct24")
+        self.assertEqual(out, "@P\n\t- a  (KA) Oct24   \r\n")
+
+    def test_add_before_reminder(self):
+        self.assertEqual(planner.set_date("- a *weekly Fri\n", 1, "Oct24"), "- a Oct24 *weekly Fri\n")
+
+    def test_replace_in_place(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "complete powerpoint")
+        out = planner.set_date(text, t.line, "~wk44", t.title)
+        self.assert_one_line_changed(text, out, t.line, "\t~- complete powerpoint (JS) ~wk44 *Oct19\n")
+        self.assertEqual(self.find(planner.parse(out), "complete powerpoint").loose, "wk44")
+
+    def test_replace_each_kind(self):
+        for old in ("Oct20", "Oct20--23", "Oct20--Nov02", "~Q1", "~Nov", "~wk43"):
+            with self.subTest(old=old):
+                self.assertEqual(planner.set_date(f"- call {old} (KA)\n", 1, "Dec01"), "- call Dec01 (KA)\n")
+
+    def test_clear(self):
+        self.assertEqual(planner.set_date("- a  Oct24 *Oct20\n", 1, ""), "- a *Oct20\n")
+        self.assertEqual(planner.set_date("- Oct24 a\n", 1, ""), "-  a\n")     # spaces after are left alone
+        with self.assertRaises(planner.EditError):
+            planner.set_date("- a\n", 1, "")
+
+    def test_rejects_non_dates(self):
+        for bad in ("Oct 24", "oct24", "Feb30", "tomorrow", "Oct24 Oct25", "(KA)"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_date("- a\n", 1, bad)
+
+    def test_refuses_when_earlier_token_wins(self):
+        with self.assertRaises(planner.EditError):          # Feb30 is found first and fails, so Oct24 would be ignored
+            planner.set_date("- a Feb30\n", 1, "Oct24")
+
+    def test_resetting_own_date_is_a_no_op(self):
+        text = read_example()
+        for p in planner.parse(text):
+            for t in p.all_tasks():
+                if t.date_text:
+                    self.assertEqual(planner.set_date(text, t.line, t.date_text, t.title), text)
+
+    def test_date_text(self):
+        t = self.find(planner.parse(read_example()), "onboard new hire")
+        self.assertEqual(t.date_text, "Oct26--Nov06")
+
+
+class TestAddAssignees(EditBase):
+    def test_new_group_before_date(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "send to board")
+        out = planner.add_assignees(text, t.line, "RT", t.title)
+        self.assert_one_line_changed(text, out, t.line, "\t- send to board (RT) Oct24 *Oct23\n")
+
+    def test_new_group_before_reminder_or_at_end(self):
+        self.assertEqual(planner.add_assignees("- a *daily\n", 1, "KA"), "- a (KA) *daily\n")
+        self.assertEqual(planner.add_assignees("- a  \n", 1, "KA, RT"), "- a (KA, RT)  \n")
+
+    def test_join_existing_group(self):
+        self.assertEqual(planner.add_assignees("- a (KA) Oct24\n", 1, "RT JS"), "- a (KA, RT, JS) Oct24\n")
+        self.assertEqual(planner.add_assignees("- a ( KA ) x\n", 1, "RT"), "- a ( KA, RT ) x\n")
+        self.assertEqual(planner.add_assignees("- a (KA) (RT)\n", 1, "JS"), "- a (KA) (RT, JS)\n")
+
+    def test_skips_existing_and_rejects_bad(self):
+        self.assertEqual(planner.add_assignees("- a (KA)\n", 1, "KA, RT, RT"), "- a (KA, RT)\n")
+        for bad in ("KA", "ka", "ABCDE", "", "K1"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.add_assignees("- a (KA)\n", 1, bad)
+
+
+class TestAddSubtask(EditBase):
+    def test_goes_after_last_subtask_and_its_notes(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "onboard new hire")
+        out = planner.add_subtask(text, t.line, "order laptop (RT) Oct27", t.title)
+        a, b = text.splitlines(keepends=True), out.splitlines(keepends=True)
+        self.assertEqual(b[t.line + 3], "\t- order laptop (RT) Oct27\n")
+        self.assertEqual(a, b[:t.line + 3] + b[t.line + 4:])
+        new = self.find(planner.parse(out), "order laptop")
+        self.assertEqual((new.parent.title, new.assignees), ("onboard new hire", ["RT"]))
+
+    def test_nested_parent_and_notes(self):
+        text = "@P\n- a\n\t- b\n\t\t- c\n\t\t-- note on c\n\n- d\n"
+        self.assertEqual(planner.add_subtask(text, 3, "new"),
+                         "@P\n- a\n\t- b\n\t\t- c\n\t\t-- note on c\n\t\t- new\n\n- d\n")
+        self.assertEqual(planner.add_subtask(text, 2, "new"),
+                         "@P\n- a\n\t- b\n\t\t- c\n\t\t-- note on c\n\t- new\n\n- d\n")
+
+    def test_stops_at_project_and_heading(self):
+        self.assertEqual(planner.add_subtask("@P\n- a\n@Q\n- b\n", 2, "x"), "@P\n- a\n\t- x\n@Q\n- b\n")
+        self.assertEqual(planner.add_subtask("@P\n- a\nWinter\n", 2, "x"), "@P\n- a\n\t- x\nWinter\n")
+
+    def test_last_line_and_line_endings(self):
+        self.assertEqual(planner.add_subtask("@P\r\n- a", 2, "x"), "@P\r\n- a\n\t- x")
+        self.assertEqual(planner.add_subtask("@P\r\n- a\r\n", 2, "x"), "@P\r\n- a\r\n\t- x\r\n")
+
+    def test_space_indented_parent(self):
+        self.assertEqual(planner.add_subtask("- a\n    - b\n", 2, "x"), "- a\n    - b\n        - x\n")
+
+    def test_rejects_multiline_and_empty(self):
+        for bad in ("", "   ", "a\nb", "a\u2028b"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.add_subtask("- a\n", 1, bad)
+
+    def test_stale_title_refused(self):
+        with self.assertRaises(planner.EditError):
+            planner.add_subtask("- a\n", 1, "x", "not a")
+
+
 class TestServer(Base):
     def setUp(self):
         super().setUp()
@@ -431,20 +548,33 @@ class TestServer(Base):
 
     def test_edit(self):
         text = read_example()
-        code, d = self.post("/api/edit", {"text": text, "line": 17, "status": "done",
+        code, d = self.post("/api/edit", {"text": text, "line": 17, "op": "status", "value": "done",
                                           "title": "site visit prep", "today": "2026-10-12"})
         self.assertEqual(code, 200)
         self.assertEqual(d["text"], text.replace("- site visit prep", "!- site visit prep"))
         self.assertEqual(d["data"]["upcoming"]["overdue"], [])
 
     def test_edit_stale_is_409(self):
-        code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "status": "done", "title": "other"})
+        code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "op": "status", "value": "done",
+                                          "title": "other"})
         self.assertEqual(code, 409)
         self.assertIn("no longer that task", d["error"])
 
     def test_edit_missing_fields_is_400(self):
         code, d = self.post("/api/edit", {"text": "- a"})
         self.assertEqual(code, 400)
+
+    def test_edit_bad_op_or_value_is_409(self):
+        for extra in ({"op": "delete", "value": ""}, {"op": "date", "value": 5}):
+            code, _ = self.post("/api/edit", dict({"text": "- a", "line": 1}, **extra))
+            self.assertEqual(code, 409)
+
+    def test_edit_ops(self):
+        text = "@P\n- a\n"
+        for op, value, want in [("date", "Oct24", "@P\n- a Oct24\n"), ("assign", "KA", "@P\n- a (KA)\n"),
+                                ("subtask", "b", "@P\n- a\n\t- b\n")]:
+            code, d = self.post("/api/edit", {"text": text, "line": 2, "op": op, "value": value, "title": "a"})
+            self.assertEqual((code, d["text"]), (200, want))
 
 
 # ---------- CLI ----------

@@ -50,7 +50,7 @@ Paste your notes, or use **Open file** (or drag a file onto the page) to load a 
 | Mode | Shows |
 |---|---|
 | **Plain** | Just your text, editable. Nothing is interpreted. Tab indents; Shift-Tab outdents. |
-| **Planner** | Your notes in the planner format, with tabs for Projects, Timeline, People and Upcoming. Click a task's box (`[ ]`, `[~]`, `[x]`) to move it to in progress, then done, then back to open: only the mark at the start of that line changes in your text, and **Undo** puts it back. Tick **Edit alongside** to edit while you look. The **Today** box works like `--today`. |
+| **Planner** | Your notes in the planner format, with tabs for Projects, Timeline, People and Upcoming. Click a task's box (`[ ]`, `[~]`, `[x]`) to move it to in progress, then done, then back to open: only the mark at the start of that line changes in your text, and **Undo** puts it back. Hover a task for **date** (set, change, or clear with an empty box), **+who** (add initials) and **+sub** (add a subtask at the end of its subtasks); type and press Enter. These change only what they must: the date token, the `(...)` group, or one new tab-indented line. Tick **Edit alongside** to edit while you look. The **Today** box works like `--today`. |
 | **Markdown** | Your text as rendered markdown. |
 
 The **Dark / Light** button switches themes (it starts from your system setting). The page only talks to your own computer, and it remembers your text and settings in the browser. Clicking a status box changes the text in the page; use **Save** to keep it in a file.
