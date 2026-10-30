@@ -247,6 +247,8 @@ function plannerView() {
 
 function taskNode(t, showProject, showSpan) {
   const row = h("div", "task s-" + t.status);
+  row.title = "line " + t.line;                         // hover shows where the task is in the text
+  row.dataset.line = t.line;
   row.append(span("box", BOX[t.status]), " ");
   if (showProject) row.append(span("proj", "@" + t.project));
   row.append(span("ttl", t.title));

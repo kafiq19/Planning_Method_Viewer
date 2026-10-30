@@ -94,13 +94,13 @@ Each task has at most one date span. Later date tokens on the same line stay in 
 | `resolve`, `resolve_after`, `loose_span`, `next_reminder` | Date resolution |
 | `fd`, `fspan` | Date formatting. The year is shown only when it isn't TODAY's year. |
 | `timeline_months`, `timeline_rows`, `people_groups`, `upcoming_groups` | Shared collectors: the text views and `to_data` both use them, so the logic exists once |
-| `Task` | Parsed task. `_parse` extracts tokens. `walk`, `rollup`, `span`, `overdue` and `label` derive the rest. |
+| `Task` | Parsed task (headings reuse it). `line` is its 1-based line in the source text, counting blank lines. `_parse` extracts tokens. `walk`, `rollup`, `span`, `overdue` and `label` derive the rest. |
 | `Project` | Name, section, root tasks and notes |
 | `parse(text)` | Line classifier and stack builder. Returns `list[Project]`. |
 | `view_projects`, `view_timeline`, `view_people`, `view_upcoming` | Each returns `list[str]` |
-| `task_data`, `flat`, `to_data(projects)` | JSON-ready dicts of all four views, for the web page |
+| `task_data`, `flat`, `to_data(projects)` | JSON-ready dicts of all four views, for the web page. Every task carries `line`. |
 | `set_today`, `serve(port)` | `serve` runs a `127.0.0.1`-only `http.server`: `GET /` returns `web/index.html`; `POST /api/parse` takes `{text, today}` and returns `to_data`. `TODAY` is reset on every request. |
-| `VIEWS`, `main` | CLI: an optional file path, view names, `--today`, and `--serve [--port N]` (default 8765). Reads stdin when no path is given. |
+| `VIEWS`, `take_option`, `main` | CLI: an optional file path, view names (any case), `--today`, and `--serve [--port N]` (default 8765). Reads stdin when no path is given. Bad arguments (unknown view or missing file, two files, a missing or invalid `--today`/`--port`) exit with code 1 and a one-line `planner.py: …` message, never a traceback. |
 
 ## Web page (`web/index.html`)
 
@@ -110,7 +110,7 @@ One self-contained file (inline CSS and JS, no dependencies). Three modes, chose
 - **Planner:** the four views as tabs, drawn from `/api/parse`. Read-only. "Edit alongside" shows the text area next to it. The "Today" field is the web form of `--today`.
 - **Markdown:** a built-in renderer (`markdown()`). It escapes all input before adding tags and only allows `http(s)` links. Works offline.
 
-Files come in through "Open file" or drag and drop and go out through "Save" (a download). Text, mode, tab and theme are remembered in `localStorage`. Dark mode follows the OS until the toggle is used. All note text is inserted as text, never as HTML, in Planner mode.
+Files come in through "Open file" or drag and drop and go out through "Save" (a download). Text, mode, tab and theme are remembered in `localStorage`. Dark mode follows the OS until the toggle is used. All note text is inserted as text, never as HTML, in Planner mode. Each task row carries `data-line` and shows `line N` on hover.
 
 To add a view, write `view_x(projects) -> list[str]`, register it in `VIEWS`, and document it in both READMEs.
 

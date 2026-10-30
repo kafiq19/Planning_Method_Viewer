@@ -25,6 +25,7 @@ NOTE FORMAT (quick reference)
   ~Q1  ~Nov  ~wk43              loose date: sometime in that period
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
 """
+import os
 import re
 import sys
 from datetime import date, timedelta
@@ -151,8 +152,8 @@ def fspan(s, e, loose=None):
 # ---------- model ----------
 
 class Task:
-    def __init__(self, text, status="open", level=0):
-        self.status, self.level = status, level
+    def __init__(self, text, status="open", level=0, line=None):
+        self.status, self.level, self.line = status, level, line   # line: 1-based, in the source text
         self.assignees, self.reminders, self.notes, self.children = [], [], [], []
         self.start = self.end = self.loose = None
         self.parent = self.project = None
@@ -247,7 +248,7 @@ def parse(text):
             projects.append(project)
         return project
 
-    for raw in text.splitlines():
+    for n, raw in enumerate(text.splitlines(), 1):
         if not raw.strip():
             continue
         ws = raw[:len(raw) - len(raw.lstrip())]
@@ -268,7 +269,7 @@ def parse(text):
         m = re.match(r"^([!~]?)-\s*(.*)$", line)
         if m:
             status = {"!": "done", "~": "doing", "": "open"}[m.group(1)]
-            t = Task(m.group(2), status, level)
+            t = Task(m.group(2), status, level, n)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -281,7 +282,7 @@ def parse(text):
             continue
 
         if level == 0:
-            section = Task(line)       # reuse the date parsing for headings
+            section = Task(line, line=n)   # reuse the date parsing for headings
             project, stack = None, []
             continue
 
@@ -474,7 +475,7 @@ def iso(d):
 def task_data(t):
     sp = t.span()
     return {
-        "title": t.title, "status": t.status, "assignees": t.assignees, "notes": t.notes,
+        "title": t.title, "status": t.status, "line": t.line, "assignees": t.assignees, "notes": t.notes,
         "when": fspan(t.start, t.end, t.loose) if t.end else None,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
@@ -595,31 +596,48 @@ VIEWS = {"projects": view_projects, "timeline": view_timeline,
          "people": view_people, "upcoming": view_upcoming}
 
 
+def take_option(args, flag):
+    """Remove `flag VALUE` from args and return VALUE (None if the flag is absent)."""
+    if flag not in args:
+        return None
+    i = args.index(flag)
+    if i + 1 >= len(args) or args[i + 1].startswith("--"):
+        sys.exit(f"planner.py: {flag} needs a value")
+    val = args[i + 1]
+    del args[i:i + 2]
+    return val
+
+
 def main(argv):
-    args, path, chosen, port = list(argv[1:]), None, [], None
-    if "--today" in args:
-        i = args.index("--today")
-        val = args[i + 1]
-        del args[i:i + 2]
-        set_today(val)
+    args, path, chosen = list(argv[1:]), None, []
+    today = take_option(args, "--today")
+    if today is not None:
+        try:
+            set_today(today)
+        except ValueError:
+            sys.exit(f"planner.py: bad --today value {today!r} (use Oct12 or 2026-10-12)")
     if "--serve" in args:
-        i = args.index("--serve")
-        del args[i]
-        port = 8765
-        if "--port" in args:
-            i = args.index("--port")
-            port = int(args[i + 1])
-            del args[i:i + 2]
-        return serve(port)
+        args.remove("--serve")
+        port = take_option(args, "--port") or "8765"
+        if not port.isdigit() or not 0 < int(port) < 65536:
+            sys.exit(f"planner.py: bad --port value {port!r}")
+        return serve(int(port))
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())
+        elif not os.path.isfile(a):
+            sys.exit(f"planner.py: {a!r} is not a file or a view ({' | '.join(VIEWS)})")
+        elif path is not None:
+            sys.exit(f"planner.py: only one notes file at a time (got {path!r} and {a!r})")
         else:
             path = a
 
     if path:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"planner.py: can't read {path!r}: {e}")
     else:
         print("Paste your notes, then press Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows):\n",
               file=sys.stderr)

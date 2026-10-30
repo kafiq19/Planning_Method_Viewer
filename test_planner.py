@@ -87,6 +87,19 @@ class TestParse(Base):
         ps = planner.parse("\n@A\n   \n- a\n\n\t- b\n")
         self.assertEqual(ps[0].tasks[0].children[0].title, "b")
 
+    def test_line_numbers(self):
+        text = "Fall\n\n@A\n- a\n\t-- note\n\t- b\r\n~- c\n"
+        ps = planner.parse(text)
+        a, c = ps[0].tasks
+        self.assertEqual((ps[0].section.line, a.line, a.children[0].line, c.line), (1, 4, 6, 7))
+
+    def test_line_numbers_point_at_task_lines(self):
+        lines = read_example().splitlines()
+        for p in planner.parse(read_example()):
+            for t in p.all_tasks():
+                self.assertRegex(lines[t.line - 1].strip(), r"^[!~]?-(?!-)")
+                self.assertIn(t.title.split()[0], lines[t.line - 1])
+
     def test_parse_does_not_modify_input(self):
         text = read_example()
         copy = str(text)
@@ -322,16 +335,38 @@ class TestExample(Base):
         self.assertEqual([t["title"] for t in d["upcoming"]["overdue"]], ["site visit prep"])
         agenda = next(r for r in d["timeline"]["rows"] if r["title"] == "plan agenda")
         self.assertEqual(agenda["span"]["how"], "parent")
+        self.assertEqual(agenda["line"], 34)
 
 
 # ---------- CLI ----------
 
 class TestCLI(unittest.TestCase):
-    def run_cli(self, *args, stdin=None):
+    def run_cli(self, *args, stdin=None, code=0):
         r = subprocess.run([sys.executable, os.path.join(HERE, "planner.py"), *args],
-                           input=stdin, capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout
+                           input=stdin or "", capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, code, r.stderr)
+        return r.stdout if code == 0 else r.stderr
+
+    def test_bad_arguments_give_one_line_errors(self):
+        cases = [
+            ((EXAMPLE, "timline"), "is not a file or a view"),
+            (("no-such-file.txt",), "is not a file or a view"),
+            ((EXAMPLE, EXAMPLE), "only one notes file"),
+            ((EXAMPLE, "--today"), "--today needs a value"),
+            ((EXAMPLE, "--today", "Feb30"), "bad --today value"),
+            ((EXAMPLE, "--today", "soon"), "bad --today value"),
+            (("--serve", "--port"), "--port needs a value"),
+            (("--serve", "--port", "abc"), "bad --port value"),
+            (("--serve", "--port", "70000"), "bad --port value"),
+        ]
+        for args, msg in cases:
+            with self.subTest(args=args):
+                err = self.run_cli(*args, code=1)
+                self.assertIn(msg, err)
+                self.assertNotIn("Traceback", err)
+
+    def test_view_names_ignore_case(self):
+        self.assertTrue(self.run_cli(EXAMPLE, "PEOPLE", "--today", "2026-10-12").startswith("PEOPLE"))
 
     def test_all_views(self):
         out = self.run_cli(EXAMPLE, "--today", "2026-10-12")
