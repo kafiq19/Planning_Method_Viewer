@@ -11,7 +11,8 @@ USAGE
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming
   --today Oct10                        pretend today is another date (for testing)
-  --serve [--port 8765]                open the web page (paste/open/edit notes, dark mode)
+  --serve [--port 8765]                open the web page (paste/open/edit notes, dark mode;
+                                       click a task's box to change its status)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -532,6 +533,40 @@ def to_data(projects):
     }
 
 
+# ---------- editing (only on an explicit user action) ----------
+
+STATUS_MARK = {"open": "", "doing": "~", "done": "!"}
+
+
+class EditError(ValueError):
+    """The edit can't be applied to this text (stale line, not a task, bad status)."""
+
+
+def set_status(text, line, status, title=None):
+    """Return `text` with the task on `line` (1-based) set to `status`.
+
+    Only the status mark before the task's dash changes. Every other character
+    of the text, including that line's indentation, wording and line ending,
+    stays exactly as it was. If `title` is given it must match the task's parsed
+    title, so an edit made from an out-of-date view is refused, not misapplied.
+    """
+    if status not in STATUS_MARK:
+        raise EditError(f"unknown status {status!r} (use open, doing or done)")
+    lines = text.splitlines(keepends=True)      # same split points as parse()
+    if type(line) is not int or not 1 <= line <= len(lines):
+        raise EditError(f"line {line!r} is not in the text")
+    task = next((t for p in parse(text) for t in p.all_tasks() if t.line == line), None)
+    if task is None or (title is not None and task.title != title):
+        raise EditError(f"line {line} is no longer that task (the text has changed)")
+    raw = lines[line - 1]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    body = raw[len(ws):]
+    if body[0] in "!~":
+        body = body[1:]
+    lines[line - 1] = ws + STATUS_MARK[status] + body
+    return "".join(lines)
+
+
 # ---------- web page ----------
 
 def set_today(val):
@@ -541,10 +576,9 @@ def set_today(val):
     TODAY = date(date.today().year, MONTHS[m.group(1)], int(m.group(2))) if m else date.fromisoformat(val)
 
 
-def serve(port):
+def make_server(port):
+    """The local server (127.0.0.1 only). Port 0 picks a free port."""
     import json
-    import threading
-    import webbrowser
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from pathlib import Path
 
@@ -559,6 +593,9 @@ def serve(port):
             self.end_headers()
             self.wfile.write(body)
 
+        def _json(self, code, obj):
+            self._send(code, json.dumps(obj).encode(), "application/json")
+
         def do_GET(self):
             if self.path.split("?")[0] in ("/", "/index.html"):
                 self._send(200, page.read_bytes(), "text/html; charset=utf-8")
@@ -566,7 +603,7 @@ def serve(port):
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path != "/api/parse":
+            if self.path not in ("/api/parse", "/api/edit"):
                 return self._send(404, b"not found", "text/plain")
             global TODAY
             try:
@@ -574,15 +611,27 @@ def serve(port):
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
-                body = json.dumps(to_data(parse(req.get("text", "")))).encode()
-                self._send(200, body, "application/json")
-            except (ValueError, KeyError) as e:
-                self._send(400, json.dumps({"error": f"bad request: {e}"}).encode(), "application/json")
+                text = req.get("text", "")
+                if self.path == "/api/parse":
+                    return self._json(200, to_data(parse(text)))
+                text = set_status(text, req["line"], req["status"], req.get("title"))
+                self._json(200, {"text": text, "data": to_data(parse(text))})
+            except EditError as e:
+                self._json(409, {"error": str(e)})
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
+                self._json(400, {"error": f"bad request: {e}"})
 
         def log_message(self, *args):
             pass
 
-    server = HTTPServer(("127.0.0.1", port), Handler)   # localhost only
+    return HTTPServer(("127.0.0.1", port), Handler)
+
+
+def serve(port):
+    import threading
+    import webbrowser
+
+    server = make_server(port)
     url = f"http://localhost:{port}"
     print(f"Planner running at {url}  (Ctrl-C to stop)")
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()

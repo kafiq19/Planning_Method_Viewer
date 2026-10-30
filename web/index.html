@@ -57,6 +57,12 @@ h2.sec:first-child { margin-top: 0; }
 .task { padding: 2px 0; }
 .kids { margin-left: 22px; border-left: 1px solid var(--line); padding-left: 12px; }
 .box { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
+button.box { width: 2.2em; padding: 0; border: 1px solid transparent; background: none; font-family: ui-monospace, Menlo, Consolas, monospace; }
+button.box:hover { border-color: var(--accent); }
+button.box:disabled { opacity: .5; cursor: wait; }
+.msg { margin-left: 12px; font-size: 13px; }
+.msg.bad { color: var(--bad); }
+.msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
 .s-open .box { color: var(--open); } .s-doing .box { color: var(--doing); } .s-done .box { color: var(--done); }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 .who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
@@ -120,7 +126,7 @@ const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
 };
-const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0 };
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null };
 
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
@@ -145,7 +151,7 @@ $("theme").onclick = () => {
 /* ---------- editor, files ---------- */
 const editor = $("editor");
 editor.value = store.get("text", "");
-editor.addEventListener("input", () => { store.set("text", editor.value); schedule(); });
+editor.addEventListener("input", () => { store.set("text", editor.value); state.msg = null; schedule(); });
 editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
   if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
   e.preventDefault();
@@ -233,6 +239,55 @@ async function render(relayout) {
 const BOX = { open: "[ ]", doing: "[~]", done: "[x]" };
 const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"]];
 
+/* ---------- status clicks: the server rewrites only the task's status mark ---------- */
+const NEXT = { open: "doing", doing: "done", done: "open" };
+const STATUS_NAME = { open: "open", doing: "in progress", done: "done" };
+
+function replaceText(text) {           // swap in the new text, keeping the cursor and scroll where they were
+  const old = editor.value;
+  let a = 0, b = 0;
+  while (a < old.length && a < text.length && old[a] === text[a]) a++;
+  while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
+  const top = editor.scrollTop;
+  editor.setRangeText(text.slice(a, text.length - b), a, old.length - b, "preserve");
+  editor.scrollTop = top;
+  store.set("text", text);
+}
+
+async function setStatus(t, status, btn) {
+  const before = editor.value, seq = ++state.seq;
+  clearTimeout(timer);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: before, line: t.line, title: t.title, status, today: $("today").value.trim() || null }) });
+    const res = await r.json();
+    if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
+    if (!r.ok) throw new Error(res.error || r.statusText);
+    replaceText(res.text);
+    state.data = res.data;
+    state.msg = { text: `Marked "${t.title}" ${STATUS_NAME[status]}.`, undo: { before, after: res.text } };
+  } catch (err) {
+    state.msg = { text: "Not changed: " + err.message, bad: true };
+    if (seq === state.seq) return render(false);
+  }
+  if (seq === state.seq) plannerView();
+}
+
+function undo() {
+  const u = state.msg && state.msg.undo;
+  state.msg = null;
+  if (u && editor.value === u.after) { replaceText(u.before); render(false); }
+  else plannerView();
+}
+
+function statusBox(t) {
+  const b = h("button", "box", BOX[t.status]);
+  b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.onclick = () => setStatus(t, NEXT[t.status], b);
+  return b;
+}
+
 function plannerView() {
   const d = state.data, view = $("viewPane");
   const tabs = h("div", "tabs");
@@ -242,14 +297,16 @@ function plannerView() {
     tabs.append(b);
   }
   const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
-  view.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), body);
+  const msg = state.msg && span("msg" + (state.msg.bad ? " bad" : ""), state.msg.text);
+  if (msg && state.msg.undo) { const u = h("button", "", "Undo"); u.onclick = undo; msg.append(u); }
+  view.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), msg, body);
 }
 
 function taskNode(t, showProject, showSpan) {
   const row = h("div", "task s-" + t.status);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
   row.dataset.line = t.line;
-  row.append(span("box", BOX[t.status]), " ");
+  row.append(statusBox(t), " ");
   if (showProject) row.append(span("proj", "@" + t.project));
   row.append(span("ttl", t.title));
   for (const a of t.assignees) row.append(span("who", a));
@@ -291,9 +348,9 @@ function vTimeline(d) {
     head.append(h("th", "", "When"));
     const table = h("table", "tl", head);
     for (const t of tl.rows) {
-      const nm = h("td", "name", t.status === "doing" ? "~ " : "", span("proj", "@" + t.project), t.title +
-        (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : ""));
-      nm.title = nm.textContent;
+      const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
+      const nm = h("td", "name", statusBox(t), " ", span("proj", "@" + t.project), label);
+      nm.title = "@" + t.project + "  " + label;
       const tr = h("tr", "", nm);
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];

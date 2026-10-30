@@ -7,7 +7,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from datetime import date
 
 import planner
@@ -336,6 +339,112 @@ class TestExample(Base):
         agenda = next(r for r in d["timeline"]["rows"] if r["title"] == "plan agenda")
         self.assertEqual(agenda["span"]["how"], "parent")
         self.assertEqual(agenda["line"], 34)
+
+
+# ---------- editing ----------
+
+class TestSetStatus(Base):
+    def changed_lines(self, before, after):
+        a, b = before.splitlines(keepends=True), after.splitlines(keepends=True)
+        self.assertEqual(len(a), len(b))
+        return [(i + 1, x, y) for i, (x, y) in enumerate(zip(a, b)) if x != y]
+
+    def test_only_the_status_mark_changes(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "send to board")
+        new = planner.set_status(text, t.line, "done", t.title)
+        self.assertEqual(self.changed_lines(text, new),
+                         [(t.line, "\t- send to board Oct24 *Oct23\n", "\t!- send to board Oct24 *Oct23\n")])
+
+    def test_all_transitions(self):
+        for old, new, want in [("- a", "doing", "~- a"), ("~- a", "done", "!- a"), ("!- a", "open", "- a"),
+                               ("- a", "open", "- a"), ("!-a", "doing", "~-a")]:
+            with self.subTest(old=old, new=new):
+                self.assertEqual(planner.set_status("@P\n" + old + "\n", 2, new), "@P\n" + want + "\n")
+
+    def test_every_task_round_trips(self):
+        text = read_example()
+        for p in planner.parse(text):
+            for t in p.all_tasks():
+                out = text
+                for st in ("open", "doing", "done", t.status):
+                    out = planner.set_status(out, t.line, st, t.title)
+                    self.assertEqual(len(self.changed_lines(text, out)), 0 if st == t.status else 1)
+                self.assertEqual(out, text)
+
+    def test_preserves_whitespace_and_line_endings(self):
+        text = "@P\r\n    \t- a  (KA)  Oct24   \r\n\n- b"
+        out = planner.set_status(text, 2, "done")
+        self.assertEqual(out, "@P\r\n    \t!- a  (KA)  Oct24   \r\n\n- b")
+        self.assertEqual(planner.set_status(text, 4, "doing"), "@P\r\n    \t- a  (KA)  Oct24   \r\n\n~- b")
+
+    def test_result_parses_with_new_status(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "site visit prep")
+        new = planner.set_status(text, t.line, "done", t.title)
+        self.assertFalse(self.find(planner.parse(new), "site visit prep").overdue())
+
+    def test_refuses_non_tasks(self):
+        text = "Fall\n@P\n-- a note\n- task\n\tplain note\n\n"
+        for line in (1, 2, 3, 5, 6):
+            with self.subTest(line=line), self.assertRaises(planner.EditError):
+                planner.set_status(text, line, "done")
+
+    def test_refuses_stale_or_bad_requests(self):
+        text = "@P\n- a\n- b\n"
+        for line, status, title in [(2, "done", "b"), (0, "done", None), (4, "done", None),
+                                    ("2", "done", None), (True, "done", None), (2, "finished", None)]:
+            with self.subTest(line=line, status=status, title=title), self.assertRaises(planner.EditError):
+                planner.set_status(text, line, status, title)
+
+
+class TestServer(Base):
+    def setUp(self):
+        super().setUp()
+        self.server = planner.make_server(0)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        super().tearDown()
+
+    def post(self, path, payload):
+        req = urllib.request.Request(self.url + path, json.dumps(payload).encode(),
+                                     {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def test_page(self):
+        with urllib.request.urlopen(self.url + "/") as r:
+            self.assertIn(b"/api/edit", r.read())
+
+    def test_parse(self):
+        code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12"})
+        self.assertEqual(code, 200)
+        self.assertEqual([t["title"] for t in d["upcoming"]["overdue"]], ["site visit prep"])
+
+    def test_edit(self):
+        text = read_example()
+        code, d = self.post("/api/edit", {"text": text, "line": 17, "status": "done",
+                                          "title": "site visit prep", "today": "2026-10-12"})
+        self.assertEqual(code, 200)
+        self.assertEqual(d["text"], text.replace("- site visit prep", "!- site visit prep"))
+        self.assertEqual(d["data"]["upcoming"]["overdue"], [])
+
+    def test_edit_stale_is_409(self):
+        code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "status": "done", "title": "other"})
+        self.assertEqual(code, 409)
+        self.assertIn("no longer that task", d["error"])
+
+    def test_edit_missing_fields_is_400(self):
+        code, d = self.post("/api/edit", {"text": "- a"})
+        self.assertEqual(code, 400)
 
 
 # ---------- CLI ----------

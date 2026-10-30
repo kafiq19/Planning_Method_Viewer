@@ -10,7 +10,7 @@ Instructions for AI agents (and developers) working in this repo. Human-facing d
 
 1. **The note format belongs to the user.** It is a light layer over how they already write notes. Do not add, rename or repurpose markers unless the user asks. Propose format changes in plain words first.
 2. **Keep it stdlib-only.** No `pip` dependencies, in Python or in the page (no CDN scripts, no JS libraries). Parsing lives only in `planner.py`; the page never re-implements the note format, it asks the server. Keep the repo small: `planner.py`, `web/index.html`, `test_planner.py`, the docs and the example.
-3. **Never rewrite the user's notes when parsing.** The tool reads them only. When you edit or generate notes for the user, follow the grammar below exactly and preserve their wording, order and tab indentation.
+3. **Parsing never changes the notes.** The tool edits them only on an explicit user action (today: clicking a task's status box), and an edit touches only its target line and only the characters it must. Wording, order, indentation, trailing whitespace and line endings stay exactly as they were. An edit made from an out-of-date view is refused, not guessed at. When you edit or generate notes for the user, follow the grammar below exactly and preserve the same things.
 4. **Keep `README.md` (humans), this file (machines) and the docstring at the top of `planner.py` in sync** whenever behaviour changes. A new view or field must reach `to_data` and `web/index.html` as well as the CLI.
 5. **Verify every change** by running the commands in [Testing](#testing).
 
@@ -99,7 +99,8 @@ Each task has at most one date span. Later date tokens on the same line stay in 
 | `parse(text)` | Line classifier and stack builder. Returns `list[Project]`. |
 | `view_projects`, `view_timeline`, `view_people`, `view_upcoming` | Each returns `list[str]` |
 | `task_data`, `flat`, `to_data(projects)` | JSON-ready dicts of all four views, for the web page. Every task carries `line`. |
-| `set_today`, `serve(port)` | `serve` runs a `127.0.0.1`-only `http.server`: `GET /` returns `web/index.html`; `POST /api/parse` takes `{text, today}` and returns `to_data`. `TODAY` is reset on every request. |
+| `STATUS_MARK`, `EditError`, `set_status(text, line, status, title)` | The one edit. Swaps the `!`/`~` mark before the task's dash on that line and changes nothing else. Raises `EditError` if the line isn't a task, `title` doesn't match its parsed title (stale view), or the status is unknown. |
+| `set_today`, `make_server(port)`, `serve(port)` | `make_server` builds a `127.0.0.1`-only `http.server` (port 0 = any free port, used by the tests); `serve` runs it and opens the browser. `GET /` returns `web/index.html`. `POST /api/parse` takes `{text, today}` and returns `to_data`. `POST /api/edit` takes `{text, line, status, title, today}` and returns `{text, data}` (the new text and its `to_data`); 409 if the edit is refused, 400 if the request is malformed. `TODAY` is reset on every request. |
 | `VIEWS`, `take_option`, `main` | CLI: an optional file path, view names (any case), `--today`, and `--serve [--port N]` (default 8765). Reads stdin when no path is given. Bad arguments (unknown view or missing file, two files, a missing or invalid `--today`/`--port`) exit with code 1 and a one-line `planner.py: …` message, never a traceback. |
 
 ## Web page (`web/index.html`)
@@ -107,7 +108,7 @@ Each task has at most one date span. Later date tokens on the same line stay in 
 One self-contained file (inline CSS and JS, no dependencies). Three modes, chosen with the toggle in the header:
 
 - **Plain:** editable text area only; text is never changed. Tab indents (Shift-Tab outdents) because the format is tab-based.
-- **Planner:** the four views as tabs, drawn from `/api/parse`. Read-only. "Edit alongside" shows the text area next to it. The "Today" field is the web form of `--today`.
+- **Planner:** the four views as tabs, drawn from `/api/parse`. Clicking a task's status box (in any tab, including timeline rows) cycles open → in progress → done → open through `/api/edit`. The page swaps in only the changed characters, so the cursor and scroll in the side editor stay put, and shows a message with **Undo** (which works while the text is unchanged since). If the user typed while the request was out, the edit is dropped. Nothing else in the views edits text. "Edit alongside" shows the text area next to it. The "Today" field is the web form of `--today`.
 - **Markdown:** a built-in renderer (`markdown()`). It escapes all input before adding tags and only allows `http(s)` links. Works offline.
 
 Files come in through "Open file" or drag and drop and go out through "Save" (a download). Text, mode, tab and theme are remembered in `localStorage`. Dark mode follows the OS until the toggle is used. All note text is inserted as text, never as HTML, in Planner mode. Each task row carries `data-line` and shows `line N` on hover.
@@ -132,7 +133,7 @@ python planner.py example.txt timeline --today Oct12
 python planner.py --today Oct12 < example.txt
 ```
 
-For the web page, run `python planner.py --serve --today Oct12`, open the page, load `example.txt`, switch through the three modes and four tabs, and toggle dark mode. The same checks below apply in the Projects, Timeline and Upcoming tabs. A quick API check without a browser: `POST /api/parse` with `{"text": "...", "today": "Oct12"}`.
+For the web page, run `python planner.py --serve --today Oct12`, open the page, load `example.txt`, switch through the three modes and four tabs, and toggle dark mode. The same checks below apply in the Projects, Timeline and Upcoming tabs. In Planner mode, click a few status boxes in different tabs and check that only that line's mark changes in the text, that Undo restores it, and that the cursor in "Edit alongside" doesn't jump. A quick API check without a browser: `POST /api/parse` with `{"text": "...", "today": "Oct12"}`, or `POST /api/edit` with `{"text": "...", "line": 17, "status": "done", "title": "site visit prep"}`. `test_planner.py` starts a real server for both.
 
 Then check these against `example.txt`:
 - `site visit prep` is OVERDUE.
@@ -147,5 +148,6 @@ When you add behaviour, add a line to `example.txt` that exercises it.
 ## Known limitations / open ideas
 
 - Assignee inheritance (decide with the user).
-- The web page is read-only outside Plain mode (no click-to-complete). Writing changes back to the text would need to preserve the user's wording and indentation exactly.
+- Status is the only edit from the views. Next candidates: adding a date or initials, adding a subtask, and saving straight back to the notes file (`--serve notes.txt`) instead of downloading. Each must follow rule 3 and get the same "only this line changed" tests as `set_status`.
+- Changing status from the CLI is not supported yet.
 - A date in a note (`-- … Oct24`) is not parsed. That is intended.
