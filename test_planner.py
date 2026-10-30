@@ -334,13 +334,112 @@ class TestExample(Base):
         d = json.loads(json.dumps(planner.to_data(self.ps)))
         self.assertEqual(d["today"], "2026-10-12")
         self.assertEqual([s["title"] for s in d["projects"]], ["Fall Planning", "Winter Planning"])
-        self.assertEqual(len(d["timeline"]["months"]), 12)
+        self.assertEqual([c["head"] for c in d["timeline"]["columns"]],
+                         ["O 26", "N", "D", "J 27", "F", "M", "A", "M", "J", "J", "A", "S"])
+        self.assertIsNone(d["period"])
         self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["update handbook"])
         self.assertEqual([p["name"] for p in d["people"]], ["JS", "KA", "RT", "(unassigned)"])
         self.assertEqual([t["title"] for t in d["upcoming"]["overdue"]], ["site visit prep"])
         agenda = next(r for r in d["timeline"]["rows"] if r["title"] == "plan agenda")
         self.assertEqual(agenda["span"]["how"], "parent")
         self.assertEqual(agenda["line"], 34)
+
+
+# ---------- periods (Month / Season picker) ----------
+
+class TestPeriods(Base):
+    def setUp(self):
+        super().setUp()
+        self.ps = planner.parse(read_example())
+
+    def data(self, kind, year, index):
+        return planner.to_data(self.ps, planner.period_from({"kind": kind, "year": year, "index": index}))
+
+    def titles(self, d):
+        def walk(t):
+            yield ("(" + t["title"] + ")") if t.get("dim") else t["title"]
+            for c in t["children"]:
+                yield from walk(c)
+        return [x for sec in d["projects"] for p in sec["projects"] for t in p["tasks"] for x in walk(t)]
+
+    def test_seasons_are_jan_apr_may_aug_sep_dec(self):
+        self.assertEqual([planner.period_range("season", 2027, i) for i in range(3)],
+                         [(date(2027, 1, 1), date(2027, 4, 30)), (date(2027, 5, 1), date(2027, 8, 31)),
+                          (date(2027, 9, 1), date(2027, 12, 31))])
+        self.assertEqual([planner.period_at("season", date(2026, m, 15))[2] for m in range(1, 13)],
+                         [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+
+    def test_stepping_crosses_years(self):
+        self.assertEqual(planner.period_step("month", 2026, 12, 1), ("month", 2027, 1))
+        self.assertEqual(planner.period_step("month", 2026, 1, -1), ("month", 2025, 12))
+        self.assertEqual(planner.period_step("season", 2026, 2, 1), ("season", 2027, 0))
+        self.assertEqual(planner.period_step("season", 2027, 0, -1), ("season", 2026, 2))
+        self.assertEqual(planner.period_step("month", 2026, 10, 15), ("month", 2028, 1))
+
+    def test_labels(self):
+        self.assertEqual(planner.period_label("month", 2026, 10), "Oct 2026")
+        self.assertEqual(planner.period_label("season", 2027, 0), "Winter 2027 (Jan-Apr)")
+
+    def test_month_columns_are_weeks(self):
+        cols = planner.period_columns("month", 2026, 10)      # Oct 1 2026 is a Thursday
+        self.assertEqual([h for h, _, _ in cols], ["1-4", "5-11", "12-18", "19-25", "26-31"])
+        self.assertEqual((cols[0][1], cols[-1][2]), (date(2026, 10, 1), date(2026, 10, 31)))
+        self.assertEqual([h for h, _, _ in planner.period_columns("month", 2027, 2)][-1], "22-28")
+
+    def test_fall_2026(self):
+        d = self.data("season", 2026, 2)
+        self.assertEqual([c["head"] for c in d["timeline"]["columns"]], ["Sep", "Oct", "Nov", "Dec"])
+        self.assertEqual(d["period"]["label"], "Fall 2026 (Sep-Dec)")
+        self.assertEqual((d["period"]["prev"], d["period"]["next"], d["period"]["now"], d["period"]["current"]),
+                         ({"kind": "season", "year": 2026, "index": 1, "label": "Summer 2026"},
+                          {"kind": "season", "year": 2027, "index": 0, "label": "Winter 2027"},
+                          {"kind": "season", "year": 2026, "index": 2, "label": "Fall 2026"}, True))
+        self.assertFalse(self.data("season", 2027, 0)["period"]["current"])
+        nov = self.data("month", 2026, 11)["period"]
+        self.assertEqual((nov["prev"]["label"], nov["label"], nov["next"]["label"]), ("Oct 2026", "Nov 2026", "Dec 2026"))
+        self.assertEqual(planner.period_from(nov["next"]), ("month", 2026, 12))     # labels are ignored on the way back
+        titles = self.titles(d)
+        self.assertIn("site visit prep", titles)              # Sep 30: overdue, still in Fall
+        self.assertIn("quarterly review", titles)
+        self.assertNotIn("annual report", titles)             # ~Q1
+        self.assertNotIn("update handbook", titles)           # undated
+        self.assertNotIn("meet w. clients", titles)           # done and undated
+        self.assertEqual(d["timeline"]["unscheduled"], [])
+        self.assertEqual([p["name"] for sec in d["projects"] for p in sec["projects"]], ["HDC", "MDM"])
+
+    def test_winter_2027_includes_inherited_and_rolled_up_dates(self):
+        d = self.data("season", 2027, 0)
+        titles = self.titles(d)
+        for t in ("annual report", "final layout", "plan agenda", "team offsite", "renew software licenses"):
+            self.assertIn(t, titles)
+        self.assertIn("budget planning", titles)              # ~Q2 is Apr-Jun, so it overlaps Winter's April
+        self.assertNotIn("quarterly review", titles)          # Dec 8-12
+        rows = {r["title"]: r["bar"] for r in d["timeline"]["rows"]}
+        self.assertEqual(rows["annual report"], [True, True, True, False])
+        self.assertEqual(rows["final layout"], [False, False, True, False])
+
+    def test_month_view_people_and_upcoming(self):
+        d = self.data("month", 2026, 11)
+        self.assertEqual(sorted(t["title"] for g in d["people"] for t in g["tasks"]),
+                         ["first-week check-in", "onboard new hire"])
+        self.assertEqual([t["title"] for t in d["upcoming"]["overdue"]], ["site visit prep"])   # unchanged
+        rows = {r["title"]: r["bar"] for r in d["timeline"]["rows"]}
+        self.assertEqual([c["head"] for c in d["timeline"]["columns"]], ["1", "2-8", "9-15", "16-22", "23-29", "30"])
+        self.assertEqual(rows["first-week check-in"], [False, True, False, False, False, False])  # Nov 6
+
+    def test_empty_period(self):
+        d = self.data("month", 2028, 6)
+        self.assertEqual((d["projects"], d["people"], d["timeline"]["rows"]), ([], [], []))
+
+    def test_bad_periods(self):
+        for bad in ({"kind": "year", "year": 2026, "index": 1}, {"kind": "month", "year": 2026, "index": 13},
+                    {"kind": "season", "year": 2026, "index": 3}, {"kind": "month", "year": "2026", "index": 1},
+                    {"kind": "month", "year": 99999, "index": 1}, "Fall"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                planner.period_from(bad)
+        self.assertIsNone(planner.period_from(None))
+        self.assertEqual(planner.period_from({"kind": "season"}), ("season", 2026, 2))   # today is Oct 12 2026
+        self.assertEqual(planner.period_from({"kind": "month"}), ("month", 2026, 10))
 
 
 # ---------- editing ----------
@@ -647,6 +746,15 @@ class TestServer(Base):
     def test_edit_missing_fields_is_400(self):
         code, d = self.post("/api/edit", {"text": "- a"})
         self.assertEqual(code, 400)
+
+    def test_parse_and_edit_with_period(self):
+        period = {"kind": "season", "year": 2026, "index": 2}
+        code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12", "period": period})
+        self.assertEqual((code, d["period"]["label"]), (200, "Fall 2026 (Sep-Dec)"))
+        code, d = self.post("/api/edit", {"text": "@P\n- a Oct24\n- b Feb02\n", "line": 2, "op": "status",
+                                          "value": "done", "today": "2026-10-12", "period": period})
+        self.assertEqual([t["title"] for t in d["data"]["projects"][0]["projects"][0]["tasks"]], ["a"])
+        self.assertEqual(self.post("/api/parse", {"text": "", "period": {"kind": "week"}})[0], 400)
 
     def test_edit_bad_op_or_value_is_409(self):
         for extra in ({"op": "delete", "value": ""}, {"op": "date", "value": 5}):

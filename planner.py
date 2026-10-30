@@ -365,6 +365,76 @@ def timeline_months():
     return months
 
 
+# ---------- periods (the page's Month / Season picker) ----------
+
+SEASONS = [("Winter", 1, 4), ("Summer", 5, 8), ("Fall", 9, 12)]   # (name, first month, last month), inclusive
+
+
+def period_from(obj):
+    """Request value {kind, year, index} -> (kind, year, index), or None for "all dates".
+
+    kind "month": index 1-12. kind "season": index 0-2 into SEASONS.
+    With no year and index, the period that contains TODAY.
+    """
+    if obj is None:
+        return None
+    if not isinstance(obj, dict) or obj.get("kind") not in ("month", "season"):
+        raise ValueError("period.kind must be month or season")
+    kind, year, index = obj["kind"], obj.get("year"), obj.get("index")
+    if year is None and index is None:
+        return period_at(kind, TODAY)
+    hi = 12 if kind == "month" else len(SEASONS) - 1
+    lo = 1 if kind == "month" else 0
+    if type(year) is not int or not 1900 <= year <= 2999 or type(index) is not int or not lo <= index <= hi:
+        raise ValueError(f"bad period {obj!r}")
+    return kind, year, index
+
+
+def period_range(kind, year, index):
+    """-> (first day, last day) of the period."""
+    if kind == "month":
+        return date(year, index, 1), month_end(year, index)
+    _, a, b = SEASONS[index]
+    return date(year, a, 1), month_end(year, b)
+
+
+def period_at(kind, d):
+    """The period of this kind that contains date d -> (kind, year, index)."""
+    if kind == "month":
+        return kind, d.year, d.month
+    return kind, d.year, next(i for i, (_, a, b) in enumerate(SEASONS) if a <= d.month <= b)
+
+
+def period_step(kind, year, index, step):
+    """The period `step` periods later (negative = earlier), crossing years."""
+    n, base = (12, 1) if kind == "month" else (len(SEASONS), 0)
+    k = year * n + index - base + step
+    return kind, k // n, k % n + base
+
+
+def period_label(kind, year, index, short=False):
+    """"Oct 2026"; "Fall 2026 (Sep-Dec)", or "Fall 2026" when short."""
+    if kind == "month":
+        return f"{MONTH_NAMES[index - 1]} {year}"
+    name, a, b = SEASONS[index]
+    return f"{name} {year}" + ("" if short else f" ({MONTH_NAMES[a - 1]}-{MONTH_NAMES[b - 1]})")
+
+
+def period_columns(kind, year, index):
+    """Timeline columns [(heading, start, end)]: the months of a season, or the weeks
+    (Mon-Sun, cut to the month) of a month."""
+    start, end = period_range(kind, year, index)
+    if kind == "season":
+        _, a, b = SEASONS[index]
+        return [(MONTH_NAMES[m - 1], date(year, m, 1), month_end(year, m)) for m in range(a, b + 1)]
+    cols, d = [], start
+    while d <= end:
+        e = min(d + timedelta(days=6 - d.weekday()), end)
+        cols.append((f"{d.day}-{e.day}" if e > d else str(d.day), d, e))
+        d = e + timedelta(days=1)
+    return cols
+
+
 def timeline_rows(projects):
     """Open tasks -> (rows sorted by date, unscheduled). Row = (start, end, project, task, how)."""
     rows, unscheduled = [], []
@@ -494,17 +564,26 @@ def iso(d):
     return d.isoformat() if d else None
 
 
-def task_data(t):
+def task_data(t, keep=None):
+    """A task and its subtasks as dicts. With `keep(task)`, only kept tasks and the
+    ancestors of kept tasks are included (an ancestor that isn't kept gets "dim");
+    returns None if nothing is kept."""
+    kids = [k for k in (task_data(c, keep) for c in t.children) if k]
+    if keep and not keep(t) and not kids:
+        return None
     sp = t.span()
-    return {
+    d = {
         "title": t.title, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "when": fspan(t.start, t.end, t.loose) if t.end else None,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
         "overdue": t.overdue(),
         "reminders": [{"spec": spec, "next": iso(d)} for spec, d in t.reminders],
-        "children": [task_data(c) for c in t.children],
+        "children": kids,
     }
+    if keep and not keep(t):
+        d["dim"] = True
+    return d
 
 
 def flat(p, t):
@@ -515,10 +594,32 @@ def flat(p, t):
     return d
 
 
-def to_data(projects):
-    """Everything the four views show, as plain dicts and lists (JSON-ready)."""
+def to_data(projects, period=None):
+    """Everything the four views show, as plain dicts and lists (JSON-ready).
+
+    With `period` (from period_from), Projects, Timeline and People show only tasks
+    whose span overlaps it, and the timeline's columns are that period.
+    Upcoming is always the next UPCOMING_DAYS days.
+    """
+    if period:
+        ps, pe = period_range(*period)
+        cols = period_columns(*period)
+
+        def inside(t):
+            sp = t.span()
+            return sp is not None and sp[0] <= pe and sp[1] >= ps
+    else:
+        months = timeline_months()
+        cols = [(MONTH_NAMES[m - 1][0] + (f" {y % 100:02d}" if i == 0 or m == 1 else ""), date(y, m, 1), month_end(y, m))
+                for i, (y, m) in enumerate(months)]
+        inside = None
+
     sections, seen = [], {}
     for p in projects:
+        tasks = list(p.all_tasks())
+        shown = [d for d in (task_data(t, inside) for t in p.tasks) if d]
+        if period and not shown:
+            continue
         key = id(p.section)
         if key not in seen:
             sec = p.section
@@ -526,25 +627,34 @@ def to_data(projects):
                          "when": fspan(sec.start, sec.end, sec.loose) if sec and sec.end else None,
                          "projects": []}
             sections.append(seen[key])
-        tasks = list(p.all_tasks())
         seen[key]["projects"].append({
             "name": p.name, "notes": p.notes,
             "done": sum(t.status == "done" for t in tasks), "total": len(tasks),
-            "tasks": [task_data(t) for t in p.tasks]})
+            "tasks": shown})
 
-    months = timeline_months()
-    first, last = date(*months[0], 1), month_end(*months[-1])
+    first, last = cols[0][1], cols[-1][2]
     rows, unscheduled = timeline_rows(projects)
+    if period:
+        rows = [r for r in rows if r[0] <= last and r[1] >= first]
+        unscheduled = []
+    people = [(n, [(p, t) for p, t in items if not inside or inside(t)]) for n, items in people_groups(projects)]
     horizon, overdue, due, doing, reminders = upcoming_groups(projects)
     return {
         "today": iso(TODAY), "today_label": fd(TODAY),
+        "period": period and {
+            "kind": period[0], "year": period[1], "index": period[2], "label": period_label(*period),
+            "start": iso(ps), "end": iso(pe),
+            "current": period == period_at(period[0], TODAY),
+            **{k: dict(zip(("kind", "year", "index"), v), label=period_label(*v, short=True)) for k, v in (
+                ("prev", period_step(*period, -1)), ("next", period_step(*period, 1)),
+                ("now", period_at(period[0], TODAY)))}},
         "projects": sections,
         "timeline": {
-            "months": [{"label": MONTH_NAMES[m - 1], "year": y} for y, m in months],
-            "rows": [dict(flat(p, t), bar=[s <= month_end(y, m) and e >= date(y, m, 1) for y, m in months],
+            "columns": [{"head": h, "start": iso(a), "end": iso(b)} for h, a, b in cols],
+            "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
                           before=e < first, after=e > last) for s, e, p, t, _ in rows],
             "unscheduled": [flat(p, t) for p, t in unscheduled]},
-        "people": [{"name": n, "tasks": [flat(p, t) for p, t in items]} for n, items in people_groups(projects)],
+        "people": [{"name": n, "tasks": [flat(p, t) for p, t in items]} for n, items in people if items],
         "upcoming": {
             "horizon": fd(horizon), "days": UPCOMING_DAYS,
             "overdue": [flat(p, t) for _, p, t in sorted(overdue, key=lambda r: r[0])],
@@ -853,15 +963,16 @@ def make_server(port, notes_path=None):
                 if req.get("today"):
                     set_today(req["today"])
                 text = req.get("text", "")
+                period = period_from(req.get("period"))
                 if self.path == "/api/parse":
-                    return self._json(200, to_data(parse(text)))
+                    return self._json(200, to_data(parse(text), period))
                 op = EDITS.get(req["op"])
                 if op is None:
                     raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
                 if not isinstance(req["value"], str):
                     raise EditError("value must be text")
                 text = op(text, req["line"], req["value"], req.get("title"))
-                self._json(200, {"text": text, "data": to_data(parse(text))})
+                self._json(200, {"text": text, "data": to_data(parse(text), period)})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:

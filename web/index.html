@@ -72,6 +72,16 @@ button.box:disabled { opacity: .5; cursor: wait; }
   border-radius: 6px; padding: 5px 11px; width: 16em; max-width: 100%; }
 .filters select { padding: 4px 8px; max-width: 12em; }
 .filters button:disabled { opacity: .45; cursor: default; }
+.period { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.period button { padding: 3px 10px; font-size: 13px; }
+.period button.pstep { color: var(--muted); }
+.period button.pstep:hover { color: var(--text); }
+.period button:disabled { opacity: .45; cursor: default; }
+.pcur { display: inline-flex; flex-direction: column; align-items: center; min-width: 9em; line-height: 1.2;
+  padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; }
+.plabel { font-weight: 600; }
+.pnote { font-size: 11px; color: var(--accent); }
+.pnote:empty { display: none; }
 .dim > .ttl, .dim > .who, .dim > .when, .dim > .rem { opacity: .5; }
 .msg { margin-left: 12px; font-size: 13px; }
 .msg.bad { color: var(--bad); }
@@ -318,10 +328,13 @@ async function render(relayout) {
   const seq = ++state.seq;
   try {
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null }) });
+      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period }) });
     const data = await r.json();
     if (seq !== state.seq) return;
-    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!r.ok) {
+      if (state.period) { setPeriod(null); return; }        // e.g. a stored period the server rejects: fall back to all dates
+      throw new Error(data.error || r.statusText);
+    }
     state.data = data;
     plannerView();
   } catch (err) {
@@ -357,7 +370,8 @@ async function editTask(t, op, value, btn, done) {
   if (btn) btn.disabled = true;
   try {
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null }) });
+      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null,
+        period: state.period }) });
     const res = await r.json();
     if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
     if (!r.ok) throw new Error(res.error || r.statusText);
@@ -433,7 +447,7 @@ function filtered(d) {
     && (!q || [t.title, ...t.notes, proj].join("\n").toLowerCase().includes(q));
   const prune = (t, proj) => {                    // keep matching tasks, and their ancestors (dimmed) for context
     const children = t.children.map(c => prune(c, proj)).filter(Boolean);
-    const self = keep(t, proj) && (filt.done || t.status !== "done");
+    const self = !t.dim && keep(t, proj) && (filt.done || t.status !== "done");
     return self || children.length ? { ...t, children, dim: !self } : null;
   };
   const flat = list => list.filter(t => keep(t, t.project));
@@ -448,10 +462,39 @@ function filtered(d) {
     upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) } };
 }
 
+/* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
+try { state.period = JSON.parse(store.get("period", "null")); } catch (e) { state.period = null; }
+const fPeriod = h("select", "", h("option", "", "All dates"), h("option", "", "By month"), h("option", "", "By season"));
+[...fPeriod.options].forEach((o, i) => { o.value = ["", "month", "season"][i]; });
+fPeriod.title = "Show one month or season at a time";
+const pPrev = h("button", "pstep"), pNext = h("button", "pstep"), pNow = h("button", "pnow");
+const pLabel = h("span", "plabel"), pNote = h("span", "pnote");
+const periodNav = h("span", "period", pPrev, h("span", "pcur", pLabel, pNote), pNext, pNow);
+function setPeriod(p) {
+  state.period = p ? { kind: p.kind, year: p.year, index: p.index } : null;
+  store.set("period", JSON.stringify(state.period));
+  render(false);
+}
+fPeriod.onchange = () => setPeriod(fPeriod.value ? { kind: fPeriod.value } : null);   // server picks the current one
+pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
+pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
+pNow.onclick = () => state.data.period && setPeriod(state.data.period.now);
+function showPeriod(per) {                       // each button says where it goes; the middle says what is showing
+  periodNav.classList.toggle("hidden", !per);
+  if (!per) return;
+  const unit = per.kind === "month" ? "month" : "season";
+  pPrev.textContent = "‹ " + per.prev.label;  pPrev.title = `Previous ${unit}: ${per.prev.label}`;
+  pNext.textContent = per.next.label + " ›";  pNext.title = `Next ${unit}: ${per.next.label}`;
+  pLabel.textContent = per.label;
+  pNote.textContent = per.current ? "this " + unit : "";
+  pNow.textContent = "This " + unit;  pNow.title = `Back to ${per.now.label}`;
+  pNow.disabled = per.current;
+}
+
 const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input"), fClear = h("button", "", "Clear");
 fQ.type = "search"; fQ.placeholder = "Search tasks and notes"; fQ.value = filt.q;
 fDone.type = "checkbox"; fDone.checked = filt.done;
-const filterBar = h("div", "filters", fQ, fWho, fProj, h("label", "chk", fDone, "Show done"), fClear);
+const filterBar = h("div", "filters", fPeriod, periodNav, fQ, fWho, fProj, h("label", "chk", fDone, "Show done"), fClear);
 const tabsBox = h("div"), plannerBody = h("div");
 function setFilt(k, v) {
   filt[k] = v; store.set(FKEYS[k], k === "done" ? (v ? "1" : "0") : v);
@@ -483,6 +526,8 @@ function plannerView() {
   options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
   options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");
   fClear.disabled = !filterOn();
+  fPeriod.value = state.data.period ? state.data.period.kind : "";
+  showPeriod(state.data.period);
   const tabs = h("div", "tabs");
   for (const [id, label] of TABS) {
     const b = h("button", id === state.tab ? "on" : "", label);
@@ -492,7 +537,9 @@ function plannerView() {
   const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
   const msg = state.msg && span("msg" + (state.msg.bad ? " bad" : ""), state.msg.text);
   if (msg && state.msg.undo) { const u = h("button", "", "Undo"); u.onclick = undo; msg.append(u); }
-  tabsBox.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), msg);
+  const note = d.period && span("hint", state.tab === "upcoming" ? "  · Upcoming always shows the next "
+    + d.upcoming.days + " days" : "  · showing " + d.period.label + "; undated tasks hidden");
+  tabsBox.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), note, msg);
   plannerBody.replaceChildren(body);
   if (view.children.length !== 3 || view.firstChild !== tabsBox) view.replaceChildren(tabsBox, filterBar, plannerBody);
 }
@@ -542,7 +589,7 @@ function vTimeline(d) {
   if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
   else {
     const head = h("tr", "", h("th", "", "Task"));
-    tl.months.forEach((m, i) => head.append(h("th", "m", m.label[0] + (i === 0 || m.label === "Jan" ? " " + String(m.year).slice(2) : ""))));
+    for (const c of tl.columns) { const th = h("th", "m", c.head); th.title = c.start + " to " + c.end; head.append(th); }
     head.append(h("th", "", "When"));
     const table = h("table", "tl", head);
     for (const t of tl.rows) {

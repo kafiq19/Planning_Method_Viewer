@@ -5,6 +5,27 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.2.7  2026-10-30  Month and season view
+-----------------------------------------
+- Planner mode has a new dropdown at the start of the filter bar: All dates,
+  Month or Season. Seasons are Winter (Jan-Apr), Summer (May-Aug) and Fall
+  (Sep-Dec), inclusive.
+- Choosing "By month" or "By season" starts at the current one, shown in the
+  middle and marked "this month" / "this season". The buttons either side say
+  where they go ("< Sep 2026", "Nov 2026 >") and step across years; "This
+  month" / "This season" comes back to the current one.
+- Projects, Timeline and People then show only tasks whose dates overlap the
+  period, including dates taken from a parent or rolled up from subtasks.
+  Undated tasks are hidden. Upcoming still shows the next 14 days.
+- The Timeline's columns become the period: the four months of a season, or
+  the weeks (Mon-Sun) of a month.
+- The choice is remembered in the browser, and edits keep it.
+Code: SEASONS and period_* functions in planner.py; to_data(projects, period),
+whose "period" carries labels for prev / next / now and a "current" flag;
+/api/parse and /api/edit take "period"; timeline "months" is now "columns"
+[{head, start, end}].
+
+
 1.2.6  2026-10-29  Filters
 --------------------------
 - Planner mode has a filter bar above the tabs: search (task titles, notes
