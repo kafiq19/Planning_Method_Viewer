@@ -393,6 +393,8 @@ class TestExample(Base):
         self.assertEqual(hdc["points"], {"left": 9, "total": 10})
         proposal = hdc["tasks"][1]
         self.assertEqual((proposal["title"], proposal["effort"], proposal["points"]), ("finish proposal", "l", 5))
+        annual = hdc["tasks"][2]
+        self.assertEqual((annual["title"], annual["loose"], proposal["loose"]), ("annual report", "Q1", None))
         self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 8, "(unassigned)": 4})
 
 

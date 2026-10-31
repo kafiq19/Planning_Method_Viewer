@@ -5,6 +5,24 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.1  2026-10-31  Compact rows, edit in the columns
+-----------------------------------------------------
+- Task rows are tighter (closer to the old look) and the Who / Size / Date
+  columns are narrower and sit closer to the titles, so tasks stay readable
+  with "Edit alongside" on.
+- No more hover buttons. Click a task's Who, Size or Date cell to change it
+  right there, or the + at the end of the row to add a subtask. Empty cells
+  show a faint + when you point at the row.
+- Loose dates show short (~Q1, full range on hover). Dates that come from a
+  parent or from subtasks are in italics instead of "(via parent)".
+- In a narrow pane or on a phone, a task's details sit on a line under its
+  title, lined up with it.
+- Timeline: tighter rows, and each bar is one unbroken bar.
+- The tabs have space between them again.
+Code: cellButton(), editCell() replace actions() / ask(); task data adds
+"loose"; a container query on .content handles narrow panes.
+
+
 1.3.0  2026-10-31  A calmer, simpler page
 ------------------------------------------
 Phase 1, layout:

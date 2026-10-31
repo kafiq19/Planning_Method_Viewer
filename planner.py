@@ -598,7 +598,7 @@ def task_data(t, keep=None):
     d = {
         "title": t.title, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "effort": t.effort, "points": t.points,
-        "when": fspan(t.start, t.end, t.loose) if t.end else None,
+        "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
         "overdue": t.overdue(),
