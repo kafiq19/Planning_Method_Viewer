@@ -624,7 +624,7 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   pctl.classList.toggle("on", !!per);
   pctl.classList.toggle("away", !!per && !per.current);
   pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
-  pMid.textContent = per ? per.label : "All dates";
+  pMid.textContent = per ? per.short : "All dates";   // "Fall 2026"; the line above the list gives the months
   pMid.title = !per ? "Show all dates, one month or one season"
     : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
   const item = (label, note, on, pick, disabled) => {

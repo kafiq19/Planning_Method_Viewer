@@ -5,6 +5,13 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.4  2026-10-31  Shorter season name in the period control
+---------------------------------------------------------------
+- The period control shows "Fall 2026" instead of "Fall 2026 (Sep-Dec)";
+  the line above the list still gives the months.
+Code: to_data's period adds "short".
+
+
 1.3.3  2026-10-31  Timeline follows "Show done tasks"
 -------------------------------------------------------
 - Timeline now lists done tasks (faded) when "Show done tasks" is on, and

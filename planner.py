@@ -668,6 +668,7 @@ def to_data(projects, period=None):
         "today": iso(TODAY), "today_label": fd(TODAY),
         "period": period and {
             "kind": period[0], "year": period[1], "index": period[2], "label": period_label(*period),
+            "short": period_label(*period, short=True),
             "start": iso(ps), "end": iso(pe),
             "current": period == period_at(period[0], TODAY),
             **{k: dict(zip(("kind", "year", "index"), v), label=period_label(*v, short=True)) for k, v in (

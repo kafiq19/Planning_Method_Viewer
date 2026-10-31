@@ -446,6 +446,7 @@ class TestPeriods(Base):
         d = self.data("season", 2026, 2)
         self.assertEqual([c["head"] for c in d["timeline"]["columns"]], ["Sep", "Oct", "Nov", "Dec"])
         self.assertEqual(d["period"]["label"], "Fall 2026 (Sep-Dec)")
+        self.assertEqual(d["period"]["short"], "Fall 2026")
         self.assertEqual((d["period"]["prev"], d["period"]["next"], d["period"]["now"], d["period"]["current"]),
                          ({"kind": "season", "year": 2026, "index": 1, "label": "Summer 2026"},
                           {"kind": "season", "year": 2027, "index": 0, "label": "Winter 2027"},
