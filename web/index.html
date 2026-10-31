@@ -55,6 +55,8 @@ input[type=text], input[type=search] { cursor: text; }
   font-size: 13px; padding: 3px 2px 3px 10px; }
 .ftab.on .n { font-weight: 600; cursor: default; }
 .ftab.warn .n::after { content: " •"; color: var(--bad); }
+.ftab.quick .n { display: inline-flex; align-items: center; gap: 5px; padding-right: 10px; }   /* Quick note: always first, no × */
+.ftab.quick svg { flex: none; }
 .ftab .x { flex: none; width: 20px; height: 20px; margin-right: 3px; padding: 0; border: 0; border-radius: 4px; background: none;
   color: var(--muted); font-size: 15px; line-height: 1; visibility: hidden; }
 .ftab.on .x, .ftab:hover .x, .ftab .x:focus-visible { visibility: visible; }
@@ -286,7 +288,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 <body>
 <header>
   <span class="brand" aria-label="KAFEEN Planner"><svg class="logo" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor"/><rect x="5" y="6.5" width="9" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="8" y="10.7" width="11" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="5" y="14.9" width="6" height="2.6" rx="1.3" fill="var(--logo-ink)"/></svg><span class="bname">KAFEEN</span><span class="bsub">Planner</span></span>
-  <button id="fileChip" class="filechip none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
+  <button id="fileChip" class="filechip none hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
   <span id="tabs" class="ftabs hidden" role="tablist" aria-label="Open files"></span>
   <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
   <span id="fileStatus" class="hint"></span>
@@ -329,7 +331,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
-const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [] };
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [], ready: false };
 
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
@@ -415,6 +417,8 @@ editor.addEventListener("keydown", e => {            // Tab indents (the format 
 });
 
 function loadText(text, name) {
+  if (!state.file && editor.value.trim() && editor.value !== text
+      && !confirm(`Replace your quick note with ${name || "this text"}?`)) return;
   editor.value = text; remember();
   if (name) state.fileName = name;
   schedule();
@@ -460,7 +464,7 @@ function showFile(problem) {                                // header: tabs (or 
   $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
   showTabs();
   if (problem) return st.replaceChildren(...problem);
-  if (!f) return st.replaceChildren();
+  if (!f) return st.replaceChildren(state.ready ? "Kept in this browser" : "");
   st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
   if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
 }
@@ -469,11 +473,17 @@ function tabLabel(p) {                                      // the file name, pl
   const n = baseName(p);
   return state.tabs.filter(q => baseName(q) === n).length > 1 ? n + " · " + baseName(p.slice(0, -n.length - 1)) : n;
 }
-function showTabs() {
-  const box = $("tabs"), on = state.tabs.length > 0 && !(state.file && !state.file.picked);
-  box.classList.toggle("hidden", !on);
-  $("fileChip").classList.toggle("hidden", on);
-  if (!on) return box.replaceChildren();
+const PENCIL = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z";
+function showTabs() {                                       // [Quick note] [file ×] [file ×] +   (a command-line file: just its chip)
+  const cli = !!state.file && !state.file.picked, box = $("tabs");
+  box.classList.toggle("hidden", !state.ready || cli);
+  $("fileChip").classList.toggle("hidden", !cli);
+  if (!state.ready || cli) return box.replaceChildren();
+  const qn = h("button", "n", icon(PENCIL, 13), "Quick note");
+  qn.setAttribute("role", "tab"); qn.setAttribute("aria-selected", String(!state.file));
+  qn.title = "A note for quick ideas, kept in this browser (not in a file). It is always here and can't be closed.";
+  qn.onclick = () => { if (state.file) showQuickNote(); };
+  const quick = h("span", "ftab quick" + (state.file ? "" : " on"), qn);
   const kids = state.tabs.map(p => {
     const active = !!state.file && state.file.path === p;
     const warn = active ? state.file.blocked : !!readDraft(p);
@@ -489,7 +499,7 @@ function showTabs() {
   const add = h("button", "ftadd ghost", "+");
   add.title = "Open another file"; add.setAttribute("aria-label", add.title);
   add.onclick = () => openPicker();
-  box.replaceChildren(...kids, add);
+  box.replaceChildren(quick, ...kids, add);
 }
 
 function setFile(text, version) {                           // the page now matches the file on disk
@@ -545,15 +555,17 @@ async function switchTo(path, create) {                     // show an open file
     }
     useFile(d);
   } catch (e) {
-    if (!state.file) showUntitled();
+    if (!state.file) showQuickNote();
     showFile(["Can't open " + baseName(path) + ": " + e.message]);
   }
 }
 const openPath = path => switchTo(path);
 
-function showUntitled() {                                   // no file: the text box holds the untitled text, kept in this browser
-  state.file = null; state.fileName = "notes.txt"; clearTimeout(autoTimer);
+async function showQuickNote() {                           // the Quick note tab: text kept in this browser (key "text"), no file
+  await leaveFile();
+  state.file = null; state.fileName = "quick-note.txt"; state.switched = true; state.msg = null; clearTimeout(autoTimer);
   editor.value = store.get("text", "");
+  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
   $("openWrap").classList.remove("hidden");
   saveTabs(); showFile(); render(false);
 }
@@ -570,13 +582,14 @@ async function closeTab(p) {                                // stop showing and 
   state.file = null;
   const next = state.tabs[Math.min(i, state.tabs.length - 1)];
   if (next) return switchTo(next);
-  showUntitled();
+  showQuickNote();
 }
 
 async function startFileMode() {
   let r, d;
-  try { [r, d] = await fileApi(); } catch (e) { return; }  // page opened without the server
-  if (!r.ok) return;
+  try { [r, d] = await fileApi(); } catch (e) { state.ready = true; return showFile(); }   // page opened without the server
+  state.ready = true;
+  if (!r.ok) return showFile();
   if (d.name) return useFile(d);                            // a file given on the command line: just that one
   let paths;
   try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
@@ -588,9 +601,9 @@ async function startFileMode() {
     try { ok = (await fileApi({ path: p }, "/api/open"))[0].ok; } catch (e) {}
     if (ok) state.tabs.push(p); else gone.push(baseName(p));
   }
-  const active = store.get("activeFile", "");
-  const first = state.tabs.includes(active) ? active : state.tabs[0];
-  if (first) await switchTo(first); else { saveTabs(); showFile(); }
+  const active = store.get("activeFile", null);              // "" = the Quick note was showing
+  const first = active === "" ? null : state.tabs.includes(active) ? active : state.tabs[0];
+  if (first) await switchTo(first); else await showQuickNote();
   if (gone.length) {
     state.msg = { text: `Couldn't reopen ${gone.join(", ")}: moved, renamed or deleted.`, bad: true, anyMode: true };
     showToast();
@@ -1371,9 +1384,9 @@ function vUpcoming(d) {
     for (const t of items) out.append(row(t));
   };
   group("Overdue", u.overdue, t => taskNode(t, { project: true, span: true }));
+  group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
   group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
   group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
-  group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
   if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
     : "Nothing due, overdue or in progress in the next " + u.days + " days."));
   if (d.targets.length) out.append(addTaskRow(null));

@@ -579,10 +579,10 @@ def view_upcoming(projects):
         out.extend(rows)
 
     section("Overdue", [f"    {fd(d):<9} @{p.name}  {t.label()}" for d, p, t in sorted(overdue, key=lambda r: r[0])])
+    section("In progress", [f"    [~] @{p.name}  {t.label()}" for p, t in doing])
     section("Due soon", [f"    {fd(d):<9} @{p.name}  {t.label()}" for d, p, t in sorted(due, key=lambda r: r[0])])
     section("Reminders", [f"    {fd(d):<9} @{p.name}  {t.label()}   (*{spec})"
                           for d, spec, p, t in sorted(reminders, key=lambda r: r[0])])
-    section("In progress", [f"    [~] @{p.name}  {t.label()}" for p, t in doing])
     return out
 
 

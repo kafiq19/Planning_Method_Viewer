@@ -5,6 +5,26 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.4.2  2026-10-31  Quick note
+-------------------------------------------------
+- New: the first tab is always "Quick note", a place to jot ideas down
+  without a file. It's kept in your browser, so it survives reloads,
+  crashes and restarts, and it can't be closed. Switching to it saves the
+  file you leave. Save while it's showing downloads it.
+- Dropping a file or loading text over a quick note that has text now
+  asks first.
+- The "Untitled" chip is gone; with a file given on the command line, the
+  header still shows that file's name and no tabs.
+- Code: showQuickNote (was showUntitled), a fixed first tab in showTabs,
+  state.ready; activeFile "" means the Quick note.
+
+
+1.4.1  2026-10-31  In progress comes second in Upcoming
+-------------------------------------------------
+- Changed: Upcoming now lists Overdue, In progress, Due soon, Reminders
+  (In progress was last), in the page and in `planner.py ... upcoming`.
+
+
 1.4.0  2026-10-31  Several files at once, as tabs
 -------------------------------------------------
 - New: files you open in the page are tabs in the header. Open more with

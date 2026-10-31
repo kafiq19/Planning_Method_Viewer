@@ -360,6 +360,11 @@ class TestExample(Base):
         self.assertEqual(len(groups["KA"]), 5)
         self.assertNotIn("meet w. clients", [t.title for _, t in groups["KA"]])   # done is hidden
 
+    def test_upcoming_order(self):
+        out = planner.view_upcoming(self.ps)
+        heads = [l.strip() for l in out if l.strip() in ("Overdue", "In progress", "Due soon", "Reminders")]
+        self.assertEqual(heads, ["Overdue", "In progress", "Due soon", "Reminders"])
+
     def test_upcoming(self):
         _, overdue, due, doing, reminders = planner.upcoming_groups(self.ps)
         self.assertEqual([t.title for _, _, t in overdue], ["site visit prep"])
