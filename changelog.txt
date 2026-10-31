@@ -21,8 +21,20 @@ Phase 1, layout:
 - A quiet line above the list says which period is showing (and the Today
   date, when it is set). Edit messages and Undo appear at the bottom of the
   window, so nothing jumps.
+Phase 2, task rows:
+- Status is a circle you click: empty for open, half-filled for in
+  progress, ticked for done.
+- No more cards: one clean list. Initials, size and date sit in columns on
+  the right, labelled once per section. Details are plain grey text; colour
+  is kept for status, overdue (red) and the effort badge.
+- A small bell before a date means the task has a reminder (hover for it).
+- The hover actions are now Date, Size, Who and Subtask, and they no
+  longer push the row around.
+- Upcoming hides empty groups. The Timeline has slimmer bars, and its task
+  names stay in view when the chart scrolls sideways.
 Code: popup() / closePops() for menus, showToast(), contextLine, pctl;
-icons are inline SVG.
+taskNode(t, {project, span, depth, date, rem}), MARK, colHead; icons are
+inline SVG.
 
 
 1.2.9  2026-10-31  Effort badge colour

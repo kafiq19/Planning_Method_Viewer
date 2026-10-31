@@ -28,6 +28,9 @@ button, .btn, input[type=text], input[type=search], select { font: inherit; font
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:hover, .btn:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: default; }
+#fileStatus { display: inline-flex; align-items: center; gap: 6px; }
+#fileStatus.bad { color: var(--bad); }
+#fileStatus button { padding: 1px 8px; font-size: 13px; }
 button:disabled:hover { border-color: var(--line); }
 input[type=text], input[type=search] { cursor: text; }
 .ghost { background: none; border-color: transparent; color: var(--muted); }
@@ -88,49 +91,59 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .hidden { display: none !important; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
-/* planner views */
-h2.sec { margin: 26px 0 2px; font-size: 18px; }
-h2.sec:first-child { margin-top: 0; }
-.sec .when, .when { color: var(--muted); font-weight: normal; font-size: 13px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
-.card h3 { margin: 0 0 6px; font-size: 16px; display: flex; gap: 10px; align-items: baseline; }
+/* planner views: plain lists, details in right-hand columns (Who, Size, Date), colour only where it means something */
+#viewPane { background: var(--panel); }
+.content > div { max-width: 1080px; margin: 0 auto; }
+.when { color: var(--muted); font-weight: normal; font-size: 13px; }
 .count { color: var(--muted); font-weight: normal; font-size: 13px; }
-.task { padding: 2px 0; }
-.kids { margin-left: 22px; border-left: 1px solid var(--line); padding-left: 12px; }
-.box { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
-button.box { width: 2.2em; padding: 0; border: 1px solid transparent; background: none; font-family: ui-monospace, Menlo, Consolas, monospace; }
-button.box:hover { border-color: var(--accent); }
-button.box:disabled { opacity: .5; cursor: wait; }
-.acts { visibility: hidden; margin-left: 8px; }
+.sechead, .task, .colhead { display: grid; grid-template-columns: minmax(0, 1fr) 96px 44px 232px; align-items: center; column-gap: 8px; }
+.sechead { margin: 26px 0 0; padding: 0 10px 4px; border-bottom: 1px solid var(--line); }
+.sechead:first-child { margin-top: 8px; }
+.sechead h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.sechead h2 .when { font-size: 12px; letter-spacing: 0; text-transform: none; margin-left: 8px; }
+.sechead .c { font-size: 11px; }
+h3.ph { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 18px 10px 4px; font-size: 16px; font-weight: 600; }
+h3.ph .at { color: var(--muted); font-weight: normal; }
+.task { min-height: 34px; padding: 0 10px; border-radius: 6px; font-size: 15px; }
+.task:hover, .task:focus-within { background: var(--hover); }
+.lead { display: flex; align-items: center; min-width: 0; }
+.ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g { align-self: stretch; flex: none; width: 22px; margin-left: 12px; border-left: 1px solid var(--line); }
+.task .c, .sechead .c { color: var(--muted); font-size: 13px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task .c.date { display: inline-flex; justify-content: flex-end; align-items: center; gap: 5px; }
+.task .c.late { color: var(--bad); font-weight: 600; }
+.proj { color: var(--muted); font-size: 13px; margin-right: 8px; flex: none; }
+button.st { flex: none; width: 26px; height: 26px; padding: 0; margin-right: 6px; border: 1px solid transparent; border-radius: 13px;
+  background: none; display: inline-flex; align-items: center; justify-content: center; }
+button.st:hover { border-color: var(--line); background: var(--panel); }
+button.st:disabled { opacity: .5; cursor: wait; }
+.s-open .st { color: var(--muted); } .s-doing .st { color: var(--doing); } .s-done .st { color: var(--done); }
+.s-done .ttl { color: var(--muted); text-decoration: line-through; }
+.acts { visibility: hidden; flex: none; margin-left: auto; padding-left: 12px; display: inline-flex; gap: 2px; }
 .task:hover .acts, .task:focus-within .acts { visibility: visible; }
 @media (hover: none) { .acts { visibility: visible; } }
-.acts button { padding: 0 7px; margin-left: 3px; font-size: 12px; color: var(--muted); }
-.ask { margin-left: 8px; font-size: 13px; padding: 1px 7px; width: 16em; }
-#fileStatus { display: inline-flex; align-items: center; gap: 6px; }
-#fileStatus.bad { color: var(--bad); }
-#fileStatus button { padding: 1px 8px; font-size: 13px; }
-.dim > .ttl, .dim > .who, .dim > .eff, .dim > .when, .dim > .rem { opacity: .5; }
-.s-open .box { color: var(--open); } .s-doing .box { color: var(--doing); } .s-done .box { color: var(--done); }
-.s-done .ttl { color: var(--muted); text-decoration: line-through; }
-.who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
-.who { color: var(--accent); border-color: var(--accent); }
-.eff { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); margin-left: 4px; }
-.flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bad-bg); color: var(--bad); margin-left: 4px; }
-.note { color: var(--muted); font-size: 13.5px; margin-left: 1.4em; }
-.note::before { content: "— "; }
-.proj { color: var(--muted); font-size: 13px; margin-right: 6px; }
-table.tl { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-table.tl th, table.tl td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-table.tl th.m { text-align: center; font-size: 12px; color: var(--muted); width: 3.2%; }
-table.tl td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
-table.tl td.c { padding: 4px 2px; } table.tl td.c i { display: block; height: 14px; background: var(--bar-off); }
-table.tl td.c i.on { background: var(--bar); }
-table.tl td.c i.edge { border-radius: 7px; }
-.empty { color: var(--muted); font-style: italic; padding: 4px 0; }
+.acts button { border: 0; background: none; padding: 2px 7px; font-size: 13px; color: var(--muted); }
+.acts button:hover { color: var(--text); background: var(--panel); }
+.ask { font-size: 13px; padding: 2px 8px; width: 16em; }
+.eff { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
+.dim .lead > :not(.acts):not(.g), .dim .c { opacity: .5; }
+.note { display: flex; color: var(--muted); font-size: 13px; padding: 0 10px 6px; }
+.note .pad { flex: none; width: 32px; }
+.empty { color: var(--muted); padding: 12px 10px; }
 .err { color: var(--bad); background: var(--bad-bg); padding: 12px 16px; border-radius: 8px; }
-h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.line { padding: 3px 0; border-bottom: 1px solid var(--line); }
-.line .d { display: inline-block; min-width: 8.5em; color: var(--muted); }
+h4.grp { margin: 24px 0 2px; padding: 0 10px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tlwrap { overflow-x: auto; }
+table.tl { border-collapse: collapse; width: 100%; }
+table.tl th, table.tl td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.tl th { font-size: 11px; font-weight: 600; color: var(--muted); }
+table.tl th.m { text-align: center; width: 3.2%; }
+table.tl td.name { position: sticky; left: 0; background: var(--panel); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+table.tl td.name .lead { display: inline-flex; vertical-align: middle; }
+table.tl td.c { padding: 5px 1px; } table.tl td.c i { display: block; height: 8px; border-radius: 1px; background: var(--bar-off); }
+table.tl td.c i.on { background: var(--bar); }
+table.tl td.c i.edge { border-radius: 4px; }
+table.tl td.w { font-size: 13px; color: var(--muted); }
+table.tl td.w.late { color: var(--bad); font-weight: 600; }
 
 /* markdown view */
 .md { max-width: 760px; }
@@ -400,7 +413,6 @@ async function render(relayout) {
 }
 
 /* ---------- planner views ---------- */
-const BOX = { open: "[ ]", doing: "[~]", done: "[x]" };
 const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"]];
 
 /* ---------- status clicks: the server rewrites only the task's status mark ---------- */
@@ -463,19 +475,19 @@ function actions(t) {
     b.onclick = () => ask(acts, placeholder, initial, apply);
     acts.append(b);
   };
-  add("date", "Set or change the date (empty clears it)", "Oct24, Oct23--26, ~Q1 (empty clears)", t.date_text, v => {
+  add("Date", "Set or change the date (empty clears it)", "Oct24, Oct23--26, ~Q1 (empty clears)", t.date_text, v => {
     v = v.trim();
     if (v === (t.date_text || "")) return;
     editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
   });
-  add("size", "Set or change the effort: s, m, l or xl (empty clears it)", "s, m, l or xl (empty clears)", t.effort, v => {
+  add("Size", "Set or change the effort: s, m, l or xl (empty clears it)", "s, m, l or xl (empty clears)", t.effort, v => {
     v = v.trim().toLowerCase();
     if (v === (t.effort || "")) return;
     editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
   });
-  add("+who", "Add initials", "KA or KA, RT", "", v => v.trim() &&
+  add("Who", "Add initials", "KA or KA, RT", "", v => v.trim() &&
     editTask(t, "assign", v, null, `Assigned ${v.trim()} to "${t.title}".`));
-  add("+sub", "Add a subtask at the end of this task's subtasks", "new subtask (KA) Oct24", "", v => v.trim() &&
+  add("Subtask", "Add a subtask at the end of this task's subtasks", "new subtask (KA) Oct24", "", v => v.trim() &&
     editTask(t, "subtask", v, null, `Added "${v.trim()}" under "${t.title}".`));
   return acts;
 }
@@ -487,9 +499,16 @@ function undo() {
   else plannerView();
 }
 
+const MARK = {                                  // open: ring; in progress: half-filled ring; done: filled with a check
+  open: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+  doing: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/>',
+  done: '<circle cx="9" cy="9" r="7.8" fill="currentColor"/><path d="M5.5 9.2l2.3 2.3 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+};
 function statusBox(t) {
-  const b = h("button", "box", BOX[t.status]);
+  const b = h("button", "st");
+  b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${MARK[t.status]}</svg>`;   // fixed markup, no note text
   b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.setAttribute("aria-label", b.title);
   b.onclick = () => setStatus(t, NEXT[t.status], b);
   return b;
 }
@@ -649,45 +668,56 @@ function plannerView() {
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
 }
 
-function taskNode(t, showProject, showSpan) {
+const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
+const guides = depth => Array.from({ length: depth }, () => span("g"));
+
+/* one task row: [guides][status][@project][title]......[actions on hover] | Who | Size | Date */
+function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem } = {}) {
   const row = h("div", "task s-" + t.status);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
   row.dataset.line = t.line;
-  row.append(statusBox(t), " ");
-  if (showProject) row.append(span("proj", "@" + t.project));
-  row.append(span("ttl", t.title));
-  for (const a of t.assignees) row.append(span("who", a));
-  if (t.effort) { const e = span("eff", t.effort.toUpperCase()); e.title = `effort: ${pts(t.points)}`; row.append(e); }
-  const when = showSpan ? (t.span && t.span.label + (t.span.how === "parent" ? " (via parent)" : "")) : t.when;
-  if (when) row.append(span("when", "  " + when));
-  if (t.overdue) row.append(span("flag", "OVERDUE"));
-  for (const r of t.reminders) row.append(span("rem", "*" + r.spec));
-  row.append(actions(t));
+  const lead = h("div", "lead", ...guides(depth), statusBox(t));
+  if (project) lead.append(span("proj", "@" + t.project));
+  lead.append(span("ttl", t.title), actions(t));
+  const size = h("span", "c");
+  if (t.effort) { const e = span("eff", t.effort.toUpperCase()); e.title = `effort: ${pts(t.points)}`; size.append(e); }
+  const when = date ?? (useSpan ? (t.span && t.span.label + (t.span.how === "parent" ? " (via parent)" : "")) : t.when);
+  const dateCell = h("span", "c date" + (t.overdue ? " late" : ""));
+  const rems = rem ? [rem] : t.reminders.map(r => "*" + r.spec);
+  if (rems.length) {
+    const bell = icon(BELL, 13); bell.setAttribute("role", "img"); bell.setAttribute("aria-label", "Reminder " + rems.join(", "));
+    dateCell.append(bell); dateCell.title = "Reminder: " + rems.join(", ");
+  }
+  dateCell.append((when || "") + (t.overdue ? (when ? " · overdue" : "overdue") : ""));
+  if (when && !rems.length) dateCell.title = when;
+  row.append(lead, h("span", "c", t.assignees.join(", ")), size, dateCell);
   return row;
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
 const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
+const tasksN = n => n + (n === 1 ? " task" : " tasks");
 
-function treeNode(t) {
-  const row = taskNode(t, false, false);
+function noteNode(text, depth) { return h("div", "note", ...guides(depth), span("pad"), text); }
+function treeNode(t, depth = 0) {
+  const row = taskNode(t, { depth });
   if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
-  const wrap = h("div", "", row);
-  for (const n of t.notes) wrap.append(h("div", "note", n));
-  if (t.children.length) wrap.append(h("div", "kids", ...t.children.map(treeNode)));
-  return wrap;
+  return h("div", "", row, ...t.notes.map(n => noteNode(n, depth)), ...t.children.map(c => treeNode(c, depth + 1)));
+}
+function colHead(title, when) {                  // a section heading that also labels the right-hand columns
+  return h("div", "sechead", h("h2", "", title, when && span("when", when)),
+    span("c", "Who"), span("c", "Size"), span("c", "Date"));
 }
 
 function vProjects(d) {
   const out = h("div");
   for (const sec of d.projects) {
-    if (sec.title) out.append(h("h2", "sec", sec.title, sec.when && span("when", "  " + sec.when)));
+    out.append(colHead(sec.title || "Projects", sec.when));
     for (const p of sec.projects) {
       const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
-      const card = h("div", "card", h("h3", "", "@" + p.name, span("count", p.done + "/" + p.total + " done" + effort)));
-      for (const n of p.notes) card.append(h("div", "note", n));
-      for (const t of p.tasks) card.append(treeNode(t));
-      if (!p.tasks.length) card.append(h("div", "empty", "No tasks"));
-      out.append(card);
+      out.append(h("h3", "ph", h("span", "", span("at", "@"), p.name), span("count", p.done + "/" + p.total + " done" + effort)));
+      for (const n of p.notes) out.append(noteNode(n, 0));
+      for (const t of p.tasks) out.append(treeNode(t));
+      if (!p.tasks.length) out.append(h("div", "empty", "No tasks"));
     }
   }
   if (!out.children.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No projects or tasks found."));
@@ -704,7 +734,7 @@ function vTimeline(d) {
     const table = h("table", "tl", head);
     for (const t of tl.rows) {
       const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
-      const nm = h("td", "name", statusBox(t), " ", span("proj", "@" + t.project), label);
+      const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
       const tr = h("tr", "", nm);
       t.bar.forEach((on, i) => {
@@ -713,14 +743,14 @@ function vTimeline(d) {
         if (on && (!prev || !next)) cell.classList.add("edge");
         tr.append(h("td", "c", cell));
       });
-      tr.append(h("td", "", span("when", t.span.label + (t.span.how === "parent" ? " (via parent)" : "")), t.overdue && span("flag", "OVERDUE")));
+      tr.append(h("td", "w" + (t.overdue ? " late" : ""), t.span.label + (t.span.how === "parent" ? " (via parent)" : "") + (t.overdue ? " · overdue" : "")));
       table.append(tr);
     }
-    out.append(h("div", "", table));
+    out.append(h("div", "tlwrap", table));
   }
   if (tl.unscheduled.length) {
     out.append(h("h4", "grp", "Unscheduled"));
-    for (const t of tl.unscheduled) out.append(h("div", "line", taskNode(t, true, false)));
+    for (const t of tl.unscheduled) out.append(taskNode(t, { project: true }));
   }
   return out;
 }
@@ -729,26 +759,27 @@ function vPeople(d) {
   const out = h("div");
   for (const g of d.people) {
     const effort = sumPts(g.tasks);                // the tasks shown, so it follows the filters
-    const card = h("div", "card", h("h3", "", g.name, span("count", g.tasks.length + " task(s)" + (effort ? ", " + pts(effort) : ""))));
-    for (const t of g.tasks) card.append(taskNode(t, true, true));
-    out.append(card);
+    if (!out.children.length) out.append(colHead("People"));
+    out.append(h("h3", "ph", g.name, span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : ""))));
+    for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
   }
   if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
   return out;
 }
 
 function vUpcoming(d) {
-  const u = d.upcoming, out = h("div", "", span("hint", `Looking ahead ${u.days} days to ${u.horizon}`));
-  const group = (title, items, line) => {
+  const u = d.upcoming, out = h("div", "", colHead(`Next ${u.days} days`, "to " + u.horizon));
+  const group = (title, items, row) => {          // empty groups are left out
+    if (!items.length) return;
     out.append(h("h4", "grp", title));
-    if (!items.length) out.append(h("div", "empty", "(none)"));
-    for (const t of items) out.append(h("div", "line", line(t)));
+    for (const t of items) out.append(row(t));
   };
-  const dated = t => { const n = taskNode(t, true, false); n.prepend(span("d", t.span.label)); return n; };
-  group("Overdue", u.overdue, dated);
-  group("Due soon", u.due, dated);
-  group("Reminders", u.reminders, t => { const n = taskNode(t, true, false); n.prepend(span("d", t.date)); n.append(span("when", "  *" + t.spec)); return n; });
-  group("In progress", u.doing, t => taskNode(t, true, false));
+  group("Overdue", u.overdue, t => taskNode(t, { project: true, span: true }));
+  group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
+  group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
+  group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
+  if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
+    : "Nothing due, overdue or in progress in the next " + u.days + " days."));
   return out;
 }
 
