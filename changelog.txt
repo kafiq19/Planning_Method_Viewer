@@ -5,6 +5,24 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.2.8  2026-10-30  Effort
+-------------------------
+- New marker: (s), (m), (l) or (xl) on a task gives its effort, worth 1, 3,
+  5 or 8 points, as in "finish proposal (KA) (m) Oct24". Lowercase only, so
+  (M) is still initials. One per task; "file(s)" is just text.
+- Effort belongs to its task: a parent's effort isn't worked out from its
+  subtasks, and subtasks don't take their parent's. Totals simply add up.
+- Projects view: tasks show [M] and each project shows "9 of 10 pts left".
+  People view: each person shows their open points.
+- Planner mode: a small grey S / M / L / XL badge on each sized task, the
+  points in project and person card headers, and a "size" action on hover to
+  set, change or clear (empty box) a task's effort, with Undo.
+- "+who" now puts a new (...) group before the effort, as in (KA) (m) Oct24.
+Code: RE_EFFORT, EFFORT, effort_points; Task.effort / points / at["effort"];
+set_effort (op "effort"); to_data adds task effort / points, project
+points {left, total} and people points. example.txt has six sized tasks.
+
+
 1.2.7  2026-10-30  Month and season view
 -----------------------------------------
 - Planner mode has a new dropdown at the start of the filter bar: All dates,

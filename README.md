@@ -2,15 +2,15 @@
 
 Keep your plans as plain-text notes and view them by **project**, **timeline**, **person** and **what's coming up**.
 
-You write notes the way you already do. A few light markers add status, dates, people and reminders, and `planner.py` turns them into views.
+You write notes the way you already do. A few light markers add status, dates, people, effort and reminders, and `planner.py` turns them into views.
 
 ```
 Fall Planning  Sep01--Dec19
 
 @HDC
 !- meet w. clients (KA)
-- finish proposal (KA) Oct24
-	~- complete powerpoint (JS) Oct20--23 *Oct19
+- finish proposal (KA) (l) Oct24
+	~- complete powerpoint (JS) (m) Oct20--23 *Oct19
 		-- use Q3 numbers from Lisa's deck
 	- send to board Oct24
 ~- annual report ~Q1
@@ -56,7 +56,7 @@ Pick how to view it:
 | Mode | Shows |
 |---|---|
 | **Plain** | Just your text, editable. Nothing is interpreted. Tab indents; Shift-Tab outdents. |
-| **Planner** | Your notes in the planner format, with tabs for Projects, Timeline, People and Upcoming. Click a task's box (`[ ]`, `[~]`, `[x]`) to move it to in progress, then done, then back to open: only the mark at the start of that line changes in your text, and **Undo** puts it back. Hover a task for **date** (set, change, or clear with an empty box), **+who** (add initials) and **+sub** (add a subtask at the end of its subtasks); type and press Enter. These change only what they must: the date token, the `(...)` group, or one new tab-indented line. Above the tabs, the first dropdown picks **All dates**, **By month** or **By season**. Seasons are Winter (Jan-Apr), Summer (May-Aug) and Fall (Sep-Dec). It starts at the current month or season, shown in the middle (marked "this month" or "this season"). The buttons either side name where they go, like **‹ Sep 2026** and **Nov 2026 ›**, and **This month** / **This season** brings you back. Projects, Timeline and People then show only tasks whose dates fall in it, and the Timeline's columns become its weeks (month) or months (season). Undated tasks are hidden, and Upcoming always shows the next 14 days. Next to it, **search** (tasks, notes and project names), pick a **person** or **project**, or untick **Show done**. A parent that doesn't match stays visible but faded when one of its subtasks does. **Clear** resets the filters. Tick **Edit alongside** to edit while you look. The **Today** box works like `--today`. |
+| **Planner** | Your notes in the planner format, with tabs for Projects, Timeline, People and Upcoming. Click a task's box (`[ ]`, `[~]`, `[x]`) to move it to in progress, then done, then back to open: only the mark at the start of that line changes in your text, and **Undo** puts it back. Hover a task for **date** (set, change, or clear with an empty box), **size** (effort: `s`, `m`, `l` or `xl`; an empty box clears it), **+who** (add initials) and **+sub** (add a subtask at the end of its subtasks); type and press Enter. These change only what they must: the date token, the effort token, the `(...)` group, or one new tab-indented line. A task's effort shows as a small grey badge (`S`, `M`, `L`, `XL`; hover it for the points), and project and person cards show the points still open. Above the tabs, the first dropdown picks **All dates**, **By month** or **By season**. Seasons are Winter (Jan-Apr), Summer (May-Aug) and Fall (Sep-Dec). It starts at the current month or season, shown in the middle (marked "this month" or "this season"). The buttons either side name where they go, like **‹ Sep 2026** and **Nov 2026 ›**, and **This month** / **This season** brings you back. Projects, Timeline and People then show only tasks whose dates fall in it, and the Timeline's columns become its weeks (month) or months (season). Undated tasks are hidden, and Upcoming always shows the next 14 days. Next to it, **search** (tasks, notes and project names), pick a **person** or **project**, or untick **Show done**. A parent that doesn't match stays visible but faded when one of its subtasks does. **Clear** resets the filters. Tick **Edit alongside** to edit while you look. The **Today** box works like `--today`. |
 | **Markdown** | Your text as rendered markdown. |
 
 The **Dark / Light** button switches themes (it starts from your system setting). The page only talks to your own computer, and it remembers your text and settings in the browser. Clicking a status box changes the text in the page; use **Save** to keep it.
@@ -87,6 +87,7 @@ The **Dark / Light** button switches themes (it starts from your system setting)
 | Write | Means |
 |---|---|
 | `(KA)` or `(KA, RT)` | Assignee(s), as initials |
+| `(s)` `(m)` `(l)` `(xl)` | Effort: small, medium, large, extra large, worth **1, 3, 5 and 8 points** |
 | `Oct24` | Due date |
 | `Oct23--26` or `Oct23--Nov03` | Date range: start--end |
 | `~Q1` `~Nov` `~wk43` | Loose date: sometime in that quarter, month or week |
@@ -99,6 +100,8 @@ The **Dark / Light** button switches themes (it starts from your system setting)
 - **Don't write years.** A date up to about 3 months back counts as past, so a missed task shows as overdue. Any other date means the coming year.
 - **Dates flow both ways.** An undated subtask uses its parent's dates, and a parent's dates stretch to cover its subtasks. A task with no dates anywhere goes to the **Unscheduled** list.
 - **Assignees don't pass down.** A subtask with no initials of its own counts as unassigned.
+- **Effort is lowercase.** `(m)` is effort; `(M)` is someone's initials. Only the first effort on a line counts, and one stuck to a word, as in `file(s)`, is just text. A good order is `task (KA) (m) Oct24`.
+- **Effort is per task.** Totals simply add up each task's own points: a parent's effort doesn't come from its subtasks, and subtasks don't take their parent's.
 - **Don't forget the dash.** A line at the left edge without one becomes a new heading.
 - **Tabs or spaces.** If your editor turns tabs into spaces, use 4 spaces per level.
 
@@ -108,9 +111,9 @@ The **Dark / Light** button switches themes (it starts from your system setting)
 
 | View | Shows |
 |---|---|
-| `projects` | Every heading and project as a tree, with done counts, dates, notes and an OVERDUE flag. |
+| `projects` | Every heading and project as a tree, with done counts, effort (`[M]`, and the points left per project), dates, notes and an OVERDUE flag. |
 | `timeline` | Open tasks on a 12-month bar chart starting this month, plus the Unscheduled list. `<` means it ended before this month, `>` that it runs past the chart. |
-| `people` | Open tasks grouped by assignee, soonest first, plus an `(unassigned)` group. |
+| `people` | Open tasks grouped by assignee, soonest first, with each person's open points, plus an `(unassigned)` group. |
 | `upcoming` | What's overdue, what's due and which reminders fire in the next 14 days, plus everything in progress. |
 
 Done tasks appear only in the `projects` view.

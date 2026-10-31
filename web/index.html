@@ -82,7 +82,7 @@ button.box:disabled { opacity: .5; cursor: wait; }
 .plabel { font-weight: 600; }
 .pnote { font-size: 11px; color: var(--accent); }
 .pnote:empty { display: none; }
-.dim > .ttl, .dim > .who, .dim > .when, .dim > .rem { opacity: .5; }
+.dim > .ttl, .dim > .who, .dim > .eff, .dim > .when, .dim > .rem { opacity: .5; }
 .msg { margin-left: 12px; font-size: 13px; }
 .msg.bad { color: var(--bad); }
 .msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
@@ -90,6 +90,7 @@ button.box:disabled { opacity: .5; cursor: wait; }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 .who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
 .who { color: var(--accent); border-color: var(--accent); }
+.eff { font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 4px; background: var(--code); color: var(--muted); margin-left: 4px; }
 .flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bad-bg); color: var(--bad); margin-left: 4px; }
 .note { color: var(--muted); font-size: 13.5px; margin-left: 1.4em; }
 .note::before { content: "— "; }
@@ -413,6 +414,11 @@ function actions(t) {
     if (v === (t.date_text || "")) return;
     editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
   });
+  add("size", "Set or change the effort: s, m, l or xl (empty clears it)", "s, m, l or xl (empty clears)", t.effort, v => {
+    v = v.trim().toLowerCase();
+    if (v === (t.effort || "")) return;
+    editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
+  });
   add("+who", "Add initials", "KA or KA, RT", "", v => v.trim() &&
     editTask(t, "assign", v, null, `Assigned ${v.trim()} to "${t.title}".`));
   add("+sub", "Add a subtask at the end of this task's subtasks", "new subtask (KA) Oct24", "", v => v.trim() &&
@@ -552,6 +558,7 @@ function taskNode(t, showProject, showSpan) {
   if (showProject) row.append(span("proj", "@" + t.project));
   row.append(span("ttl", t.title));
   for (const a of t.assignees) row.append(span("who", a));
+  if (t.effort) { const e = span("eff", t.effort.toUpperCase()); e.title = `effort: ${pts(t.points)}`; row.append(e); }
   const when = showSpan ? (t.span && t.span.label + (t.span.how === "parent" ? " (via parent)" : "")) : t.when;
   if (when) row.append(span("when", "  " + when));
   if (t.overdue) row.append(span("flag", "OVERDUE"));
@@ -559,6 +566,9 @@ function taskNode(t, showProject, showSpan) {
   row.append(actions(t));
   return row;
 }
+const pts = n => n + (n === 1 ? " pt" : " pts");
+const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
+
 function treeNode(t) {
   const row = taskNode(t, false, false);
   if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
@@ -573,7 +583,8 @@ function vProjects(d) {
   for (const sec of d.projects) {
     if (sec.title) out.append(h("h2", "sec", sec.title, sec.when && span("when", "  " + sec.when)));
     for (const p of sec.projects) {
-      const card = h("div", "card", h("h3", "", "@" + p.name, span("count", p.done + "/" + p.total + " done")));
+      const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
+      const card = h("div", "card", h("h3", "", "@" + p.name, span("count", p.done + "/" + p.total + " done" + effort)));
       for (const n of p.notes) card.append(h("div", "note", n));
       for (const t of p.tasks) card.append(treeNode(t));
       if (!p.tasks.length) card.append(h("div", "empty", "No tasks"));
@@ -618,7 +629,8 @@ function vTimeline(d) {
 function vPeople(d) {
   const out = h("div");
   for (const g of d.people) {
-    const card = h("div", "card", h("h3", "", g.name, span("count", g.tasks.length + " task(s)")));
+    const effort = sumPts(g.tasks);                // the tasks shown, so it follows the filters
+    const card = h("div", "card", h("h3", "", g.name, span("count", g.tasks.length + " task(s)" + (effort ? ", " + pts(effort) : ""))));
     for (const t of g.tasks) card.append(taskNode(t, true, true));
     out.append(card);
   }

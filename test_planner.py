@@ -125,6 +125,32 @@ class TestTokens(Base):
         self.assertEqual(t.assignees, [])
         self.assertEqual(t.title, "call (maybe)")
 
+    def test_effort(self):
+        for size, points in (("s", 1), ("m", 3), ("l", 5), ("xl", 8)):
+            with self.subTest(size=size):
+                t = self.task(f"write report (KA) ({size}) Oct24")
+                self.assertEqual((t.effort, t.points, t.title, t.assignees), (size, points, "write report", ["KA"]))
+        t = self.task("a ( xl ) b")
+        self.assertEqual((t.effort, t.title), ("xl", "a b"))
+
+    def test_no_effort(self):
+        t = self.task("a")
+        self.assertEqual((t.effort, t.points), (None, 0))
+
+    def test_uppercase_effort_is_initials(self):
+        t = self.task("a (S) (XL)")
+        self.assertEqual((t.effort, t.assignees), (None, ["S", "XL"]))
+
+    def test_effort_attached_to_word_or_unknown_stays_in_title(self):
+        for text in ("review file(s)", "a (xs)", "a (xxl)", "a (med)"):
+            with self.subTest(text=text):
+                t = self.task(text)
+                self.assertEqual((t.effort, t.title), (None, text))
+
+    def test_only_first_effort_counts(self):
+        t = self.task("a (s) b (l)")
+        self.assertEqual((t.effort, t.title), ("s", "a b (l)"))
+
     def test_single_date(self):
         t = self.task("ship Oct24")
         self.assertEqual((t.start, t.end), (date(2026, 10, 24),) * 2)
@@ -267,6 +293,12 @@ class TestSemantics(Base):
         self.assertFalse(done.overdue())
         self.assertFalse(today.overdue())
 
+    def test_effort_not_inherited_or_rolled_up(self):
+        ps = planner.parse("@P\n- parent (l)\n\t- child\n\t!- done child (m)\n- other (s)\n")
+        self.assertEqual(self.find(ps, "child").points, 0)
+        self.assertEqual(self.find(ps, "parent").points, 5)
+        self.assertEqual(planner.effort_points(ps[0].all_tasks()), (6, 9))
+
     def test_assignees_not_inherited(self):
         ps = planner.parse("@A\n- parent (KA)\n\t- child\n")
         self.assertEqual(ps[0].tasks[0].children[0].assignees, [])
@@ -307,6 +339,20 @@ class TestExample(Base):
                   for p in self.ps}
         self.assertEqual(counts, {"HDC": (2, 11), "MDM": (1, 6), "OPS": (0, 5)})
 
+    def test_effort_totals(self):
+        self.assertEqual({p.name: planner.effort_points(p.all_tasks()) for p in self.ps},
+                         {"HDC": (9, 10), "MDM": (3, 3), "OPS": (8, 8)})
+        groups = dict(planner.people_groups(self.ps))
+        self.assertEqual(planner.effort_points(t for _, t in groups["KA"])[0], 13)   # (l) + (xl)
+        projects = "\n".join(planner.view_projects(self.ps))
+        self.assertIn("@HDC   2/11 done   9 of 10 pts left", projects)
+        self.assertIn("[ ] finish proposal (KA) [L]   Oct 24", projects)
+        self.assertIn("\n@OPS   0/5 done   8 of 8 pts left", projects)
+        people = "\n".join(planner.view_people(self.ps))
+        self.assertIn("KA   5 task(s), 13 pts", people)
+        self.assertIn("RT   2 task(s), 8 pts", people)
+        self.assertIn("[~] @HDC  complete powerpoint [M]   Oct 20-23", people)
+
     def test_people(self):
         groups = dict(planner.people_groups(self.ps))
         self.assertEqual(list(groups), ["JS", "KA", "RT", "(unassigned)"])
@@ -343,6 +389,11 @@ class TestExample(Base):
         agenda = next(r for r in d["timeline"]["rows"] if r["title"] == "plan agenda")
         self.assertEqual(agenda["span"]["how"], "parent")
         self.assertEqual(agenda["line"], 34)
+        hdc = d["projects"][0]["projects"][0]
+        self.assertEqual(hdc["points"], {"left": 9, "total": 10})
+        proposal = hdc["tasks"][1]
+        self.assertEqual((proposal["title"], proposal["effort"], proposal["points"]), ("finish proposal", "l", 5))
+        self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 8, "(unassigned)": 4})
 
 
 # ---------- periods (Month / Season picker) ----------
@@ -455,7 +506,7 @@ class TestSetStatus(Base):
         t = self.find(planner.parse(text), "send to board")
         new = planner.set_status(text, t.line, "done", t.title)
         self.assertEqual(self.changed_lines(text, new),
-                         [(t.line, "\t- send to board Oct24 *Oct23\n", "\t!- send to board Oct24 *Oct23\n")])
+                         [(t.line, "\t- send to board (s) Oct24 *Oct23\n", "\t!- send to board (s) Oct24 *Oct23\n")])
 
     def test_all_transitions(self):
         for old, new, want in [("- a", "doing", "~- a"), ("~- a", "done", "!- a"), ("!- a", "open", "- a"),
@@ -519,7 +570,7 @@ class TestSetDate(EditBase):
         text = read_example()
         t = self.find(planner.parse(text), "complete powerpoint")
         out = planner.set_date(text, t.line, "~wk44", t.title)
-        self.assert_one_line_changed(text, out, t.line, "\t~- complete powerpoint (JS) ~wk44 *Oct19\n")
+        self.assert_one_line_changed(text, out, t.line, "\t~- complete powerpoint (JS) (m) ~wk44 *Oct19\n")
         self.assertEqual(self.find(planner.parse(out), "complete powerpoint").loose, "wk44")
 
     def test_replace_each_kind(self):
@@ -554,16 +605,61 @@ class TestSetDate(EditBase):
         self.assertEqual(t.date_text, "Oct26--Nov06")
 
 
+class TestSetEffort(EditBase):
+    def test_add_before_date_or_reminder_or_at_end(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "review with KA")
+        out = planner.set_effort(text, t.line, "m", t.title)
+        self.assert_one_line_changed(text, out, t.line, "\t\t- review with KA (m) Oct22\n")
+        self.assertEqual(planner.set_effort("- a (KA) *daily\n", 1, "s"), "- a (KA) (s) *daily\n")
+        self.assertEqual(planner.set_effort("- a*daily\n", 1, "s"), "- a (s) *daily\n")
+        self.assertEqual(planner.set_effort("\t- a  (KA)   \r\n", 1, "xl"), "\t- a  (KA) (xl)   \r\n")
+
+    def test_replace_in_place(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "complete powerpoint")
+        out = planner.set_effort(text, t.line, "xl", t.title)
+        self.assert_one_line_changed(text, out, t.line, "\t~- complete powerpoint (JS) (xl) Oct20--23 *Oct19\n")
+        self.assertEqual(planner.set_effort("- a ( m ) b\n", 1, "l"), "- a (l) b\n")
+
+    def test_input_forms(self):
+        for value in ("M", " m ", "(m)", "( M )"):
+            with self.subTest(value=value):
+                self.assertEqual(planner.set_effort("- a\n", 1, value), "- a (m)\n")
+
+    def test_clear(self):
+        self.assertEqual(planner.set_effort("- a  (m)  Oct24\n", 1, ""), "- a  Oct24\n")
+        with self.assertRaises(planner.EditError):
+            planner.set_effort("- a\n", 1, "")
+
+    def test_rejects_bad_sizes(self):
+        for bad in ("xs", "xxl", "medium", "3", "S M"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_effort("- a\n", 1, bad)
+
+    def test_refuses_stale_title(self):
+        with self.assertRaises(planner.EditError):
+            planner.set_effort("- a\n", 1, "m", "b")
+
+    def test_resetting_own_effort_is_a_no_op(self):
+        text = read_example()
+        for p in planner.parse(text):
+            for t in p.all_tasks():
+                if t.effort:
+                    self.assertEqual(planner.set_effort(text, t.line, t.effort, t.title), text)
+
+
 class TestAddAssignees(EditBase):
     def test_new_group_before_date(self):
         text = read_example()
         t = self.find(planner.parse(text), "send to board")
         out = planner.add_assignees(text, t.line, "RT", t.title)
-        self.assert_one_line_changed(text, out, t.line, "\t- send to board (RT) Oct24 *Oct23\n")
+        self.assert_one_line_changed(text, out, t.line, "\t- send to board (RT) (s) Oct24 *Oct23\n")
 
     def test_new_group_before_reminder_or_at_end(self):
         self.assertEqual(planner.add_assignees("- a *daily\n", 1, "KA"), "- a (KA) *daily\n")
         self.assertEqual(planner.add_assignees("- a  \n", 1, "KA, RT"), "- a (KA, RT)  \n")
+        self.assertEqual(planner.add_assignees("- a (m) Oct24\n", 1, "KA"), "- a (KA) (m) Oct24\n")
 
     def test_join_existing_group(self):
         self.assertEqual(planner.add_assignees("- a (KA) Oct24\n", 1, "RT JS"), "- a (KA, RT, JS) Oct24\n")
@@ -764,6 +860,7 @@ class TestServer(Base):
     def test_edit_ops(self):
         text = "@P\n- a\n"
         for op, value, want in [("date", "Oct24", "@P\n- a Oct24\n"), ("assign", "KA", "@P\n- a (KA)\n"),
+                                ("effort", "m", "@P\n- a (m)\n"),
                                 ("subtask", "b", "@P\n- a\n\t- b\n")]:
             code, d = self.post("/api/edit", {"text": text, "line": 2, "op": op, "value": value, "title": "a"})
             self.assertEqual((code, d["text"]), (200, want))

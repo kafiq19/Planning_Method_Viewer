@@ -13,7 +13,7 @@ USAGE
   --today Oct10                        pretend today is another date (for testing)
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it (paste/open/edit notes, dark mode;
                                        click a task's box to change its status, or
-                                       hover it to set a date, add initials or a subtask)
+                                       hover it to set a date or effort, add initials or a subtask)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -22,6 +22,7 @@ NOTE FORMAT (quick reference)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
+  (s)  (m)  (l)  (xl)           effort: 1, 3, 5 or 8 points (lowercase only)
   Oct24                         due date
   Oct23--26  Oct23--Nov03       date range
   ~Q1  ~Nov  ~wk43              loose date: sometime in that period
@@ -38,6 +39,7 @@ MONTHS = {m: i for i, m in enumerate(MONTH_NAMES, 1)}
 MON = "(?:" + "|".join(MONTH_NAMES) + ")"
 WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])}
 
+RE_EFFORT = re.compile(r"(?<!\w)\(\s*(s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
 RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
                        + MON + r"\d{1,2})\b")
@@ -49,6 +51,7 @@ PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue sta
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
 BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]"}
+EFFORT = {"s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
 TODAY = date.today()
 
 
@@ -164,8 +167,9 @@ class Task:
 
     def _parse(self, text):
         # Where each token sat in `text` (start, end), so an edit can change just that token.
-        self.at = {"assignees": [], "reminders": [], "date": None}
-        self.date_text = None
+        self.at = {"assignees": [], "reminders": [], "date": None, "effort": None}
+        self.date_text = self.effort = None
+        self.points = 0
         original, keep = text, list(range(len(text)))   # keep[i]: index in `original` of text[i]
 
         def cut(ms):
@@ -179,6 +183,10 @@ class Task:
             self.at["date"] = cut([m])[0]
             self.date_text = original[self.at["date"][0]:self.at["date"][1]]
 
+        m = RE_EFFORT.search(text)           # first, so cutting initials can't glue it to a word
+        if m:
+            self.effort, self.points = m.group(1), EFFORT[m.group(1)]
+            self.at["effort"] = cut([m])[0]
         ms = list(RE_ASSIGN.finditer(text))
         for m in ms:
             self.assignees += [a.strip() for a in m.group(1).split(",")]
@@ -247,6 +255,16 @@ class Task:
         if self.assignees:
             s += " (" + ", ".join(self.assignees) + ")"
         return s
+
+
+def effort_points(tasks):
+    """(points not done yet, all points). Each task counts only its own effort (no rollup)."""
+    tasks = list(tasks)
+    return sum(t.points for t in tasks if t.status != "done"), sum(t.points for t in tasks)
+
+
+def pts(n):
+    return f"{n} pt" + ("" if n == 1 else "s")
 
 
 class Project:
@@ -330,12 +348,15 @@ def view_projects(projects):
                 out += ["", head, "-" * len(head)]
         tasks = list(p.all_tasks())
         done = sum(t.status == "done" for t in tasks)
-        out.append(f"\n@{p.name}   {done}/{len(tasks)} done")
+        left, total = effort_points(tasks)
+        out.append(f"\n@{p.name}   {done}/{len(tasks)} done" + (f"   {left} of {pts(total)} left" if total else ""))
         for n in p.notes:
             out.append(f"    -- {n}")
 
         def render(t, depth):
             line = "    " * depth + f"{BOX[t.status]} {t.label()}"
+            if t.effort:
+                line += f" [{t.effort.upper()}]"
             if t.end:
                 line += f"   {fspan(t.start, t.end, t.loose)}"
             if t.overdue():
@@ -510,12 +531,14 @@ def people_groups(projects):
 def view_people(projects):
     out = ["PEOPLE", "======", "(open and in-progress tasks)"]
     for name, items in people_groups(projects):
-        out.append(f"\n{name}   {len(items)} task(s)")
+        left = effort_points(t for _, t in items)[0]
+        out.append(f"\n{name}   {len(items)} task(s)" + (f", {pts(left)}" if left else ""))
         for p, t in items:
             sp = t.span()
+            size = f" [{t.effort.upper()}]" if t.effort else ""
             when = f"   {fspan(sp[0], sp[1])}" if sp else ""
             flag = "   OVERDUE" if t.overdue() else ""
-            out.append(f"    {BOX[t.status]} @{p.name}  {t.title}{when}{flag}")
+            out.append(f"    {BOX[t.status]} @{p.name}  {t.title}{size}{when}{flag}")
     return out
 
 
@@ -574,6 +597,7 @@ def task_data(t, keep=None):
     sp = t.span()
     d = {
         "title": t.title, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
+        "effort": t.effort, "points": t.points,
         "when": fspan(t.start, t.end, t.loose) if t.end else None,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
@@ -630,6 +654,7 @@ def to_data(projects, period=None):
         seen[key]["projects"].append({
             "name": p.name, "notes": p.notes,
             "done": sum(t.status == "done" for t in tasks), "total": len(tasks),
+            "points": dict(zip(("left", "total"), effort_points(tasks))),
             "tasks": shown})
 
     first, last = cols[0][1], cols[-1][2]
@@ -654,7 +679,8 @@ def to_data(projects, period=None):
             "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
                           before=e < first, after=e > last) for s, e, p, t, _ in rows],
             "unscheduled": [flat(p, t) for p, t in unscheduled]},
-        "people": [{"name": n, "tasks": [flat(p, t) for p, t in items]} for n, items in people if items],
+        "people": [{"name": n, "points": effort_points(t for _, t in items)[0], "tasks": [flat(p, t) for p, t in items]}
+                   for n, items in people if items],
         "upcoming": {
             "horizon": fd(horizon), "days": UPCOMING_DAYS,
             "overdue": [flat(p, t) for _, p, t in sorted(overdue, key=lambda r: r[0])],
@@ -692,6 +718,13 @@ def _content_end(raw):
     return len(raw.rstrip())                    # before trailing whitespace and the line ending
 
 
+def _drop(raw, s, e, col):
+    """`raw` without the token at [s, e) and the spaces before it (but not before `col`)."""
+    while s > col and raw[s - 1] in " \t":
+        s -= 1
+    return raw[:s] + raw[e:]
+
+
 def set_status(text, line, status, title=None):
     """Return `text` with the task on `line` (1-based) set to `status`.
 
@@ -726,13 +759,7 @@ def set_date(text, line, when, title=None):
     raw = lines[line - 1]
     if t.at["date"]:
         s, e = (t.col + i for i in t.at["date"])
-        if when:
-            raw = raw[:s] + when + raw[e:]
-        else:                                   # drop the token and the spaces before it
-            b = s
-            while b > t.col and raw[b - 1] in " \t":
-                b -= 1
-            raw = raw[:b] + raw[e:]
+        raw = raw[:s] + when + raw[e:] if when else _drop(raw, s, e, t.col)
     elif not when:
         raise EditError("that task has no date to clear")
     elif t.at["reminders"]:
@@ -754,7 +781,7 @@ def add_assignees(text, line, initials, title=None):
     """Add initials ("RT" or "RT, JS") to the task.
 
     They join the task's last (...) group, or a new group goes before the
-    first date or reminder (as in `finish proposal (KA) Oct24`), or at the end.
+    first effort, date or reminder (as in `finish proposal (KA) (m) Oct24`), or at the end.
     """
     lines, t = _task_at(text, line, title)
     new = [a for a in re.split(r"[\s,]+", initials.strip()) if a]
@@ -770,7 +797,7 @@ def add_assignees(text, line, initials, title=None):
         p = s + max(i for i, c in enumerate(raw[s:e]) if c.isupper()) + 1
         raw = raw[:p] + ", " + ", ".join(new) + raw[p:]
     else:
-        tokens = t.at["reminders"] + ([t.at["date"]] if t.at["date"] else [])
+        tokens = t.at["reminders"] + [t.at[k] for k in ("effort", "date") if t.at[k]]
         group = "(" + ", ".join(new) + ")"
         if tokens:
             p = t.col + min(s for s, _ in tokens)
@@ -782,6 +809,40 @@ def add_assignees(text, line, initials, title=None):
     out = "".join(lines)
     if _find(out, line).assignees != t.assignees + new:
         raise EditError("the initials wouldn't read back correctly, so edit the line by hand")
+    return out
+
+
+def set_effort(text, line, size, title=None):
+    """Set, replace or (with an empty `size`) clear the task's effort: s, m, l or xl.
+
+    An existing (size) token is replaced in place. A new one goes before the
+    first date or reminder (as in `finish proposal (KA) (m) Oct24`), or at the
+    end of the line. Nothing else on the line moves.
+    """
+    lines, t = _task_at(text, line, title)
+    size = size.strip().strip("()").strip().lower()
+    if size and size not in EFFORT:
+        raise EditError(f"{size!r} is not an effort (use s, m, l or xl; empty clears it)")
+    raw = lines[line - 1]
+    token = f"({size})"
+    if t.at["effort"]:
+        s, e = (t.col + i for i in t.at["effort"])
+        raw = raw[:s] + token + raw[e:] if size else _drop(raw, s, e, t.col)
+    elif not size:
+        raise EditError("that task has no effort to clear")
+    else:
+        tokens = t.at["reminders"] + ([t.at["date"]] if t.at["date"] else [])
+        if tokens:
+            p = t.col + min(s for s, _ in tokens)
+            raw = raw[:p] + ("" if raw[p - 1].isspace() else " ") + token + " " + raw[p:]
+        else:
+            p = _content_end(raw)
+            raw = raw[:p] + " " + token + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    if (n.effort, n.title, n.start, n.end) != (size or None, t.title, t.start, t.end):
+        raise EditError("the effort wouldn't read back correctly, so edit the line by hand")
     return out
 
 
@@ -825,7 +886,8 @@ def add_subtask(text, line, task_text, title=None):
     return out
 
 
-EDITS = {"status": set_status, "date": set_date, "assign": add_assignees, "subtask": add_subtask}
+EDITS = {"status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees,
+         "subtask": add_subtask}
 
 
 # ---------- the notes file (--serve notes.txt) ----------
