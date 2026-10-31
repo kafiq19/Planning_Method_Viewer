@@ -5,6 +5,14 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.2.9  2026-10-31  Effort badge colour
+---------------------------------------
+- Planner mode: the S / M / L / XL effort badge is now a solid deep purple
+  with white text, so it stands out from initials and dates. Dark mode uses a
+  brighter purple.
+- Code: new --effort / --effort-text colour tokens in web/index.html.
+
+
 1.2.8  2026-10-30  Effort
 -------------------------
 - New marker: (s), (m), (l) or (xl) on a task gives its effort, worth 1, 3,

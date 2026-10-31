@@ -9,13 +9,13 @@
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7384; --line: #e2e5eb;
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
   --open: #6b7384; --doing: #c77700; --done: #2f9e5b; --bad: #d63c3c; --bad-bg: #fde8e8;
-  --code: #eef0f4;
+  --code: #eef0f4; --effort: #4b1d8f; --effort-text: #ffffff;
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
   --accent: #6d93ff; --accent-text: #0e1220; --bar: #6d93ff; --bar-off: #252a37;
   --open: #98a0b3; --doing: #f0a63a; --done: #4cc47f; --bad: #ff7b7b; --bad-bg: #3a2024;
-  --code: #252a37;
+  --code: #252a37; --effort: #7b3fe4; --effort-text: #ffffff;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -90,7 +90,7 @@ button.box:disabled { opacity: .5; cursor: wait; }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 .who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
 .who { color: var(--accent); border-color: var(--accent); }
-.eff { font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 4px; background: var(--code); color: var(--muted); margin-left: 4px; }
+.eff { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); margin-left: 4px; }
 .flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bad-bg); color: var(--bad); margin-left: 4px; }
 .note { color: var(--muted); font-size: 13.5px; margin-left: 1.4em; }
 .note::before { content: "— "; }
