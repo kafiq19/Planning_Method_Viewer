@@ -12,6 +12,7 @@ import sys
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date
 
@@ -909,6 +910,80 @@ class TestServer(Base):
                                 ("subtask", "b", "@P\n- a\n\t- b\n")]:
             code, d = self.post("/api/edit", {"text": text, "line": 2, "op": op, "value": value, "title": "a"})
             self.assertEqual((code, d["text"]), (200, want))
+
+
+class TestServerPickedFile(Base):
+    """No file on the command line: the page browses a folder and opens one notes file there."""
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        os.mkdir(os.path.join(self.root, "work"))
+        for name, data in [("work/plan.txt", b"@P\r\n- a\r\n"), ("notes.md", b"- b\n"), ("photo.png", b"x"), (".hidden.txt", b"")]:
+            with open(os.path.join(self.root, name), "wb") as f:
+                f.write(data)
+        self.server = planner.make_server(0, None, browse_root=self.root)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+        super().tearDown()
+
+    post, send = TestServer.post, TestServer.send
+
+    def get(self, path):
+        return self.send(urllib.request.Request(self.url + path))
+
+    def test_browse_lists_folders_and_notes_files(self):
+        code, d = self.get("/api/browse?dir=" + urllib.parse.quote(self.root))
+        self.assertEqual(code, 200)
+        self.assertEqual([(e["name"], e["kind"]) for e in d["entries"]], [("work", "dir"), ("notes.md", "file")])
+        self.assertIsNone(d["parent"])
+        code, d = self.get("/api/browse?dir=" + urllib.parse.quote(os.path.join(self.root, "work")))
+        self.assertEqual((d["parent"], [e["name"] for e in d["entries"]]), (self.root, ["plan.txt"]))
+
+    def test_browse_and_open_stay_inside_the_root(self):
+        self.assertEqual(self.get("/api/browse?dir=" + urllib.parse.quote(os.path.dirname(self.root)))[0], 403)
+        self.assertEqual(self.get("/api/browse?dir=" + urllib.parse.quote(os.path.join(self.root, "..")))[0], 403)
+        for path in (os.path.join(self.root, "photo.png"), os.path.join(os.path.dirname(self.root), "x.txt"), 5):
+            with self.subTest(path=path):
+                self.assertEqual(self.post("/api/open", {"path": path})[0], 403)
+        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "gone.txt")})[0], 404)
+        req = urllib.request.Request(self.url + "/api/browse", headers={"Origin": "https://evil.example"})
+        self.assertEqual(self.send(req)[0], 403)
+
+    def test_open_save_conflict_close(self):
+        plan = os.path.join(self.root, "work", "plan.txt")
+        code, d = self.post("/api/open", {"path": plan})
+        self.assertEqual((code, d["name"], d["path"], d["text"], d["picked"]), (200, "plan.txt", plan, "@P\r\n- a\r\n", True))
+        code, d2 = self.post("/api/file", {"text": "@P\n- a\n- c\n", "version": d["version"]})
+        self.assertEqual(code, 200)
+        with open(plan, "rb") as f:
+            self.assertEqual(f.read(), b"@P\r\n- a\r\n- c\r\n")         # CRLF kept, like file mode
+        self.assertEqual(self.post("/api/file", {"text": "x", "version": d["version"]})[0], 409)   # stale version
+        self.assertEqual(self.get("/api/file")[1]["name"], "plan.txt")
+        self.assertEqual(self.post("/api/open", {"path": None})[1], {"name": None})
+        self.assertEqual(self.get("/api/file")[1], {"name": None})
+        self.assertEqual(self.post("/api/file", {"text": "x", "version": None})[0], 409)
+
+    def test_command_line_file_cannot_be_switched(self):
+        with tempfile.TemporaryDirectory() as other:
+            notes = os.path.join(other, "plan.txt")
+            open(notes, "w").close()
+            server = planner.make_server(0, notes, browse_root=self.root)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                url = f"http://127.0.0.1:{server.server_address[1]}"
+                for req in (urllib.request.Request(url + "/api/browse"),
+                            urllib.request.Request(url + "/api/open", json.dumps({"path": None}).encode(),
+                                                   {"Content-Type": "application/json"})):
+                    self.assertEqual(self.send(req)[0], 409)
+                self.assertFalse(self.send(urllib.request.Request(url + "/api/file"))[1]["picked"])
+            finally:
+                server.shutdown(); server.server_close()
 
 
 class TestServerWithFile(TestServer):

@@ -5,6 +5,24 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.6  2026-10-31  Open file works in every browser; file name in the header
+-------------------------------------------------------------------------------
+- Fix: 1.3.5's autosave relied on a browser feature that Brave (and Safari
+  and Firefox) leave switched off, so opened files were never saved. Open
+  file now shows a small file browser of your home folder; the local server
+  opens the file you pick and saves it, in any browser.
+- Files opened this way save automatically about a second after each change,
+  with the same "changed on disk" protection as before.
+- The header shows which file is open: a document icon and its name ("Untitled"
+  when none), the full path on hover, then "Saving..." / "Saved". Click it to
+  open another file.
+- After restarting the server, "Reopen fall.txt" in the header opens the file
+  again. Close file (in ...) stops saving to it.
+Code: GET /api/browse and POST /api/open (inside browse_root, default the home
+folder); make_server(port, notes_path, browse_root); the page's picker dialog
+and file chip; the browser file-handle code from 1.3.5 is gone.
+
+
 1.3.5  2026-10-31  Autosave for files opened in the page
 ----------------------------------------------------------
 - In Chrome, Edge or Brave, a file opened with Open file (or dropped on the

@@ -996,18 +996,32 @@ def set_today(val):
     TODAY = date(date.today().year, MONTHS[m.group(1)], int(m.group(2))) if m else date.fromisoformat(val)
 
 
-def make_server(port, notes_path=None):
+NOTE_SUFFIXES = (".txt", ".md", ".markdown")
+
+
+def make_server(port, notes_path=None, browse_root=None):
     """The local server (127.0.0.1 only). Port 0 picks a free port.
 
-    With `notes_path`, GET/POST /api/file read and save that one file; no
-    other path can be read or written.
+    With `notes_path`, GET/POST /api/file read and save that one file. Without
+    it, the page can list folders under `browse_root` (default: the home folder)
+    with GET /api/browse and open one .txt / .md file there with POST /api/open;
+    /api/file then reads and saves that file ("picked": the page autosaves it).
+    Only the open file is ever written.
     """
     import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from pathlib import Path
+    from urllib.parse import parse_qs, urlsplit
 
     default_today = TODAY
     page = Path(__file__).resolve().parent / "web" / "index.html"
+    root = os.path.realpath(browse_root or os.path.expanduser("~"))
+    cur = {"path": notes_path, "picked": False}    # the open file; "picked" = opened from the page
+
+    def inside(p):
+        """`p` resolved, if it is `root` or under it; else None."""
+        p = os.path.realpath(p)
+        return p if p == root or p.startswith(root.rstrip(os.sep) + os.sep) else None
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype):
@@ -1036,13 +1050,11 @@ def make_server(port, notes_path=None):
             elif path == "/api/file":
                 if not self._trusted():
                     return
-                if notes_path is None:
-                    return self._json(200, {"name": None})
-                try:
-                    text, version = read_notes(notes_path)
-                except (OSError, UnicodeDecodeError) as e:
-                    return self._json(500, {"error": f"can't read {notes_path}: {e}"})
-                self._json(200, {"name": os.path.basename(notes_path), "text": text, "version": version})
+                self._file()
+            elif path == "/api/browse":
+                if not self._trusted():
+                    return
+                self._browse(parse_qs(urlsplit(self.path).query).get("dir", [None])[0])
             elif path == "/api/example":            # the sample notes, for the page's "Load the example"
                 if not self._trusted():
                     return
@@ -1051,7 +1063,7 @@ def make_server(port, notes_path=None):
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -1062,6 +1074,8 @@ def make_server(port, notes_path=None):
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 if self.path == "/api/file":
                     return self._save(req)
+                if self.path == "/api/open":
+                    return self._open(req)
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
@@ -1081,18 +1095,72 @@ def make_server(port, notes_path=None):
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
 
+        def _file(self):
+            """The open file: {name, path, text, version, picked}, or {name: null}."""
+            p = cur["path"]
+            if p is None:
+                return self._json(200, {"name": None})
+            try:
+                text, version = read_notes(p)
+            except (OSError, UnicodeDecodeError) as e:
+                return self._json(500, {"error": f"can't read {p}: {e}"})
+            self._json(200, {"name": os.path.basename(p), "path": p, "text": text, "version": version,
+                             "picked": cur["picked"]})
+
+        def _browse(self, folder):
+            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
+            if notes_path is not None:
+                return self._json(409, {"error": "a notes file was given on the command line"})
+            start = os.path.dirname(cur["path"]) if cur["path"] else (os.getcwd() if inside(os.getcwd()) else root)
+            d = inside(folder or start)
+            if d is None or not os.path.isdir(d):
+                return self._json(403, {"error": "you can only open files in your home folder"})
+            try:
+                found = list(os.scandir(d))
+            except OSError as e:
+                return self._json(403, {"error": f"can't open that folder: {e.strerror or e}"})
+            entries = []
+            for e in found:
+                if e.name.startswith("."):
+                    continue
+                try:
+                    if e.is_dir():
+                        entries.append({"name": e.name, "kind": "dir", "path": os.path.join(d, e.name)})
+                    elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
+                        entries.append({"name": e.name, "kind": "file", "path": os.path.join(d, e.name)})
+                except OSError:
+                    continue
+            entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].casefold()))
+            self._json(200, {"dir": d, "home": root, "parent": None if d == root else os.path.dirname(d), "entries": entries})
+
+        def _open(self, req):
+            """Open the notes file at req["path"] (under the browse root), or close it with null."""
+            if notes_path is not None:
+                return self._json(409, {"error": "a notes file was given on the command line"})
+            if req.get("path") is None:
+                cur.update(path=None, picked=False)
+                return self._json(200, {"name": None})
+            p = isinstance(req["path"], str) and inside(req["path"])
+            if not p or not p.lower().endswith(NOTE_SUFFIXES):
+                return self._json(403, {"error": "you can open .txt and .md files in your home folder"})
+            if not os.path.isfile(p):
+                return self._json(404, {"error": f"{os.path.basename(p)} isn't there any more"})
+            cur.update(path=p, picked=True)
+            self._file()
+
         def _save(self, req):
-            if notes_path is None:
-                return self._json(409, {"error": "no notes file; start with  python planner.py --serve notes.txt"})
+            p = cur["path"]
+            if p is None:
+                return self._json(409, {"error": "no notes file is open"})
             if not isinstance(req.get("text"), str):
                 return self._json(400, {"error": "bad request: text must be a string"})
             try:
-                version = write_notes(notes_path, req["text"], req.get("version"), bool(req.get("force")))
+                version = write_notes(p, req["text"], req.get("version"), bool(req.get("force")))
             except FileConflict as e:
-                _, current = read_notes(notes_path)
+                _, current = read_notes(p)
                 return self._json(409, {"error": str(e), "conflict": True, "version": current})
             except OSError as e:
-                return self._json(500, {"error": f"can't save {notes_path}: {e}"})
+                return self._json(500, {"error": f"can't save {p}: {e}"})
             self._json(200, {"version": version})
 
         def log_message(self, *args):
