@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-planner.py - turn plain-text planning notes into four views:
+planner.py (KAFEEN Planner) - turn plain-text planning notes into four views:
 projects, timeline, people, and what's coming up.
 Standard library only (Python 3.8+).
 
@@ -784,11 +784,10 @@ def add_assignees(text, line, initials, title=None):
     first effort, date or reminder (as in `finish proposal (KA) (m) Oct24`), or at the end.
     """
     lines, t = _task_at(text, line, title)
-    new = [a for a in re.split(r"[\s,]+", initials.strip()) if a]
-    bad = [a for a in new if not re.fullmatch(r"[A-Z]{1,4}", a)]
-    if not new or bad:
+    new = _initials(initials)
+    if not new:
         raise EditError(f"{initials!r}: initials are 1-4 capital letters, separated by commas")
-    new = [a for i, a in enumerate(new) if a not in t.assignees and a not in new[:i]]
+    new = [a for a in new if a not in t.assignees]
     if not new:
         raise EditError("already assigned")
     raw = lines[line - 1]
@@ -846,6 +845,43 @@ def set_effort(text, line, size, title=None):
     return out
 
 
+def _initials(value):
+    """ "KA, RT" or "KA RT" -> ["KA", "RT"] (duplicates dropped); EditError if any isn't 1-4 capitals."""
+    found = [a for a in re.split(r"[\s,]+", value.strip()) if a]
+    if any(not re.fullmatch(r"[A-Z]{1,4}", a) for a in found):
+        raise EditError(f"{value!r}: initials are 1-4 capital letters, separated by commas")
+    return [a for i, a in enumerate(found) if a not in found[:i]]
+
+
+def set_assignees(text, line, initials, title=None):
+    """Replace the task's initials with `initials` ("KA, RT"); an empty value removes them.
+
+    The first (...) group takes the new list in place and any later groups are
+    removed with the spaces before them. With no group yet, the initials are
+    added as add_assignees does. Nothing else on the line moves.
+    """
+    lines, t = _task_at(text, line, title)
+    new = _initials(initials)
+    if not new and not t.assignees:
+        raise EditError("that task has no initials to remove")
+    if new == t.assignees:
+        return text
+    if not t.at["assignees"]:
+        return add_assignees(text, line, ", ".join(new), title)
+    raw = lines[line - 1]
+    groups = [(t.col + s, t.col + e) for s, e in t.at["assignees"]]
+    for s, e in reversed(groups[1:]):          # from the end, so earlier positions stay valid
+        raw = _drop(raw, s, e, t.col)
+    s, e = groups[0]
+    raw = raw[:s] + "(" + ", ".join(new) + ")" + raw[e:] if new else _drop(raw, s, e, t.col)
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    if (n.assignees, n.title, n.start, n.end, n.effort) != (new, t.title, t.start, t.end, t.effort):
+        raise EditError("the initials wouldn't read back correctly, so edit the line by hand")
+    return out
+
+
 def add_subtask(text, line, task_text, title=None):
     """Add `- task_text` as the last subtask of the task on `line`.
 
@@ -886,7 +922,7 @@ def add_subtask(text, line, task_text, title=None):
     return out
 
 
-EDITS = {"status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees,
+EDITS = {"status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask}
 
 

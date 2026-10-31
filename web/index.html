@@ -3,19 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Planner</title>
+<title>KAFEEN Planner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233b6cf6'/%3E%3Crect x='5' y='6.5' width='9' height='2.6' rx='1.3' fill='white'/%3E%3Crect x='8' y='10.7' width='11' height='2.6' rx='1.3' fill='white'/%3E%3Crect x='5' y='14.9' width='6' height='2.6' rx='1.3' fill='white'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5f6778; --line: #e2e5eb;
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
   --open: #5f6778; --doing: #c77700; --done: #2f9e5b; --bad: #c42f2f; --bad-bg: #fde8e8;
-  --code: #eef0f4; --hover: #f1f3f7; --effort: #4b1d8f; --effort-text: #ffffff;
+  --code: #eef0f4; --hover: #f1f3f7; --logo-ink: #ffffff; --effort: #4b1d8f; --effort-text: #ffffff;
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
   --accent: #6d93ff; --accent-text: #0e1220; --bar: #6d93ff; --bar-off: #252a37;
   --open: #98a0b3; --doing: #f0a63a; --done: #4cc47f; --bad: #ff7b7b; --bad-bg: #3a2024;
-  --code: #252a37; --hover: #252a37; --effort: #7b3fe4; --effort-text: #ffffff;
+  --code: #252a37; --hover: #252a37; --logo-ink: #12151c; --effort: #7b3fe4; --effort-text: #ffffff;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -23,7 +24,9 @@ body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, 
        display: flex; flex-direction: column; }
 header { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 20px;
          background: var(--panel); border-bottom: 1px solid var(--line); }
-.brand { font-size: 16px; font-weight: 600; }
+.brand { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); user-select: none; }   /* logo: three timeline bars */
+.brand .bname { color: var(--text); font-size: 15px; font-weight: 800; letter-spacing: .14em; }
+.brand .bsub { color: var(--muted); font-size: 15px; font-weight: 400; margin-left: -2px; }
 button, .btn, input[type=text], input[type=search], select { font: inherit; font-size: 14px; color: var(--text); background: var(--panel);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:hover, .btn:hover { border-color: var(--accent); }
@@ -75,13 +78,16 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .badge:empty { display: none; }
 .pctl { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; }
 .pctl > button, .pctl > .pop > button { border: 0; border-radius: 0; background: none; }
-.pctl > button { color: var(--muted); padding: 5px 9px; }
-.pctl > button:hover { color: var(--text); background: var(--hover); }
-.pctl .pmid { font-weight: 600; padding: 5px 12px; }
-.pctl.on .pmid { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
-.pctl .caret { color: var(--muted); font-weight: normal; }
+.pctl > button, .pctl .pcaret { color: var(--muted); padding: 5px 9px; }
+.pctl > button:hover, .pctl .pcaret:hover { color: var(--text); background: var(--hover); }
+.pctl > .pmid { color: var(--text); font-weight: 600; padding: 5px 12px; }
+.pctl.on > .pmid { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.pctl.away > .pmid { color: var(--accent); }                 /* not the current period: click to come back */
+.pctl .pcaret { border-left: 1px solid var(--line); padding: 5px 8px; }
+.pctl:not(.on) .pcaret { border-left: 0; padding-left: 0; }
 .content { padding: 14px 24px 80px; }
-.context { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.context { font-size: 13px; color: var(--muted); }
+.content > .context { margin-bottom: 10px; }
 .context:empty { display: none; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
   max-width: calc(100% - 32px); background: var(--text); color: var(--panel); padding: 8px 10px 8px 16px; border-radius: 10px;
@@ -109,6 +115,12 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .sechead .c.mid { text-align: center; }
 h3.ph { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 10px 8px 1px; font-size: 15px; font-weight: 600; }
 h3.ph .at { color: var(--muted); font-weight: normal; }
+h3.ph .fold { display: inline-flex; align-items: center; gap: 0; margin-left: -6px; padding: 1px 6px 1px 2px; border: 0; background: none;
+  font: inherit; color: inherit; border-radius: 5px; }
+h3.ph .fold:hover:not(:disabled) { background: var(--hover); }
+h3.ph .fold:disabled { opacity: 1; cursor: default; }
+h3.ph .fold svg { margin-right: 4px; color: var(--muted); transform: rotate(90deg); transition: transform .12s; }
+h3.ph.shut .fold svg { transform: none; }
 .task { min-height: 28px; padding: 0 8px; border-radius: 5px; font-size: 14px; }
 .task:hover, .task:focus-within { background: var(--hover); }
 .lead { display: flex; align-items: center; min-width: 0; padding: 3px 0; }
@@ -211,7 +223,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 </head>
 <body>
 <header>
-  <span class="brand">Planner</span>
+  <span class="brand" aria-label="KAFEEN Planner"><svg class="logo" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor"/><rect x="5" y="6.5" width="9" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="8" y="10.7" width="11" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="5" y="14.9" width="6" height="2.6" rx="1.3" fill="var(--logo-ink)"/></svg><span class="bname">KAFEEN</span><span class="bsub">Planner</span></span>
   <span id="fileName" class="hint"></span>
   <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
   <span id="fileStatus" class="hint"></span>
@@ -588,10 +600,16 @@ const icon = (d, size = 15) => {                // a small stroke icon (inline S
   n.innerHTML = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
   return n;
 };
-const pPrev = h("button", "", "‹"), pNext = h("button", "", "›"), pMid = h("button", "pmid");
-const pMenu = h("div", "menu hidden"), pctl = h("span", "pctl", pPrev, h("span", "pop", pMid, pMenu), pNext);
-pMid.setAttribute("aria-haspopup", "menu");
-popup(pMid, pMenu);
+const pPrev = h("button", "", "‹"), pNext = h("button", "", "›"), pMid = h("button", "pmid"), pCaret = h("button", "pcaret", "▾");
+const pMenu = h("div", "menu hidden"), pctl = h("span", "pctl", pPrev, pMid, pNext, h("span", "pop", pCaret, pMenu));
+pCaret.setAttribute("aria-haspopup", "menu"); pCaret.setAttribute("aria-label", "All dates, by month or by season");
+pCaret.title = "Show all dates, one month or one season";
+popup(pCaret, pMenu);
+pMid.onclick = e => {                            // the date: back to this month / season; already there (or All dates): the menu
+  const per = state.data && state.data.period;
+  if (per && !per.current) return setPeriod(per.now);
+  e.stopPropagation(); pCaret.click();
+};
 function setPeriod(p) {
   state.period = p ? { kind: p.kind, year: p.year, index: p.index } : null;
   store.set("period", JSON.stringify(state.period));
@@ -599,12 +617,14 @@ function setPeriod(p) {
 }
 pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
 pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
-function showPeriod(per) {       // ‹ › name where they go (on hover); the middle says what is showing and opens the menu
+function showPeriod(per) {       // ‹ › name where they go (on hover); the date says what is showing and returns to now
   const unit = per && (per.kind === "month" ? "month" : "season");
   pctl.classList.toggle("on", !!per);
+  pctl.classList.toggle("away", !!per && !per.current);
   pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
-  pMid.replaceChildren(per ? per.label : "All dates", " ", span("caret", "▾"));
-  pMid.title = "Show all dates, one month or one season";
+  pMid.textContent = per ? per.label : "All dates";
+  pMid.title = !per ? "Show all dates, one month or one season"
+    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
   const item = (label, note, on, pick, disabled) => {
     const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
     b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
@@ -720,10 +740,14 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   if (project) lead.append(span("proj", "@" + t.project));
   lead.append(span("ttl", t.title));
 
-  const who = cellButton("who r", "Add initials", t.assignees.length ? "Add initials" : "Assign: add initials",
-    [t.assignees.length ? span("t", t.assignees.join(", ")) : ADD()],
-    cell => editCell(cell, "add initials: KA or KA, RT", "", v => v.trim() &&
-      editTask(t, "assign", v, null, `Assigned ${v.trim()} to "${t.title}".`)));
+  const current = t.assignees.join(", ");
+  const who = cellButton("who r", "Change initials", current ? `${current}. Click to change (empty removes)` : "Assign: add initials",
+    [current ? span("t", current) : ADD()],
+    cell => editCell(cell, "initials: KA, RT (empty removes)", current, v => {
+      const next = v.trim().split(/[\s,]+/).filter(Boolean).join(", ");
+      if (next === current) return;
+      editTask(t, "who", v, null, next ? `Set "${t.title}" to ${next}.` : `Removed the initials from "${t.title}".`);
+    }));
 
   const eff = t.effort && span("eff", t.effort.toUpperCase());
   const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: s, m, l or xl",
@@ -774,13 +798,27 @@ function colHead(title, when) {                  // a section heading that also 
     span("c r", "Who"), span("c mid", "Size"), span("c r", "Date"), span("c", ""));
 }
 
+let collapsed;                                    // projects folded shut in the Projects tab, remembered per browser
+try { collapsed = new Set(JSON.parse(store.get("collapsed", "[]"))); } catch (e) { collapsed = new Set(); }
+const CHEVRON = "M9 6l6 6-6 6";
 function vProjects(d) {
-  const out = h("div");
+  const out = h("div"), open = filterOn();       // while searching or filtering, everything is open so no match is hidden
   for (const sec of d.projects) {
     out.append(colHead(sec.title || "Projects", sec.when));
     for (const p of sec.projects) {
+      const key = (sec.title || "") + "\n" + p.name, shut = !open && collapsed.has(key);
       const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
-      out.append(h("h3", "ph", h("span", "", span("at", "@"), p.name), span("count", p.done + "/" + p.total + " done" + effort)));
+      const fold = h("button", "fold", icon(CHEVRON, 14), span("at", "@"), p.name);
+      fold.setAttribute("aria-expanded", String(!shut));
+      fold.title = open ? "Projects stay open while a search or filter is on" : shut ? "Show this project's tasks" : "Hide this project's tasks";
+      fold.disabled = open;
+      fold.onclick = () => {
+        collapsed[collapsed.has(key) ? "delete" : "add"](key);
+        store.set("collapsed", JSON.stringify([...collapsed]));
+        plannerView();
+      };
+      out.append(h("h3", "ph" + (shut ? " shut" : ""), fold, span("count", p.done + "/" + p.total + " done" + effort)));
+      if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
       for (const t of p.tasks) out.append(treeNode(t));
       if (!p.tasks.length) out.append(h("div", "empty", "No tasks"));

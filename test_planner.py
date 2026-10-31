@@ -675,6 +675,38 @@ class TestAddAssignees(EditBase):
                 planner.add_assignees("- a (KA)\n", 1, bad)
 
 
+class TestSetAssignees(EditBase):
+    def test_replace_in_place(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "team offsite")
+        out = planner.set_assignees(text, t.line, "KA, JS", t.title)
+        self.assert_one_line_changed(text, out, t.line, "- team offsite (KA, JS) (xl) Feb16--18\n")
+
+    def test_remove(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "finish proposal")
+        out = planner.set_assignees(text, t.line, "  ", t.title)
+        self.assert_one_line_changed(text, out, t.line, "- finish proposal (l) Oct24\n")
+        self.assertEqual(planner.set_assignees("- a (KA)\n", 1, ""), "- a\n")
+        with self.assertRaises(planner.EditError):
+            planner.set_assignees("- a\n", 1, "")
+
+    def test_several_groups_become_one(self):
+        self.assertEqual(planner.set_assignees("- a (KA) b (RT) Oct24\n", 1, "JS"), "- a (JS) b Oct24\n")
+        self.assertEqual(planner.set_assignees("- a (KA) b (RT)\n", 1, ""), "- a b\n")
+
+    def test_add_when_none_and_no_change(self):
+        self.assertEqual(planner.set_assignees("- a (m) Oct24\n", 1, "rt".upper()), "- a (RT) (m) Oct24\n")
+        self.assertEqual(planner.set_assignees("- a (KA, RT)\n", 1, "KA RT KA"), "- a (KA, RT)\n")
+
+    def test_rejects_bad_and_stale(self):
+        for bad in ("ka", "ABCDE", "K1"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_assignees("- a (KA)\n", 1, bad)
+        with self.assertRaises(planner.EditError):
+            planner.set_assignees("- a (KA)\n", 1, "RT", "b")
+
+
 class TestAddSubtask(EditBase):
     def test_goes_after_last_subtask_and_its_notes(self):
         text = read_example()
@@ -869,6 +901,7 @@ class TestServer(Base):
         text = "@P\n- a\n"
         for op, value, want in [("date", "Oct24", "@P\n- a Oct24\n"), ("assign", "KA", "@P\n- a (KA)\n"),
                                 ("effort", "m", "@P\n- a (m)\n"),
+                                ("who", "KA, RT", "@P\n- a (KA, RT)\n"),
                                 ("subtask", "b", "@P\n- a\n\t- b\n")]:
             code, d = self.post("/api/edit", {"text": text, "line": 2, "op": op, "value": value, "title": "a"})
             self.assertEqual((code, d["text"]), (200, want))

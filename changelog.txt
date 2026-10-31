@@ -1,8 +1,23 @@
-Planner - changelog
-===================
+KAFEEN Planner - changelog
+==========================
 
 Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
+
+
+1.3.2  2026-10-31  KAFEEN Planner; edit initials; fold projects
+-----------------------------------------------------------------
+- The app is now KAFEEN Planner: a small logo (three timeline bars), the
+  name in the header and the browser tab, and a matching tab icon.
+- Who cell: it opens with the task's current initials, so you can change
+  them or empty the box to remove them.
+- Projects tab: click a project's name to fold its tasks away; click again
+  to open it. Remembered in the browser; everything opens while a search
+  or filter is on.
+- Period control: after stepping to another month or season, the date
+  turns blue; click it to jump back to this month or season. The menu for
+  All dates / By month / By season is now the small arrow next to it.
+Code: set_assignees (op "who"), _initials; pMid / pCaret; collapsed set.
 
 
 1.3.1  2026-10-31  Compact rows, edit in the columns
