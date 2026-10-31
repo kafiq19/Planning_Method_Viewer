@@ -383,7 +383,10 @@ class TestExample(Base):
         self.assertEqual([c["head"] for c in d["timeline"]["columns"]],
                          ["O 26", "N", "D", "J 27", "F", "M", "A", "M", "J", "J", "A", "S"])
         self.assertIsNone(d["period"])
-        self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["update handbook"])
+        self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["meet w. clients", "interviews", "update handbook"])
+        gather = next(r for r in d["timeline"]["rows"] if r["title"] == "gather requirements")   # done tasks are sent; the page hides them on request
+        self.assertEqual(gather["status"], "done")
+        self.assertNotIn("gather requirements", "\n".join(planner.view_timeline(self.ps)))
         self.assertEqual([p["name"] for p in d["people"]], ["JS", "KA", "RT", "(unassigned)"])
         self.assertEqual([t["title"] for t in d["upcoming"]["overdue"]], ["site visit prep"])
         agenda = next(r for r in d["timeline"]["rows"] if r["title"] == "plan agenda")

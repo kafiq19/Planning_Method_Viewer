@@ -5,6 +5,13 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.3  2026-10-31  Timeline follows "Show done tasks"
+-------------------------------------------------------
+- Timeline now lists done tasks (faded) when "Show done tasks" is on, and
+  hides them when it is off, like Projects. The CLI timeline is unchanged.
+Code: timeline_rows(projects, done=False); to_data passes done=True.
+
+
 1.3.2  2026-10-31  KAFEEN Planner; edit initials; fold projects
 -----------------------------------------------------------------
 - The app is now KAFEEN Planner: a small logo (three timeline bars), the

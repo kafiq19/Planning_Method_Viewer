@@ -169,6 +169,7 @@ table.tl td.name .ttl { white-space: nowrap; overflow: hidden; text-overflow: el
 table.tl td.c { padding: 2px 0; } table.tl td.c i { display: block; height: 8px; background: var(--bar-off); }
 table.tl td.c + td.c i:not(.on) { border-left: 1px solid var(--panel); }   /* month gaps on the track; bars run unbroken */
 table.tl td.c i.on { background: var(--bar); }
+table.tl tr.done td.c i.on { opacity: .4; }
 table.tl td.c i.s { border-radius: 4px 0 0 4px; } table.tl td.c i.e { border-radius: 0 4px 4px 0; } table.tl td.c i.s.e { border-radius: 4px; }
 table.tl td.w { font-size: 13px; color: var(--muted); }
 table.tl td.w.late { color: var(--bad); font-weight: 600; }
@@ -580,12 +581,13 @@ function filtered(d) {
     return self || children.length ? { ...t, children, dim: !self } : null;
   };
   const flat = list => list.filter(t => keep(t, t.project));
+  const shown = t => filt.done || t.status !== "done";     // Projects and Timeline list done tasks unless "Show done tasks" is off
   const u = d.upcoming;
   return { ...d, filtered: true,
     projects: d.projects.map(sec => ({ ...sec,
       projects: sec.projects.map(p => ({ ...p, tasks: p.tasks.map(t => prune(t, p.name)).filter(Boolean) }))
         .filter(p => p.tasks.length) })).filter(sec => sec.projects.length),
-    timeline: { ...d.timeline, rows: flat(d.timeline.rows), unscheduled: flat(d.timeline.unscheduled) },
+    timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
     people: d.people.filter(g => !filt.who || g.name === filt.who)
       .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
     upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) } };
@@ -853,7 +855,7 @@ function vTimeline(d) {
       const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
       const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
-      const tr = h("tr", "", nm);
+      const tr = h("tr", t.status === "done" ? "done" : "", nm);
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];
         const cell = h("i", on ? "on" : "");

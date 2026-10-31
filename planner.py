@@ -456,12 +456,12 @@ def period_columns(kind, year, index):
     return cols
 
 
-def timeline_rows(projects):
-    """Open tasks -> (rows sorted by date, unscheduled). Row = (start, end, project, task, how)."""
+def timeline_rows(projects, done=False):
+    """Open tasks (and done ones with `done`) -> (rows sorted by date, unscheduled). Row = (start, end, project, task, how)."""
     rows, unscheduled = [], []
     for p in projects:
         for t in p.all_tasks():
-            if t.status == "done":
+            if t.status == "done" and not done:
                 continue
             sp = t.span()
             if sp:
@@ -658,7 +658,7 @@ def to_data(projects, period=None):
             "tasks": shown})
 
     first, last = cols[0][1], cols[-1][2]
-    rows, unscheduled = timeline_rows(projects)
+    rows, unscheduled = timeline_rows(projects, done=True)   # the page hides done ones unless "Show done tasks"
     if period:
         rows = [r for r in rows if r[0] <= last and r[1] >= first]
         unscheduled = []
