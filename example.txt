@@ -3,12 +3,12 @@ Fall Planning  Sep01--Dec19
 @HDC
 -- client: Harbour Development Corp
 !- meet w. clients (KA)
-- finish proposal (KA) Oct24
-	!- gather requirements (RT)
-	~- complete powerpoint (JS) Oct20--23 *Oct19
+- finish proposal (KA) (l) Oct24
+	!- gather requirements (RT) (s)
+	~- complete powerpoint (JS) (m) Oct20--23 *Oct19
 		-- use Q3 numbers from Lisa's deck
 		- review with KA Oct22
-	- send to board Oct24 *Oct23
+	- send to board (s) Oct24 *Oct23
 ~- annual report ~Q1
 	-- kickoff after holidays
 	- draft outline (KA) ~Jan
@@ -18,9 +18,9 @@ Fall Planning  Sep01--Dec19
 
 @MDM
 !- interviews (KA, RT)
-- onboard new hire Oct26--Nov06
+- onboard new hire (m) Oct26--Nov06
 	-- laptop, accounts, buddy
-	- set up accounts (RT) Oct26
+	- set up accounts (RT) (xs) Oct26
 	- first-week check-in Nov06 *weekly Fri
 - quarterly review (KA) Dec08--12 *Dec01
 - budget planning ~Q2
@@ -29,7 +29,7 @@ Winter Planning  Jan04--Mar31
 
 @OPS
 - renew software licenses ~wk3 *Jan08
-- team offsite (KA, RT, JS) Feb16--18
+- team offsite (KA, RT, JS) (xl) Feb16--18
 	- book venue Jan15 *monthly 1st
 	- plan agenda (KA)
 - update handbook

@@ -1,0 +1,385 @@
+KAFEEN Planner - changelog
+==========================
+
+Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
+for people using the tool, then notes for anyone working on the code.
+
+
+1.4.0  2026-10-31  Several files at once, as tabs
+-------------------------------------------------
+- New: files you open in the page are tabs in the header. Open more with
+  the + after the tabs, click a tab to switch, x to close it (the file
+  stays on disk). Each saves itself about a second after each change, and
+  switching saves the one you leave first.
+- New: the planner remembers your tabs. Start it again and the same files
+  open, on the tab you were using. A file that was moved or deleted is
+  left out, with a message saying so.
+- New: New file... in the file browser makes an empty notes file in the
+  folder you're looking at and opens it.
+- Changes that couldn't be saved (a conflict, a failed write) are kept per
+  file and come back when you return to its tab. Closing a tab that still
+  has them asks first.
+- The text you type without a file is kept separately and comes back when
+  you close the last tab.
+- Removed: the Reopen button and Close file in the menu (tabs replace them).
+- --serve notes.txt (a file on the command line) works as before: one file,
+  saved with Save.
+- Code: make_server keeps a list of open files; /api/file takes `path`;
+  new POST /api/close; /api/open takes `create`; 409 notOpen for a file
+  that isn't open (the page reopens it and retries). Page: showTabs,
+  switchTo, leaveFile, closeTab, remember / draft:<path>, openFiles and
+  activeFile in localStorage. AGENTS.md has design notes for this feature.
+
+
+1.3.15  2026-10-31  Edit a task by clicking its title
+-------------------------------------------------
+- New: click a task's title in the planner to edit it. The box shows the
+  task's text as you wrote it after the dash, initials, effort and dates
+  included, so you can change any of it; Enter saves, Esc cancels, Undo
+  works. Only that line's text changes. With Edit alongside on, a click
+  still jumps to the line in the text instead.
+- Fix: a refused edit's message no longer ends in "undefined".
+- If the server was started before this version, clicking a title says
+  to restart it, instead of opening an empty box.
+- Code: new edit op `text` (set_text); Task.text and the `text` field in
+  to_data; editCell takes `fill`.
+
+
+1.3.14  2026-10-31  Fold people in People
+-------------------------------------------------
+- New: in the People tab, click a person's initials to fold their tasks
+  away or open them again, the same as projects in Projects. Remembered
+  in the browser; everything opens while a search or filter is on.
+- Code: foldHead (shared by vProjects and vPeople); localStorage key
+  collapsedPeople.
+
+
+1.3.13  2026-10-31  Jump to a task's line
+-------------------------------------------------
+- New: with Edit alongside on, clicking a task in the planner (any tab,
+  Timeline rows too) selects its line in the text and scrolls it into
+  view. Clicking its circle, Who, Effort, Date or + still edits as before.
+  Nothing in your text changes.
+- Code: goToLine and a delegated click on #viewPane in web/index.html;
+  Timeline rows carry data-line.
+
+
+1.3.12  2026-10-31  Text size and font
+-------------------------------------------------
+- New: Text size and Font in the ⋯ menu, remembered in the browser.
+  Text size has four steps (Small, Default, Large, Larger) and applies to
+  the text editor and the views. Font offers System, Rounded, Serif,
+  Legible, Condensed and Monospace for the Planner and Markdown views; the
+  text editor stays fixed-width so tab indents line up. Only fonts already
+  on your computer are used (nothing is downloaded).
+- Code: SIZES, FONTS and applyText in web/index.html; CSS variables --fz
+  and --vfont; the views' font sizes and column widths are calc(... * --fz).
+
+
+1.3.11  2026-10-31  Extra-small effort
+-------------------------------------------------
+- New: effort size (xs), extra small, worth 1 point (the same as (s)).
+  Write it like the others, `fix typo (KA) (xs) Oct24`, or pick XS in the
+  Effort cell's list.
+- Code: RE_EFFORT and EFFORT take xs; EFFORTS in web/index.html.
+
+
+1.3.10  2026-10-31  Effort column; pick effort from a list
+-------------------------------------------------
+- Changed: the "Size" column is now called "Effort".
+- Changed: clicking a task's Effort cell opens a short list (S, M, L, XL
+  with their points, and None) instead of a text box. Pick one with a
+  click, or with the arrow keys and Enter; Esc cancels.
+- Code: pickCell (single-choice list under a cell) and EFFORTS in
+  web/index.html; the Effort column is 44px wide.
+
+
+1.3.9  2026-10-31  Add tasks from the planner views
+-------------------------------------------------
+- New: "+ Add task" adds a task to a project without leaving Planner mode:
+  at the end of each project in Projects, under each person in People
+  (their initials are filled in), and at the bottom of Timeline and
+  Upcoming, where you pick the project. The task goes at the end of the
+  project as one new line; nothing else in your text changes. Undo works.
+- Code: new edit op `task` (add_task); Project.line; to_data adds each
+  project's `line` and a `targets` list of all projects.
+
+
+1.3.8  2026-10-31  Cell editor stays visible in a narrow pane
+-------------------------------------------------
+- Fix: with Edit alongside in a narrow window, clicking Who, Size or Date
+  opened its input box partly off the left side of the planner pane, under
+  the text editor. The box now stays inside the row and sits on the line of
+  the cell you clicked.
+- Code: editCell clamps the box to the row and sizes it to the cell's line;
+  removed a stray `}` after the narrow-pane container query that made the
+  browser drop the `:focus` rule after it.
+
+
+1.3.7  2026-10-31  Fix the Open file dialog
+-------------------------------------------------
+- Fix: when the folder list couldn't be loaded, the Open file dialog stayed
+  empty and kept reopening, so Cancel seemed to do nothing. It now closes
+  properly and says what is wrong.
+- A server started before 1.3.6 serves the new page but can't list folders:
+  the dialog now says to restart it (Ctrl-C, then python3 planner.py --serve),
+  and offers "Load a file's text instead".
+Code: the hidden file input moved out of the Open file menu item; fileApi()
+copes with answers that aren't JSON.
+
+
+1.3.6  2026-10-31  Open file works in every browser; file name in the header
+-------------------------------------------------------------------------------
+- Fix: 1.3.5's autosave relied on a browser feature that Brave (and Safari
+  and Firefox) leave switched off, so opened files were never saved. Open
+  file now shows a small file browser of your home folder; the local server
+  opens the file you pick and saves it, in any browser.
+- Files opened this way save automatically about a second after each change,
+  with the same "changed on disk" protection as before.
+- The header shows which file is open: a document icon and its name ("Untitled"
+  when none), the full path on hover, then "Saving..." / "Saved". Click it to
+  open another file.
+- After restarting the server, "Reopen fall.txt" in the header opens the file
+  again. Close file (in ...) stops saving to it.
+Code: GET /api/browse and POST /api/open (inside browse_root, default the home
+folder); make_server(port, notes_path, browse_root); the page's picker dialog
+and file chip; the browser file-handle code from 1.3.5 is gone.
+
+
+1.3.5  2026-10-31  Autosave for files opened in the page
+----------------------------------------------------------
+- In Chrome, Edge or Brave, a file opened with Open file (or dropped on the
+  page) is now saved back to that file automatically, about a second after
+  each change. The header shows "Saving..." then "Saved".
+- If the file was changed elsewhere, autosave stops and asks: load the disk
+  version or keep yours. Windows (CRLF) line endings are kept.
+- After a reload the file reopens by itself, or a "Reopen notes.txt" button
+  appears. "Close file" in the ... menu stops saving to it.
+- Files given on the command line (--serve notes.txt) still save only when
+  you press Save. Other browsers: Open file loads the text, Save downloads.
+Code: picked-file mode in web/index.html (showOpenFilePicker /
+getAsFileSystemHandle, handle kept in IndexedDB, AUTOSAVE_MS); save(),
+conflict() and the focus check work for both kinds of file.
+
+
+1.3.4  2026-10-31  Shorter season name in the period control
+---------------------------------------------------------------
+- The period control shows "Fall 2026" instead of "Fall 2026 (Sep-Dec)";
+  the line above the list still gives the months.
+Code: to_data's period adds "short".
+
+
+1.3.3  2026-10-31  Timeline follows "Show done tasks"
+-------------------------------------------------------
+- Timeline now lists done tasks (faded) when "Show done tasks" is on, and
+  hides them when it is off, like Projects. The CLI timeline is unchanged.
+Code: timeline_rows(projects, done=False); to_data passes done=True.
+
+
+1.3.2  2026-10-31  KAFEEN Planner; edit initials; fold projects
+-----------------------------------------------------------------
+- The app is now KAFEEN Planner: a small logo (three timeline bars), the
+  name in the header and the browser tab, and a matching tab icon.
+- Who cell: it opens with the task's current initials, so you can change
+  them or empty the box to remove them.
+- Projects tab: click a project's name to fold its tasks away; click again
+  to open it. Remembered in the browser; everything opens while a search
+  or filter is on.
+- Period control: after stepping to another month or season, the date
+  turns blue; click it to jump back to this month or season. The menu for
+  All dates / By month / By season is now the small arrow next to it.
+Code: set_assignees (op "who"), _initials; pMid / pCaret; collapsed set.
+
+
+1.3.1  2026-10-31  Compact rows, edit in the columns
+-----------------------------------------------------
+- Task rows are tighter (closer to the old look) and the Who / Size / Date
+  columns are narrower and sit closer to the titles, so tasks stay readable
+  with "Edit alongside" on.
+- No more hover buttons. Click a task's Who, Size or Date cell to change it
+  right there, or the + at the end of the row to add a subtask. Empty cells
+  show a faint + when you point at the row.
+- Loose dates show short (~Q1, full range on hover). Dates that come from a
+  parent or from subtasks are in italics instead of "(via parent)".
+- In a narrow pane or on a phone, a task's details sit on a line under its
+  title, lined up with it.
+- Timeline: tighter rows, and each bar is one unbroken bar.
+- The tabs have space between them again.
+Code: cellButton(), editCell() replace actions() / ask(); task data adds
+"loose"; a container query on .content handles narrow panes.
+
+
+1.3.0  2026-10-31  A calmer, simpler page
+------------------------------------------
+Phase 1, layout:
+- The header holds just the name, the file, its save state, the mode switch
+  and a "..." menu. Open file, Save, Edit alongside, Dark/Light mode and
+  Today moved into that menu. In file mode, "Saved" turns into an
+  "Unsaved - Save" button when there is something to save.
+- "Plain" mode is now called "Text".
+- Planner mode has one tool row: the tabs, then search, a Filter button
+  (person, project, show done; it shows how many are on) and the period.
+- The period is one compact control, "< Oct 2026 v >". Its menu picks All
+  dates, By month or By season and jumps back to this month or season; the
+  arrows say where they go when you hover them.
+- A quiet line above the list says which period is showing (and the Today
+  date, when it is set). Edit messages and Undo appear at the bottom of the
+  window, so nothing jumps.
+Phase 2, task rows:
+- Status is a circle you click: empty for open, half-filled for in
+  progress, ticked for done.
+- No more cards: one clean list. Initials, size and date sit in columns on
+  the right, labelled once per section. Details are plain grey text; colour
+  is kept for status, overdue (red) and the effort badge.
+- A small bell before a date means the task has a reminder (hover for it).
+- The hover actions are now Date, Size, Who and Subtask, and they no
+  longer push the row around.
+- Upcoming hides empty groups. The Timeline has slimmer bars, and its task
+  names stay in view when the chart scrolls sideways.
+Phase 3, polish:
+- Grey text and the overdue red are a little darker, so they are easy to
+  read on white and on the highlighted row.
+- Moving around with the keyboard shows a clear focus outline.
+- On a narrow window or phone the editor and views stack, and a task's
+  initials, size and date move onto a line under its title.
+- With no notes yet, Planner mode says how to start and offers "Load the
+  example".
+Code: popup() / closePops() for menus, showToast(), contextLine, pctl;
+GET /api/example and welcome(); taskNode(t, {project, span, depth, date, rem}), MARK, colHead; icons are
+inline SVG.
+
+
+1.2.9  2026-10-31  Effort badge colour
+---------------------------------------
+- Planner mode: the S / M / L / XL effort badge is now a solid deep purple
+  with white text, so it stands out from initials and dates. Dark mode uses a
+  brighter purple.
+- Code: new --effort / --effort-text colour tokens in web/index.html.
+
+
+1.2.8  2026-10-30  Effort
+-------------------------
+- New marker: (s), (m), (l) or (xl) on a task gives its effort, worth 1, 3,
+  5 or 8 points, as in "finish proposal (KA) (m) Oct24". Lowercase only, so
+  (M) is still initials. One per task; "file(s)" is just text.
+- Effort belongs to its task: a parent's effort isn't worked out from its
+  subtasks, and subtasks don't take their parent's. Totals simply add up.
+- Projects view: tasks show [M] and each project shows "9 of 10 pts left".
+  People view: each person shows their open points.
+- Planner mode: a small grey S / M / L / XL badge on each sized task, the
+  points in project and person card headers, and a "size" action on hover to
+  set, change or clear (empty box) a task's effort, with Undo.
+- "+who" now puts a new (...) group before the effort, as in (KA) (m) Oct24.
+Code: RE_EFFORT, EFFORT, effort_points; Task.effort / points / at["effort"];
+set_effort (op "effort"); to_data adds task effort / points, project
+points {left, total} and people points. example.txt has six sized tasks.
+
+
+1.2.7  2026-10-30  Month and season view
+-----------------------------------------
+- Planner mode has a new dropdown at the start of the filter bar: All dates,
+  Month or Season. Seasons are Winter (Jan-Apr), Summer (May-Aug) and Fall
+  (Sep-Dec), inclusive.
+- Choosing "By month" or "By season" starts at the current one, shown in the
+  middle and marked "this month" / "this season". The buttons either side say
+  where they go ("< Sep 2026", "Nov 2026 >") and step across years; "This
+  month" / "This season" comes back to the current one.
+- Projects, Timeline and People then show only tasks whose dates overlap the
+  period, including dates taken from a parent or rolled up from subtasks.
+  Undated tasks are hidden. Upcoming still shows the next 14 days.
+- The Timeline's columns become the period: the four months of a season, or
+  the weeks (Mon-Sun) of a month.
+- The choice is remembered in the browser, and edits keep it.
+Code: SEASONS and period_* functions in planner.py; to_data(projects, period),
+whose "period" carries labels for prev / next / now and a "current" flag;
+/api/parse and /api/edit take "period"; timeline "months" is now "columns"
+[{head, start, end}].
+
+
+1.2.6  2026-10-29  Filters
+--------------------------
+- Planner mode has a filter bar above the tabs: search (task titles, notes
+  and project names; Esc clears), a person picker (including "(unassigned)"),
+  a project picker, "Show done" and "Clear". Works in all four tabs.
+- In the Projects tab, a parent that doesn't match stays visible, faded, when
+  one of its subtasks matches.
+- Filter choices are remembered in the browser.
+- Added this changelog.
+Code: filtered() in web/index.html narrows a copy of the /api/parse data, so
+the page still never reads the note format. AGENTS.md has a new Roadmap
+section with the designs for the check view and calendar export.
+
+
+1.2.5  2026-10-29  Edit a notes file in place
+---------------------------------------------
+- New: python planner.py --serve notes.txt opens that file in the page, and
+  Save (or Ctrl/Cmd-S) writes straight back to it. Without a file, Save still
+  downloads.
+- The header shows "saved" or "unsaved".
+- If the file changed on disk since it was loaded, nothing is overwritten:
+  choose "Load disk version" or "Keep mine and overwrite". Returning to the
+  page after editing the file elsewhere picks up the change.
+- The page asks before closing with unsaved changes. Nothing saves by itself.
+- Files with Windows (CRLF) line endings keep them. Saves are atomic and keep
+  the file's permissions. The file may be new (created on first Save).
+- Security: the local server now refuses requests from other websites.
+Code: read_notes, write_notes, file_version, FileConflict;
+make_server(port, notes_path); GET/POST /api/file; Host/Origin checks and
+JSON-only POSTs on every /api/* request.
+
+
+1.2.4  2026-10-29  Dates, initials and subtasks from the views
+--------------------------------------------------------------
+- Hover a task (Projects, People, Upcoming, Unscheduled) for "date", "+who"
+  and "+sub". Type and press Enter; Esc cancels.
+  - date: sets or replaces the task's date in place; an empty box clears it.
+  - +who: adds initials to the existing (...) group, or adds a new group
+    before the date, as in "finish proposal (KA) Oct24".
+  - +sub: adds a subtask after the task's last subtask, one tab deeper.
+- Every edit can be undone, and is refused rather than guessed at if it
+  wouldn't read back as intended.
+Code: Task.at, Task.date_text and Task.col record where each token sits;
+set_date, add_assignees, add_subtask; /api/edit now takes {op, value}.
+
+
+1.2.3  2026-10-29  Change status from the views
+-----------------------------------------------
+- In Planner mode, click a task's box ([ ], [~], [x]) to cycle it open ->
+  in progress -> done -> open. Works in every tab, including the timeline.
+- Only the mark at the start of that line changes in your text. An Undo
+  button appears after each change.
+- Rule change (agreed with the user): the tool may now edit notes, but only on
+  an explicit user action, touching only what it must. See AGENTS.md rule 3.
+Code: set_status, EditError, POST /api/edit; make_server split out of serve
+so tests can run a real server.
+
+
+1.2.2  2026-10-29  Line numbers and clearer errors
+--------------------------------------------------
+- Mistakes on the command line now print a one-line message instead of a
+  Python traceback: a mistyped view name (e.g. "timline"), a missing file,
+  two files, or a missing or invalid --today / --port value.
+- View names work in any case (PEOPLE, people).
+- Hovering a task in the web page shows its line number.
+Code: Task.line (1-based) for tasks and headings, sent by to_data;
+take_option in main.
+
+
+1.2.1  2026-10-29  Automated tests
+----------------------------------
+- New test_planner.py (standard library only): python -m unittest -v
+- Covers the note format, date resolution, the example.txt checklist, the
+  web page data and the command line.
+
+
+1.2.0  2026-10-12  Initial version
+----------------------------------
+- planner.py reads plain-text planning notes and prints four views:
+  projects, timeline, people and upcoming.
+- Note format: headings, @projects, tab-indented tasks with open / ~ in
+  progress / ! done, -- notes, (initials), dates without years (Oct24,
+  Oct23--26, ~Q1, ~Nov, ~wk43) and reminders (*Oct17, *daily, *weekly Fri,
+  *monthly 1st).
+- --today to view as of another day.
+- --serve opens a local web page with Plain, Planner and Markdown modes,
+  Open file / drag and drop, Save (download) and dark mode.

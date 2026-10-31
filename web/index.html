@@ -3,80 +3,272 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Planner</title>
+<title>KAFEEN Planner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233b6cf6'/%3E%3Crect x='5' y='6.5' width='9' height='2.6' rx='1.3' fill='white'/%3E%3Crect x='8' y='10.7' width='11' height='2.6' rx='1.3' fill='white'/%3E%3Crect x='5' y='14.9' width='6' height='2.6' rx='1.3' fill='white'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7384; --line: #e2e5eb;
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5f6778; --line: #e2e5eb;
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
-  --open: #6b7384; --doing: #c77700; --done: #2f9e5b; --bad: #d63c3c; --bad-bg: #fde8e8;
-  --code: #eef0f4;
+  --open: #5f6778; --doing: #c77700; --done: #2f9e5b; --bad: #c42f2f; --bad-bg: #fde8e8;
+  --code: #eef0f4; --hover: #f1f3f7; --logo-ink: #ffffff; --effort: #4b1d8f; --effort-text: #ffffff;
+  --fz: 1; --vfont: -apple-system, "Segoe UI", system-ui, sans-serif;   /* text size and font, chosen in the ⋯ menu */
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
   --accent: #6d93ff; --accent-text: #0e1220; --bar: #6d93ff; --bar-off: #252a37;
   --open: #98a0b3; --doing: #f0a63a; --done: #4cc47f; --bad: #ff7b7b; --bad-bg: #3a2024;
-  --code: #252a37;
+  --code: #252a37; --hover: #252a37; --logo-ink: #12151c; --effort: #7b3fe4; --effort-text: #ffffff;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
        display: flex; flex-direction: column; }
-header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px;
+header { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 20px;
          background: var(--panel); border-bottom: 1px solid var(--line); }
-header h1 { font-size: 17px; margin: 0 6px 0 0; }
-button, .btn, input[type=text], select { font: inherit; color: var(--text); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+.brand { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); user-select: none; }   /* logo: three timeline bars */
+.brand .bname { color: var(--text); font-size: 15px; font-weight: 800; letter-spacing: .14em; }
+.brand .bsub { color: var(--muted); font-size: 15px; font-weight: 400; margin-left: -2px; }
+button, .btn, input[type=text], input[type=search], select { font: inherit; font-size: 14px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:hover, .btn:hover { border-color: var(--accent); }
-input[type=text] { cursor: text; width: 7.5em; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.seg button { border: 0; border-radius: 0; }
-.seg button + button { border-left: 1px solid var(--line); }
-.seg button.on, .tabs button.on { background: var(--accent); color: var(--accent-text); }
-label.chk { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+#fileStatus { display: inline-flex; align-items: center; gap: 6px; }
+#fileStatus.bad { color: var(--bad); }
+#fileStatus button { padding: 1px 8px; font-size: 13px; }
+button:disabled:hover { border-color: var(--line); }
+input[type=text], input[type=search] { cursor: text; }
+.ghost { background: none; border-color: transparent; color: var(--muted); }
+.ghost:hover { color: var(--text); border-color: transparent; background: var(--hover); }
+.filechip { display: inline-flex; align-items: center; gap: 6px; max-width: 32ch; padding: 3px 8px; border: 0; border-radius: 6px;
+  background: var(--hover); color: var(--text); font-size: 13px; }
+.filechip svg { flex: none; color: var(--muted); }
+.filechip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filechip.none { background: none; color: var(--muted); }
+.filechip:disabled { opacity: 1; cursor: default; }
+/* open files as tabs in the header: [name ×] [name ×] + ; the active one is filled, a red dot marks unsaved edits */
+.ftabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
+.ftabs::-webkit-scrollbar { display: none; }
+.ftab { display: inline-flex; align-items: center; flex: none; max-width: 24ch; border-radius: 6px; color: var(--muted); }
+.ftab:hover { background: var(--hover); color: var(--text); }
+.ftab.on { background: var(--hover); color: var(--text); }
+.ftab .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; color: inherit;
+  font-size: 13px; padding: 3px 2px 3px 10px; }
+.ftab.on .n { font-weight: 600; cursor: default; }
+.ftab.warn .n::after { content: " •"; color: var(--bad); }
+.ftab .x { flex: none; width: 20px; height: 20px; margin-right: 3px; padding: 0; border: 0; border-radius: 4px; background: none;
+  color: var(--muted); font-size: 15px; line-height: 1; visibility: hidden; }
+.ftab.on .x, .ftab:hover .x, .ftab .x:focus-visible { visibility: visible; }
+.ftab .x:hover { background: var(--line); color: var(--text); }
+@media (hover: none) { .ftab .x { visibility: visible; } }
+.ftadd { flex: none; padding: 1px 8px; font-size: 16px; line-height: 1.2; }
+.picker { width: min(460px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); color: var(--text); box-shadow: 0 16px 40px rgba(20, 25, 40, .25); }
+.picker::backdrop { background: rgba(10, 14, 22, .35); }
+.phead { display: flex; justify-content: space-between; align-items: center; padding: 12px 12px 6px 16px; }
+.ppath { padding: 0 16px 8px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plist { max-height: 50vh; overflow: auto; padding: 4px 8px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pitem { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none;
+  text-align: left; font-size: 14px; }
+.pitem:hover, .pitem:focus-visible { background: var(--hover); }
+.pitem svg { flex: none; color: var(--muted); }
+.pitem.dir svg { color: var(--accent); }
+.pmsg { display: flex; flex-direction: column; gap: 10px; padding: 12px 8px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.pfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px 12px 16px; font-size: 12px; color: var(--muted); }
+.pfoot button { font-size: 13px; padding: 3px 10px; }
+.pnew { display: flex; gap: 6px; width: 100%; }
+.pnew input { flex: 1; min-width: 0; font-size: 13px; padding: 3px 8px; border-color: var(--accent); }
+.pill { font-size: 13px; padding: 2px 10px; border-radius: 12px; color: var(--accent); border-color: var(--accent); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--code); border-radius: 8px; }
+.seg button { border: 0; background: none; color: var(--muted); padding: 4px 12px; font-size: 13px; }
+.seg button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 25, 40, .15); }
 .spacer { flex: 1; }
 .hint { color: var(--muted); font-size: 13px; }
+.pop { position: relative; display: inline-flex; }
+.menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 240px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 8px 24px rgba(20, 25, 40, .14); }
+.mi { display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%; padding: 7px 10px; border: 0;
+  border-radius: 6px; background: none; text-align: left; font-size: 14px; color: var(--text); cursor: pointer; }
+.mi:hover, .mi:focus-visible { background: var(--hover); }
+.mi:disabled { background: none; }
+.mi .k { color: var(--muted); font-size: 12px; }
+.mi .seg button { padding: 2px 9px; line-height: 1.2; }
+.mi select { font-size: 13px; padding: 3px 6px; max-width: 9.5em; }
+.mi input[type=text] { width: 7.5em; font-size: 13px; padding: 3px 7px; }
+.sep { height: 1px; background: var(--line); margin: 5px 4px; }
+.panel { padding: 14px; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
 main { flex: 1; min-height: 0; display: flex; }
 .pane { flex: 1; min-width: 0; overflow: auto; }
 #editorPane { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 #editorPane.solo { border-right: 0; }
 textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 16px; background: var(--panel);
-  color: var(--text); font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
-#viewPane { padding: 18px 24px 40px; }
+  color: var(--text); font: calc(14px * var(--fz))/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
+#viewPane { padding: 0; }
+.toolbar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 0 20px; padding: 0 24px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.tabs { display: inline-flex; gap: 18px; }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 10px 2px; color: var(--muted); }
+.tab:hover { border-color: transparent; border-bottom-color: var(--line); color: var(--text); }
+.tab.on, .tab.on:hover { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
+.search { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: var(--panel); color: var(--muted); }
+.search:focus-within { border-color: var(--accent); }
+.search input { border: 0; padding: 5px 0; width: 12em; outline: 0; background: none; }
+.badge { font-size: 12px; line-height: 1.5; color: var(--accent-text); background: var(--accent); border-radius: 9px; padding: 0 6px; }
+.badge:empty { display: none; }
+.pctl { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; }
+.pctl > button, .pctl > .pop > button { border: 0; border-radius: 0; background: none; }
+.pctl > button, .pctl .pcaret { color: var(--muted); padding: 5px 9px; }
+.pctl > button:hover, .pctl .pcaret:hover { color: var(--text); background: var(--hover); }
+.pctl > .pmid { color: var(--text); font-weight: 600; padding: 5px 12px; }
+.pctl.on > .pmid { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.pctl.away > .pmid { color: var(--accent); }                 /* not the current period: click to come back */
+.pctl .pcaret { border-left: 1px solid var(--line); padding: 5px 8px; }
+.pctl:not(.on) .pcaret { border-left: 0; padding-left: 0; }
+.content { padding: 14px 24px 80px; }
+.context { font-size: calc(13px * var(--fz)); color: var(--muted); }
+.content > .context { margin-bottom: 10px; }
+.context:empty { display: none; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 32px); background: var(--text); color: var(--panel); padding: 8px 10px 8px 16px; border-radius: 10px;
+  font-size: 14px; box-shadow: 0 8px 24px rgba(20, 25, 40, .25); }
+.toast.bad { background: var(--bad); color: #ffffff; }
+.toast button { background: none; border: 0; color: inherit; font-weight: 600; padding: 2px 8px; }
+.toast button:hover { background: rgba(255, 255, 255, .15); }
 .hidden { display: none !important; }
+#viewPane.jump [data-line] { cursor: pointer; }      /* Edit alongside: a click on a task shows its line in the text */
+.measure { position: absolute; visibility: hidden; top: 0; left: -9999px; white-space: pre-wrap; overflow-wrap: break-word; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
-/* planner views */
-.tabs { display: inline-flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
-.tabs button.on { border-color: var(--accent); }
-h2.sec { margin: 26px 0 2px; font-size: 18px; }
-h2.sec:first-child { margin-top: 0; }
-.sec .when, .when { color: var(--muted); font-weight: normal; font-size: 13px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
-.card h3 { margin: 0 0 6px; font-size: 16px; display: flex; gap: 10px; align-items: baseline; }
-.count { color: var(--muted); font-weight: normal; font-size: 13px; }
-.task { padding: 2px 0; }
-.kids { margin-left: 22px; border-left: 1px solid var(--line); padding-left: 12px; }
-.box { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
-.s-open .box { color: var(--open); } .s-doing .box { color: var(--doing); } .s-done .box { color: var(--done); }
+/* the views' text: size and font from the ⋯ menu (the text editor takes the size only and stays monospace) */
+.content, .md { font-family: var(--vfont); font-size: calc(15px * var(--fz)); }
+/* planner views: plain lists, details in right-hand columns (Who, Effort, Date), colour only where it means something */
+#viewPane { background: var(--panel); }
+.content { container-type: inline-size; }
+.content > div { max-width: 900px; margin: 0 auto; }
+.when { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
+.count { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
+.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) 22px; align-items: center; column-gap: 6px; }
+.sechead { margin: 20px 0 0; padding: 0 8px 3px; border-bottom: 1px solid var(--line); }
+.sechead:first-child { margin-top: 4px; }
+.sechead h2 { margin: 0; font-size: calc(12px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sechead h2 .when { font-size: calc(12px * var(--fz)); letter-spacing: 0; text-transform: none; margin-left: 8px; }
+.sechead .c { font-size: calc(11px * var(--fz)); color: var(--muted); padding: 0 4px; }
+.sechead .c.r { text-align: right; }
+.sechead .c.mid { text-align: center; }
+h3.ph { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 10px 8px 1px; font-size: calc(15px * var(--fz)); font-weight: 600; }
+h3.ph .at { color: var(--muted); font-weight: normal; }
+h3.ph .fold { display: inline-flex; align-items: center; gap: 0; margin-left: -6px; padding: 1px 6px 1px 2px; border: 0; background: none;
+  font: inherit; color: inherit; border-radius: 5px; }
+h3.ph .fold:hover:not(:disabled) { background: var(--hover); }
+h3.ph .fold:disabled { opacity: 1; cursor: default; }
+h3.ph .fold svg { margin-right: 4px; color: var(--muted); transform: rotate(90deg); transition: transform .12s; }
+h3.ph.shut .fold svg { transform: none; }
+.task { min-height: calc(28px * var(--fz)); padding: 0 8px; border-radius: 5px; font-size: calc(14px * var(--fz)); }
+.task:hover, .task:focus-within { background: var(--hover); }
+.lead { display: flex; align-items: center; min-width: 0; padding: 3px 0; }
+.ttl { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.g { align-self: stretch; flex: none; width: 18px; margin: -3px 0 -3px 10px; border-left: 1px solid var(--line); }
+.proj { color: var(--muted); font-size: calc(13px * var(--fz)); margin-right: 8px; flex: none; }
+button.st { flex: none; width: 22px; height: 22px; padding: 0; margin-right: 6px; border: 1px solid transparent; border-radius: 11px;
+  background: none; display: inline-flex; align-items: center; justify-content: center; }
+button.st svg { width: 16px; height: 16px; }
+button.st:hover { border-color: var(--line); background: var(--panel); }
+button.st:disabled { opacity: .5; cursor: wait; }
+.s-open .st { color: var(--muted); } .s-doing .st { color: var(--doing); } .s-done .st { color: var(--done); }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
-.who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
-.who { color: var(--accent); border-color: var(--accent); }
-.flag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bad-bg); color: var(--bad); margin-left: 4px; }
-.note { color: var(--muted); font-size: 13.5px; margin-left: 1.4em; }
-.note::before { content: "— "; }
-.proj { color: var(--muted); font-size: 13px; margin-right: 6px; }
-table.tl { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-table.tl th, table.tl td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-table.tl th.m { text-align: center; font-size: 12px; color: var(--muted); width: 3.2%; }
-table.tl td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
-table.tl td.c { padding: 4px 2px; } table.tl td.c i { display: block; height: 14px; background: var(--bar-off); }
-table.tl td.c i.on { background: var(--bar); }
-table.tl td.c i.edge { border-radius: 7px; }
-.empty { color: var(--muted); font-style: italic; padding: 4px 0; }
+/* the Who / Effort / Date cells and the + (subtask) cell: click to edit; empty ones show a faint + on the row */
+.cell { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 4px; border: 0; border-radius: 4px;
+  background: none; color: var(--muted); font-size: calc(13px * var(--fz)); text-align: left; white-space: nowrap; overflow: hidden; }
+.cell.r { justify-content: flex-end; }
+.cell.mid { justify-content: center; }
+.cell:hover { background: var(--panel); color: var(--text); }
+.cell .t { overflow: hidden; text-overflow: ellipsis; }
+.cell .add { visibility: hidden; color: var(--muted); }
+.task:hover .cell .add, .cell:focus-visible .add { visibility: visible; }
+@media (hover: none) { .cell .add { visibility: visible; } }
+.cell.late { color: var(--bad); font-weight: 600; }
+.cell.inh .t { font-style: italic; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.task { position: relative; }
+.editbox { position: absolute; z-index: 5; display: flex; align-items: center; }
+.editbox input { width: 15em; font-size: calc(13px * var(--fz)); padding: 3px 8px; box-shadow: 0 4px 14px rgba(20, 25, 40, .15); border-color: var(--accent); }
+.editbox.wide input { width: 18em; }
+.editbox.fill input { width: 100%; }
+#viewPane:not(.jump) .task .ttl { cursor: text; }    /* click a title to edit the task's text (with Edit alongside, it jumps instead) */
+/* the Effort cell's pick list: one choice of S / M / L / XL / none */
+.pickbox { position: absolute; z-index: 30; display: flex; flex-direction: column; min-width: 130px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 25, 40, .18); }
+.pickbox .mi { padding: 5px 8px; font-size: calc(13px * var(--fz)); gap: 10px; justify-content: flex-start; }
+.pickbox .mi .k { margin-left: auto; }
+.pickbox .mi .ck { width: 1em; color: var(--accent); }
+/* "+ Add task" at the end of a project (and of each person, and of Timeline / Upcoming, with a project picker) */
+.addrow { display: flex; align-items: center; min-height: 28px; padding: 0 8px; }
+.addtask { border: 0; background: none; color: var(--muted); font-size: calc(13px * var(--fz)); padding: 2px 6px; margin-left: -4px; border-radius: 5px; }
+.addtask:hover { color: var(--text); background: var(--hover); }
+.addtask .plus { display: inline-block; width: 16px; text-align: center; margin-right: 4px; }
+.addform { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; padding: 2px 0; }
+.addform select { font-size: calc(13px * var(--fz)); padding: 3px 6px; max-width: 100%; }
+.addform input { flex: 1; min-width: 10em; font-size: calc(13px * var(--fz)); padding: 3px 8px; border-color: var(--accent); }
+.addform input:focus-visible { outline: none; }
+.eff { font-size: calc(11px * var(--fz)); font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
+.dim .lead > :not(.g), .dim .cell { opacity: .5; }
+.note { display: flex; color: var(--muted); font-size: calc(12.5px * var(--fz)); padding: 0 8px 3px; line-height: 1.35; }
+.note .pad { flex: none; width: 28px; }
+.empty { color: var(--muted); padding: 12px 8px; }
 .err { color: var(--bad); background: var(--bad-bg); padding: 12px 16px; border-radius: 8px; }
-h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.line { padding: 3px 0; border-bottom: 1px solid var(--line); }
-.line .d { display: inline-block; min-width: 8.5em; color: var(--muted); }
+h4.grp { margin: 18px 0 2px; padding: 0 8px; font-size: calc(12px * var(--fz)); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tlwrap { overflow-x: auto; }
+table.tl { border-collapse: collapse; width: 100%; font-size: calc(14px * var(--fz)); }
+table.tl th, table.tl td { padding: 2px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.tl th { font-size: calc(11px * var(--fz)); font-weight: 600; color: var(--muted); }
+table.tl th.m { text-align: center; width: 3.2%; }
+table.tl td.name { position: sticky; left: 0; background: var(--panel); max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+table.tl td.name .lead { display: inline-flex; vertical-align: middle; padding: 0; }
+table.tl td.name .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.tl td.c { padding: 2px 0; } table.tl td.c i { display: block; height: 8px; background: var(--bar-off); }
+table.tl td.c + td.c i:not(.on) { border-left: 1px solid var(--panel); }   /* month gaps on the track; bars run unbroken */
+table.tl td.c i.on { background: var(--bar); }
+table.tl tr.done td.c i.on { opacity: .4; }
+table.tl td.c i.s { border-radius: 4px 0 0 4px; } table.tl td.c i.e { border-radius: 0 4px 4px 0; } table.tl td.c i.s.e { border-radius: 4px; }
+table.tl td.w { font-size: calc(13px * var(--fz)); color: var(--muted); }
+table.tl td.w.late { color: var(--bad); font-weight: 600; }
+
+/* a narrow pane (Edit alongside, phones): a task's Who / Effort / Date wrap onto a line under its title */
+@container (max-width: 480px) {
+  .sechead { grid-template-columns: minmax(0, 1fr); }
+  .sechead .c { display: none; }
+  .task { display: flex; flex-wrap: wrap; align-items: center; column-gap: 2px; padding: 2px 8px 4px; }
+  .task .lead { flex: 1 0 100%; }
+  .task::before { content: ""; order: 1; width: calc(var(--d, 0) * 28px + 24px); }   /* line details up under the title */
+  .task .cell { order: 2; }
+  .task .cell:has(> .add:only-child):not(.sub) { display: none; }                    /* empty cells take no room */
+  .task .cell.sub { order: 3; margin-left: auto; }
+}
+
+/* keyboard focus */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.search input:focus-visible, textarea:focus-visible, .editbox input:focus-visible { outline: none; }
+
+/* first run */
+.welcome { max-width: 520px; margin: 48px auto; text-align: center; color: var(--muted); }
+.welcome h2 { color: var(--text); font-size: calc(18px * var(--fz)); margin: 0 0 6px; }
+.welcome p { margin: 0 0 16px; }
+
+/* narrow windows: the panes and the toolbar stack (task rows adapt to their pane, above) */
+@media (max-width: 720px) {
+  header { padding: 8px 16px; }
+  main { flex-direction: column; }
+  #editorPane { border-right: 0; border-bottom: 1px solid var(--line); }
+  #editorPane:not(.solo) { flex: 0 0 40%; }
+  .toolbar { padding: 0 16px; }
+  .tools { margin-left: 0; }
+  .search input { width: 8em; }
+  .content { padding: 12px 16px 80px; }
+}
 
 /* markdown view */
 .md { max-width: 760px; }
@@ -93,19 +285,35 @@ h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-
 </head>
 <body>
 <header>
-  <h1>Planner</h1>
-  <label class="btn">Open file<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
-  <button id="save">Save</button>
+  <span class="brand" aria-label="KAFEEN Planner"><svg class="logo" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor"/><rect x="5" y="6.5" width="9" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="8" y="10.7" width="11" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="5" y="14.9" width="6" height="2.6" rx="1.3" fill="var(--logo-ink)"/></svg><span class="bname">KAFEEN</span><span class="bsub">Planner</span></span>
+  <button id="fileChip" class="filechip none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
+  <span id="tabs" class="ftabs hidden" role="tablist" aria-label="Open files"></span>
+  <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
+  <span id="fileStatus" class="hint"></span>
+  <span class="spacer"></span>
   <span class="seg" id="modes">
-    <button data-mode="plain">Plain</button>
+    <button data-mode="plain">Text</button>
     <button data-mode="planner">Planner</button>
     <button data-mode="markdown">Markdown</button>
   </span>
-  <label class="chk" id="splitWrap"><input type="checkbox" id="split"> Edit alongside</label>
-  <span class="spacer"></span>
-  <label class="chk" id="todayWrap">Today <input type="text" id="today" placeholder="Oct12 or 2026-10-12"></label>
-  <button id="theme" title="Toggle dark mode">Dark</button>
+  <span class="pop">
+    <button id="more" class="ghost" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="Open, save, theme and more">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+    </button>
+    <div id="moreMenu" class="menu hidden" role="menu">
+      <button class="mi" id="openWrap" role="menuitem">Open file… <span class="k">saves automatically</span></button>
+      <button class="mi" id="saveItem" role="menuitem">Save <span class="k">Ctrl/⌘-S</span></button>
+      <div class="sep"></div>
+      <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
+      <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
+      <div class="mi" id="sizeWrap">Text size <span class="seg" id="textSize" role="radiogroup" aria-label="Text size"></span></div>
+      <label class="mi" id="fontWrap">Font <select id="font" aria-label="Font for the views"></select></label>
+      <div class="sep"></div>
+      <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
+    </div>
+  </span>
 </header>
+<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden>
 <main>
   <section class="pane" id="editorPane">
     <textarea id="editor" spellcheck="false" placeholder="Paste your notes here, or open a .txt / .md file. Drag and drop works too."></textarea>
@@ -119,8 +327,9 @@ const $ = id => document.getElementById(id);
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
-const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0 };
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [] };
 
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
@@ -131,21 +340,66 @@ function h(tag, cls, ...kids) {
 }
 const span = (cls, text) => h("span", cls, text);
 
-/* ---------- theme ---------- */
+/* ---------- pop-up menus: one open at a time; a click outside or Esc closes them ---------- */
+const pops = [];
+function popup(btn, menu) {
+  const set = open => { menu.classList.toggle("hidden", !open); btn.setAttribute("aria-expanded", String(open)); };
+  btn.addEventListener("click", e => { e.stopPropagation(); const open = menu.classList.contains("hidden"); closePops(); set(open); });
+  pops.push(set);
+}
+function closePops() { for (const set of pops) set(false); }
+document.addEventListener("click", e => { if (!e.target.closest(".menu")) closePops(); });
+popup($("more"), $("moreMenu"));
+
+/* ---------- theme (follows the system until it is chosen in the menu) ---------- */
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
-  $("theme").textContent = t === "dark" ? "Light" : "Dark";
+  $("theme").firstChild.textContent = t === "dark" ? "Light mode " : "Dark mode ";
+  $("themeNote").textContent = store.get("theme", null) ? "" : "follows system";
 }
 applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 $("theme").onclick = () => {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  applyTheme(t); store.set("theme", t);
+  store.set("theme", t); applyTheme(t); closePops();
 };
+
+/* ---------- text size and font (⋯ menu), remembered in this browser ---------- */
+const SIZES = [["Small", .9, 12], ["Default", 1, 14], ["Large", 1.15, 16], ["Larger", 1.3, 18]];   // name, scale, size of its "A"
+const FONTS = [                                                                // installed fonts only: no downloads
+  ["System", '-apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Rounded", 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT", "Varela Round", -apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Serif", 'Charter, "Bitstream Charter", "Iowan Old Style", Georgia, Cambria, serif'],
+  ["Legible", '"Atkinson Hyperlegible", Verdana, "DejaVu Sans", Tahoma, sans-serif'],
+  ["Condensed", '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, system-ui, sans-serif'],
+  ["Monospace", 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'],
+];
+function applyText() {
+  const size = SIZES.find(z => z[0] === store.get("textSize", "Default")) || SIZES[1];
+  const font = FONTS.find(f => f[0] === store.get("font", "System")) || FONTS[0];
+  document.documentElement.style.setProperty("--fz", size[1]);
+  document.documentElement.style.setProperty("--vfont", font[1]);
+  for (const b of $("textSize").children) { const on = b.dataset.size === size[0]; b.classList.toggle("on", on); b.setAttribute("aria-checked", String(on)); }
+  $("font").value = font[0];
+}
+for (const [name, , px] of SIZES) {
+  const b = document.createElement("button");
+  b.textContent = "A"; b.style.fontSize = px + "px"; b.dataset.size = name;
+  b.title = name; b.setAttribute("aria-label", name); b.setAttribute("role", "radio");
+  b.onclick = e => { e.stopPropagation(); store.set("textSize", name); applyText(); };
+  $("textSize").append(b);
+}
+for (const [name, stack] of FONTS) {
+  const o = document.createElement("option");
+  o.value = o.textContent = name; o.style.fontFamily = stack;
+  $("font").append(o);
+}
+$("font").onchange = () => { store.set("font", $("font").value); applyText(); };
+applyText();
 
 /* ---------- editor, files ---------- */
 const editor = $("editor");
 editor.value = store.get("text", "");
-editor.addEventListener("input", () => { store.set("text", editor.value); schedule(); });
+editor.addEventListener("input", () => { remember(); state.msg = null; showFile(); schedule(); });
 editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
   if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
   e.preventDefault();
@@ -161,22 +415,322 @@ editor.addEventListener("keydown", e => {            // Tab indents (the format 
 });
 
 function loadText(text, name) {
-  editor.value = text; store.set("text", text);
+  editor.value = text; remember();
   if (name) state.fileName = name;
   schedule();
 }
-$("file").onchange = async e => {
+function download() {
+  const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
+  a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ---------- open files, read and written by the local server through /api/file. Two kinds:
+   - given on the command line (python planner.py --serve notes.txt): one file, saved when you press Save.
+   - opened from the page (Open file…, or + after the tabs): any number, shown as tabs in the header, each saved
+     automatically about a second after each change. The tabs are remembered in this browser ("openFiles",
+     "activeFile") and opened again on the next visit, like Notepad.
+   The text box shows one file at a time: switching tabs saves the current file first and loads the other from disk.
+   Edits that couldn't be saved yet are kept per file ("draft:<path>": {version, text}) and come back with the tab.
+   The server checks the version before every write, so a change made elsewhere is never overwritten silently. ---------- */
+const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
+const unsaved = () => state.file && editor.value !== state.file.saved;
+const AUTOSAVE_MS = 1000;
+let autoTimer;
+const baseName = p => p.split(/[\\/]/).pop();
+const draftKey = p => "draft:" + p;
+function readDraft(p) { try { return JSON.parse(store.get(draftKey(p), "null")); } catch (e) { return null; } }
+function remember() {                                       // keep the text box's text: untitled text, or a file's unsaved edits
+  const f = state.file;
+  if (!f) return store.set("text", editor.value);
+  if (editor.value === f.saved) store.del(draftKey(f.path));
+  else store.set(draftKey(f.path), JSON.stringify({ version: f.version || "", text: editor.value }));
+}
+function saveTabs() {
+  store.set("openFiles", JSON.stringify(state.tabs));
+  store.set("activeFile", state.file && state.file.picked ? state.file.path : "");
+}
+
+function showFile(problem) {                                // header: tabs (or the file chip) · Saved, or the Save pill
+  const st = $("fileStatus"), f = state.file, chip = $("fileChip");
+  st.classList.toggle("bad", !!problem);
+  $("fileName").textContent = f ? f.name : "Untitled";
+  chip.classList.toggle("none", !f);
+  chip.disabled = !!f;                                      // a command-line file can't be switched from the page
+  chip.title = f ? f.path : "Not saved to a file. Click to open one.";
+  $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
+  showTabs();
+  if (problem) return st.replaceChildren(...problem);
+  if (!f) return st.replaceChildren();
+  st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
+  if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
+}
+
+function tabLabel(p) {                                      // the file name, plus its folder when two open files share a name
+  const n = baseName(p);
+  return state.tabs.filter(q => baseName(q) === n).length > 1 ? n + " · " + baseName(p.slice(0, -n.length - 1)) : n;
+}
+function showTabs() {
+  const box = $("tabs"), on = state.tabs.length > 0 && !(state.file && !state.file.picked);
+  box.classList.toggle("hidden", !on);
+  $("fileChip").classList.toggle("hidden", on);
+  if (!on) return box.replaceChildren();
+  const kids = state.tabs.map(p => {
+    const active = !!state.file && state.file.path === p;
+    const warn = active ? state.file.blocked : !!readDraft(p);
+    const name = h("button", "n", tabLabel(p));
+    name.setAttribute("role", "tab"); name.setAttribute("aria-selected", String(active));
+    name.title = p + (active ? "\nChanges save automatically." : "") + (warn ? "\nHas changes that aren't saved yet." : "");
+    name.onclick = () => { if (!active) switchTo(p); };
+    const x = h("button", "x", "×");
+    x.title = "Close " + baseName(p); x.setAttribute("aria-label", x.title);
+    x.onclick = e => { e.stopPropagation(); closeTab(p); };
+    return h("span", "ftab" + (active ? " on" : "") + (warn ? " warn" : ""), name, x);
+  });
+  const add = h("button", "ftadd ghost", "+");
+  add.title = "Open another file"; add.setAttribute("aria-label", add.title);
+  add.onclick = () => openPicker();
+  box.replaceChildren(...kids, add);
+}
+
+function setFile(text, version) {                           // the page now matches the file on disk
+  state.file.saved = nl(text); state.file.version = version; state.file.blocked = false;
+  if (editor.value !== state.file.saved) { replaceText(state.file.saved); schedule(); }
+  remember();
+  showFile();
+}
+
+async function fileApi(body, path = "/api/file") {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) } : {});
+  let d;
+  try { d = await r.json(); } catch (e) { d = { error: r.status === 404 ? "OLD_SERVER" : r.statusText || "no answer from the server" }; }
+  return [r, d];
+}
+// The file as it is on disk now. A file opened from the page is (re)opened, so this also works after a server restart.
+const fetchFile = f => f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
+
+function useFile(d) {                                       // show this file (from /api/file or /api/open) in the text box
+  state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text), picked: !!d.picked };
+  state.fileName = d.name; state.switched = true; state.msg = null;
+  $("openWrap").classList.toggle("hidden", !d.picked);
+  if (d.picked && !state.tabs.includes(d.path)) state.tabs.push(d.path);
+  const draft = readDraft(d.path), keep = !!draft && draft.text !== state.file.saved;
+  editor.value = keep ? draft.text : state.file.saved;
+  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
+  if (!keep) store.del(draftKey(d.path));
+  const stale = keep && draft.version !== (d.version || "");   // edits made on an older version: let the user choose
+  if (stale) state.file.blocked = true;
+  saveTabs();
+  showFile();
+  if (stale) conflict();
+  render(false);
+}
+
+async function leaveFile() {                                // before showing another file: save this one (if that fails, its draft stays)
+  const f = state.file;
+  if (!f || !f.picked) return;
+  clearTimeout(autoTimer);
+  while (f.saving) await new Promise(ok => setTimeout(ok, 50));
+  if (unsaved() && !f.blocked) await save();
+  remember();
+}
+
+async function switchTo(path, create) {                     // show an open file, or open one (create: make it first)
+  await leaveFile();
+  try {
+    const [r, d] = await fileApi(create ? { path, create: true } : { path }, "/api/open");
+    if (!r.ok) {
+      if (r.status === 404 && state.tabs.includes(path)) { state.tabs = state.tabs.filter(p => p !== path); saveTabs(); }
+      throw new Error(d.error === "OLD_SERVER" ? "restart the server (python3 planner.py --serve)" : d.error || r.statusText);
+    }
+    useFile(d);
+  } catch (e) {
+    if (!state.file) showUntitled();
+    showFile(["Can't open " + baseName(path) + ": " + e.message]);
+  }
+}
+const openPath = path => switchTo(path);
+
+function showUntitled() {                                   // no file: the text box holds the untitled text, kept in this browser
+  state.file = null; state.fileName = "notes.txt"; clearTimeout(autoTimer);
+  editor.value = store.get("text", "");
+  $("openWrap").classList.remove("hidden");
+  saveTabs(); showFile(); render(false);
+}
+
+async function closeTab(p) {                                // stop showing and saving this file (the file itself stays)
+  const active = !!state.file && state.file.path === p;
+  if (active) await leaveFile();
+  if (readDraft(p) && !confirm(baseName(p) + " has changes that couldn't be saved. Close it anyway and lose them?")) return;
+  store.del(draftKey(p));
+  const i = state.tabs.indexOf(p);
+  if (i >= 0) state.tabs.splice(i, 1);
+  fileApi({ path: p }, "/api/close").catch(() => {});
+  if (!active) { saveTabs(); return showFile(); }
+  state.file = null;
+  const next = state.tabs[Math.min(i, state.tabs.length - 1)];
+  if (next) return switchTo(next);
+  showUntitled();
+}
+
+async function startFileMode() {
+  let r, d;
+  try { [r, d] = await fileApi(); } catch (e) { return; }  // page opened without the server
+  if (!r.ok) return;
+  if (d.name) return useFile(d);                            // a file given on the command line: just that one
+  let paths;
+  try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
+  if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
+  store.del("lastPath");
+  const gone = [];
+  for (const p of paths) {                                  // open last time's files again
+    let ok = false;
+    try { ok = (await fileApi({ path: p }, "/api/open"))[0].ok; } catch (e) {}
+    if (ok) state.tabs.push(p); else gone.push(baseName(p));
+  }
+  const active = store.get("activeFile", "");
+  const first = state.tabs.includes(active) ? active : state.tabs[0];
+  if (first) await switchTo(first); else { saveTabs(); showFile(); }
+  if (gone.length) {
+    state.msg = { text: `Couldn't reopen ${gone.join(", ")}: moved, renamed or deleted.`, bad: true, anyMode: true };
+    showToast();
+  }
+}
+
+/* ---------- Open file…: a small browser of your home folder (the server lists it; only .txt / .md files) ---------- */
+const DOC = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5";
+const FOLDER = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z";
+const picker = h("dialog", "picker"), pickPath = h("div", "ppath"), pickList = h("div", "plist");
+const pickCancel = h("button", "ghost", "Cancel");
+const pickFoot = h("div", "pfoot");
+let pickDir = null;                                        // the folder the file browser shows
+picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList, pickFoot);
+function footer() {                                        // "Files … save automatically." and New file… (once a folder is shown)
+  const nb = h("button", "", "New file…");
+  nb.title = "Make a new, empty notes file in this folder";
+  nb.onclick = newFileForm;
+  pickFoot.replaceChildren(span("", "Files you open here save automatically."), ...(pickDir ? [nb] : []));
+}
+function newFileForm() {
+  const input = h("input"), ok = h("button", "", "Create"), form = h("form", "pnew", input, ok);
+  input.type = "text"; input.placeholder = "name, like  q4-plan.txt"; input.setAttribute("aria-label", "New file name");
+  form.onsubmit = e => {
+    e.preventDefault();
+    let n = input.value.trim();
+    if (!n) return;
+    if (/[\\/]/.test(n) || n.startsWith(".")) { input.setCustomValidity("Just a file name, without folders"); return input.reportValidity(); }
+    if (!/\.(txt|md|markdown)$/i.test(n)) n += ".txt";
+    picker.close();
+    switchTo(pickDir.replace(/[\\/]$/, "") + (pickDir.includes("\\") && !pickDir.includes("/") ? "\\" : "/") + n, true);
+  };
+  input.oninput = () => input.setCustomValidity("");
+  pickFoot.replaceChildren(form);
+  input.focus();
+}
+pickCancel.onclick = () => picker.close();
+picker.onclick = e => { if (e.target === picker) picker.close(); };     // a click on the backdrop closes it
+document.body.append(picker);
+function pickProblem(text) {                               // the list can't be shown: say why, offer loading a file's text
+  const load = h("button", "", "Load a file's text instead");
+  load.title = "Copies the text into the page; it won't be saved back to the file";
+  load.onclick = () => { picker.close(); $("file").click(); };
+  pickPath.textContent = ""; pickDir = null; footer();
+  pickList.replaceChildren(h("div", "pmsg", text, h("div", "", load)));
+}
+async function browse(dir) {
+  let r, d;
+  try { [r, d] = await fileApi(null, "/api/browse" + (dir ? "?dir=" + encodeURIComponent(dir) : "")); }
+  catch (e) { return pickProblem("Can't reach the planner server. Start it with  python3 planner.py --serve  and reload this page."); }
+  if (!r.ok) return pickProblem(d.error === "OLD_SERVER"
+    ? "This server was started before the file browser existed. Stop it (Ctrl-C) and run  python3 planner.py --serve  again, then reload this page."
+    : d.error || r.statusText);
+  const shown = d.dir.startsWith(d.home) ? "~" + d.dir.slice(d.home.length) : d.dir;
+  pickPath.textContent = shown || "~"; pickPath.title = d.dir;
+  pickDir = d.dir; footer();
+  const row = (iconPath, label, cls, go) => { const b = h("button", "pitem " + cls, icon(iconPath, 16), span("", label)); b.onclick = go; return b; };
+  const rows = [];
+  if (d.parent) rows.push(row("M15 18l-6-6 6-6", "Up", "up", () => browse(d.parent)));
+  for (const e of d.entries) rows.push(e.kind === "dir" ? row(FOLDER, e.name, "dir", () => browse(e.path))
+    : row(DOC, e.name, "file", () => { picker.close(); openPath(e.path); }));
+  if (!d.entries.length) rows.push(h("div", "empty", "No folders or .txt / .md files here."));
+  pickList.replaceChildren(...rows);
+  pickList.scrollTop = 0;
+}
+function openPicker() {
+  closePops();
+  if (state.file && !state.file.picked) return;             // command-line file: one file only
+  pickList.replaceChildren(); pickDir = null; footer();
+  if (!picker.open) picker.showModal();
+  browse(null);
+}
+$("openWrap").onclick = () => openPicker();
+$("fileChip").onclick = () => openPicker();
+$("file").onchange = async e => {                           // fallback without the server: load the text only
   const f = e.target.files[0];
   if (f) loadText(await f.text(), f.name);
   e.target.value = "";
 };
-$("save").onclick = () => {
-  const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
-  a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
-};
+async function save(force) {
+  if (!state.file) return download();
+  const f = state.file;
+  if (f.saving) { f.again = true; return; }                 // one write at a time; the newest text goes next
+  clearTimeout(autoTimer);
+  const text = editor.value;
+  f.saving = true;
+  showFile(["Saving…"]);
+  try {
+    const body = { path: f.path, text, version: f.version, force: !!force };
+    let [r, d] = await fileApi(body);
+    if (r.status === 409 && d.notOpen && f.picked) {        // the server was restarted: open the file again, then save
+      const [r2, d2] = await fileApi({ path: f.path }, "/api/open");
+      if (!r2.ok) throw new Error(d2.error || r2.statusText);
+      [r, d] = await fileApi(body);
+    }
+    if (r.status === 409 && d.conflict) return conflict();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    f.version = d.version; f.saved = text; f.blocked = false;
+    if (state.file === f) remember();
+    showFile();
+  } catch (e) {
+    f.blocked = true;                                       // not retried automatically; Save (Ctrl/⌘-S) tries again
+    showFile(["Not saved: " + e.message]);
+  } finally {
+    f.saving = false;
+    if (f.again) { f.again = false; if (state.file === f && unsaved() && !f.blocked) save(); }
+  }
+}
+
+function conflict() {                                       // the file changed on disk under us: never overwrite silently
+  state.file.blocked = true;
+  const b = (label, fn) => { const x = h("button", "", label); x.onclick = fn; return x; };
+  showFile([state.file.name + " changed on disk.",
+    b("Load disk version", async () => {
+      if (unsaved() && !confirm("Replace your unsaved changes with the version on disk?")) return;
+      const [r, d] = await fetchFile(state.file);
+      if (r.ok) setFile(d.text, d.version);
+    }),
+    b("Keep mine and overwrite", () => save(true))]);
+}
+
+window.addEventListener("focus", async () => {              // pick up edits made in another editor
+  if (!state.file || state.file.saving) return;
+  const f = state.file;
+  let r, d;
+  try { [r, d] = await fetchFile(f); } catch (e) { return; }
+  if (!r.ok || state.file !== f || f.saving || d.version === f.version) return;
+  if (unsaved()) conflict(); else setFile(d.text, d.version);
+});
+window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  if (e.key === "Escape") closePops();
+});
+$("save").onclick = () => save();
+$("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
   e.preventDefault();
-  document.body.classList.toggle("drop", ev === "dragover");
+  document.body.classList.toggle("drop", ev === "dragover" && !state.file);
+  if (state.file) return;                                   // a file is open: its text comes from that file
   if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
 });
 $("today").value = store.get("today", "");
@@ -199,6 +753,32 @@ function layout() {
   $("viewPane").classList.toggle("hidden", plain);
   $("splitWrap").classList.toggle("hidden", plain);
   $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
+  $("viewPane").classList.toggle("jump", split && state.mode === "planner");
+  if (state.mode !== "planner" && !(state.msg && state.msg.anyMode)) toast.classList.add("hidden");   // edit messages belong to Planner mode
+}
+
+/* Edit alongside: clicking a task (not one of its buttons) selects its line in the text box and scrolls it into view */
+$("viewPane").addEventListener("click", e => {
+  const row = e.target.closest("[data-line]");
+  if (!row || !$("viewPane").classList.contains("jump") || e.target.closest("button, input, select, a, .editbox, .pickbox")) return;
+  if (String(getSelection())) return;                   // the user is selecting text in the view, not jumping
+  goToLine(+row.dataset.line);
+});
+function goToLine(n) {
+  const v = editor.value, lines = v.split("\n");
+  if (!(n >= 1 && n <= lines.length)) return;
+  const start = lines.slice(0, n - 1).reduce((a, l) => a + l.length + 1, 0), end = start + lines[n - 1].length;
+  const m = document.createElement("div"), cs = getComputedStyle(editor);   // measure where the line sits, wrapping included
+  m.className = "measure";
+  for (const k of ["font", "letterSpacing", "tabSize", "padding", "border", "boxSizing"]) m.style[k] = cs[k];
+  m.style.width = editor.clientWidth + "px";
+  m.textContent = v.slice(0, start) + "\u200b";
+  document.body.append(m);
+  const y = m.scrollHeight - parseFloat(cs.paddingBottom) - parseFloat(cs.lineHeight);
+  m.remove();
+  editor.focus({ preventScroll: true });
+  editor.setSelectionRange(start, end);
+  editor.scrollTop = Math.max(0, y - editor.clientHeight / 3);       // the line a third of the way down
 }
 
 let timer;
@@ -216,10 +796,13 @@ async function render(relayout) {
   const seq = ++state.seq;
   try {
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null }) });
+      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period }) });
     const data = await r.json();
     if (seq !== state.seq) return;
-    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!r.ok) {
+      if (state.period) { setPeriod(null); return; }        // e.g. a stored period the server rejects: fall back to all dates
+      throw new Error(data.error || r.statusText);
+    }
     state.data = data;
     plannerView();
   } catch (err) {
@@ -230,110 +813,570 @@ async function render(relayout) {
 }
 
 /* ---------- planner views ---------- */
-const BOX = { open: "[ ]", doing: "[~]", done: "[x]" };
 const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"]];
 
-function plannerView() {
-  const d = state.data, view = $("viewPane");
-  const tabs = h("div", "tabs");
-  for (const [id, label] of TABS) {
-    const b = h("button", id === state.tab ? "on" : "", label);
-    b.onclick = () => { state.tab = id; store.set("tab", id); plannerView(); };
-    tabs.append(b);
-  }
-  const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
-  view.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), body);
+/* ---------- status clicks: the server rewrites only the task's status mark ---------- */
+const NEXT = { open: "doing", doing: "done", done: "open" };
+const STATUS_NAME = { open: "open", doing: "in progress", done: "done" };
+
+function replaceText(text) {           // swap in the new text, keeping the cursor and scroll where they were
+  const old = editor.value;
+  let a = 0, b = 0;
+  while (a < old.length && a < text.length && old[a] === text[a]) a++;
+  while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
+  const top = editor.scrollTop;
+  editor.setRangeText(text.slice(a, text.length - b), a, old.length - b, "preserve");
+  editor.scrollTop = top;
+  remember();
+  showFile();
 }
 
-function taskNode(t, showProject, showSpan) {
-  const row = h("div", "task s-" + t.status);
-  row.append(span("box", BOX[t.status]), " ");
-  if (showProject) row.append(span("proj", "@" + t.project));
-  row.append(span("ttl", t.title));
-  for (const a of t.assignees) row.append(span("who", a));
-  const when = showSpan ? (t.span && t.span.label + (t.span.how === "parent" ? " (via parent)" : "")) : t.when;
-  if (when) row.append(span("when", "  " + when));
-  if (t.overdue) row.append(span("flag", "OVERDUE"));
-  for (const r of t.reminders) row.append(span("rem", "*" + r.spec));
+async function editTask(t, op, value, btn, done) {
+  const before = editor.value, seq = ++state.seq;
+  clearTimeout(timer);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null,
+        period: state.period }) });
+    const res = await r.json();
+    if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
+    if (!r.ok) throw new Error(res.error || r.statusText);
+    replaceText(res.text);
+    state.data = res.data;
+    state.msg = { text: done, undo: { before, after: res.text } };
+  } catch (err) {
+    state.msg = { text: "Not changed: " + err.message, bad: true };
+    if (seq === state.seq) return render(false);
+  }
+  if (seq === state.seq) plannerView();
+}
+const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
+
+/* a one-line input over a cell; Enter applies, Esc or leaving cancels */
+function editCell(cell, placeholder, initial, apply, wide, fill) {   // fill: from the cell's left edge to the row's right edge
+  const input = h("input"), box = h("span", "editbox" + (wide ? " wide" : "") + (fill ? " fill" : ""), input);
+  input.type = "text"; input.placeholder = placeholder; input.value = initial || "";
+  input.setAttribute("aria-label", placeholder);
+  const close = () => { if (box.isConnected) box.remove(); };
+  input.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); const v = input.value; input.onblur = null; close(); apply(v); }
+    else if (e.key === "Escape") { close(); cell.focus(); }
+  };
+  input.onblur = close;
+  input.onclick = e => e.stopPropagation();
+  const row = cell.closest(".task");               // float over the cell's line, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.top - r.top) + "px"; box.style.height = c.height + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  input.style.maxWidth = Math.max(80, r.width) + "px";
+  if (fill) { box.style.left = Math.max(0, c.left - r.left) + "px"; box.style.right = "8px"; }
+  row.append(box);
+  if (!fill && box.getBoundingClientRect().left < r.left) {  // a narrow pane: it would stick out on the left, so keep it inside the row
+    box.style.right = "auto"; box.style.left = "0";
+  }
+  input.focus(); input.select();
+}
+/* a single-choice list under a cell (the Effort cell): arrows move, Enter or a click picks, Esc or leaving cancels */
+function pickCell(cell, label, choices, current, apply) {
+  const box = h("div", "pickbox");
+  box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label);
+  const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
+  const outside = e => { if (!box.contains(e.target)) close(); };
+  const items = choices.map(({ value, text, note, badge }) => {
+    const on = value === current;
+    const b = h("button", "mi", span("ck", on ? "✓" : ""), badge ? span("eff", text) : text, note ? span("k", note) : "");
+    b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(on));
+    b.onclick = e => { e.stopPropagation(); close(); apply(value); };
+    return b;
+  });
+  box.append(...items);
+  box.onkeydown = e => {
+    e.stopPropagation();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); close(); cell.focus(); }
+  };
+  box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
+  box.onclick = e => e.stopPropagation();
+  const row = cell.closest(".task");               // drop down from the cell, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.bottom - r.top + 2) + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  row.append(box);
+  if (box.getBoundingClientRect().left < r.left) { box.style.right = "auto"; box.style.left = "0"; }
+  document.addEventListener("pointerdown", outside, true);
+  (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
+}
+function cellButton(cls, label, tip, content, edit) {    // a Who / Effort / Date / + cell: shows its value, click edits it
+  const b = h("button", "cell " + cls, ...content);
+  b.title = tip; b.setAttribute("aria-label", label);
+  b.onclick = e => { e.stopPropagation(); edit(b); };
+  return b;
+}
+const ADD = () => span("add", "+");
+
+/* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
+   Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
+function addTaskRow(project, prefill = "") {
+  const btn = h("button", "addtask", span("plus", "+"), "Add task");
+  btn.title = project ? "Add a task at the end of @" + project.name : "Add a task to a project";
+  const row = h("div", "addrow", btn);
+  btn.onclick = () => openAdd(btn, project, prefill);
   return row;
 }
-function treeNode(t) {
-  const wrap = h("div", "", taskNode(t, false, false));
-  for (const n of t.notes) wrap.append(h("div", "note", n));
-  if (t.children.length) wrap.append(h("div", "kids", ...t.children.map(treeNode)));
-  return wrap;
+function openAdd(btn, project, prefill) {
+  const targets = state.data.targets;
+  if (!project && !targets.length) {
+    state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
+    return showToast();
+  }
+  const input = h("input");
+  input.type = "text"; input.placeholder = "new task, like  draft (KA) (m) Oct24"; input.value = prefill;
+  input.setAttribute("aria-label", "New task");
+  let sel = null;
+  if (!project) {
+    const count = {};
+    for (const t of targets) count[t.name] = (count[t.name] || 0) + 1;
+    sel = h("select", "", ...targets.map((t, i) => {
+      const o = h("option", "", "@" + t.name + (count[t.name] > 1 && t.section ? " (" + t.section + ")" : ""));
+      o.value = i;
+      return o;
+    }));
+    sel.setAttribute("aria-label", "Project");
+    const last = store.get("addTo", ""), at = i => targets[i].line + "\n" + targets[i].name;
+    const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
+    sel.value = pick;
+  }
+  const form = h("div", "addform", ...(sel ? [sel] : []), input);
+  let closed = false, pressing = false;
+  const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
+    if (closed) return;
+    closed = true;
+    form.replaceWith(btn);
+  };
+  form.addEventListener("pointerdown", () => { pressing = true; setTimeout(() => { pressing = false; }, 500); });
+  form.addEventListener("focusout", () => setTimeout(() => {   // leaving the form cancels (a click on its own picker doesn't)
+    if (!pressing && !form.contains(document.activeElement)) cancel();
+  }));
+  form.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Escape") { cancel(); btn.focus(); }
+    else if (e.key === "Enter" && e.target === input) {
+      e.preventDefault();
+      const v = input.value.trim(), p = project || targets[sel.value];
+      cancel();
+      if (!v) return;
+      if (sel) store.set("addTo", p.line + "\n" + p.name);
+      editTask({ line: p.line, title: p.name }, "task", v, null, `Added "${v}" to @${p.name}.`);
+    }
+  };
+  btn.replaceWith(form);
+  input.focus();
+  if (prefill) input.setSelectionRange(0, 0);    // People: the person's initials are already there, type before them
 }
 
+function undo() {
+  const u = state.msg && state.msg.undo;
+  state.msg = null;
+  if (u && editor.value === u.after) { replaceText(u.before); render(false); }
+  else plannerView();
+}
+
+const MARK = {                                  // open: ring; in progress: half-filled ring; done: filled with a check
+  open: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+  doing: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/>',
+  done: '<circle cx="9" cy="9" r="7.8" fill="currentColor"/><path d="M5.5 9.2l2.3 2.3 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+function statusBox(t) {
+  const b = h("button", "st");
+  b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${MARK[t.status]}</svg>`;   // fixed markup, no note text
+  b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.setAttribute("aria-label", b.title);
+  b.onclick = () => setStatus(t, NEXT[t.status], b);
+  return b;
+}
+
+/* ---------- filters (display only: they pick from the server's data, they never parse notes) ---------- */
+const FKEYS = { q: "fq", who: "fwho", proj: "fproj", done: "fdone" };
+const filt = { q: store.get("fq", ""), who: store.get("fwho", ""), proj: store.get("fproj", ""), done: store.get("fdone", "1") === "1" };
+const filterOn = () => !!(filt.q.trim() || filt.who || filt.proj || !filt.done);
+
+function filtered(d) {
+  if (!filterOn()) return d;
+  const q = filt.q.trim().toLowerCase();
+  const keep = (t, proj) => (!filt.proj || proj === filt.proj)
+    && (!filt.who || (filt.who === "(unassigned)" ? !t.assignees.length : t.assignees.includes(filt.who)))
+    && (!q || [t.title, ...t.notes, proj].join("\n").toLowerCase().includes(q));
+  const prune = (t, proj) => {                    // keep matching tasks, and their ancestors (dimmed) for context
+    const children = t.children.map(c => prune(c, proj)).filter(Boolean);
+    const self = !t.dim && keep(t, proj) && (filt.done || t.status !== "done");
+    return self || children.length ? { ...t, children, dim: !self } : null;
+  };
+  const flat = list => list.filter(t => keep(t, t.project));
+  const shown = t => filt.done || t.status !== "done";     // Projects and Timeline list done tasks unless "Show done tasks" is off
+  const u = d.upcoming;
+  return { ...d, filtered: true,
+    projects: d.projects.map(sec => ({ ...sec,
+      projects: sec.projects.map(p => ({ ...p, tasks: p.tasks.map(t => prune(t, p.name)).filter(Boolean) }))
+        .filter(p => p.tasks.length) })).filter(sec => sec.projects.length),
+    timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
+    people: d.people.filter(g => !filt.who || g.name === filt.who)
+      .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) } };
+}
+
+/* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
+try { state.period = JSON.parse(store.get("period", "null")); } catch (e) { state.period = null; }
+const icon = (d, size = 15) => {                // a small stroke icon (inline SVG, no library)
+  const n = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  n.setAttribute("width", size); n.setAttribute("height", size); n.setAttribute("viewBox", "0 0 24 24");
+  n.setAttribute("aria-hidden", "true");
+  n.innerHTML = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return n;
+};
+const pPrev = h("button", "", "‹"), pNext = h("button", "", "›"), pMid = h("button", "pmid"), pCaret = h("button", "pcaret", "▾");
+const pMenu = h("div", "menu hidden"), pctl = h("span", "pctl", pPrev, pMid, pNext, h("span", "pop", pCaret, pMenu));
+pCaret.setAttribute("aria-haspopup", "menu"); pCaret.setAttribute("aria-label", "All dates, by month or by season");
+pCaret.title = "Show all dates, one month or one season";
+popup(pCaret, pMenu);
+pMid.onclick = e => {                            // the date: back to this month / season; already there (or All dates): the menu
+  const per = state.data && state.data.period;
+  if (per && !per.current) return setPeriod(per.now);
+  e.stopPropagation(); pCaret.click();
+};
+function setPeriod(p) {
+  state.period = p ? { kind: p.kind, year: p.year, index: p.index } : null;
+  store.set("period", JSON.stringify(state.period));
+  render(false);
+}
+pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
+pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
+function showPeriod(per) {       // ‹ › name where they go (on hover); the date says what is showing and returns to now
+  const unit = per && (per.kind === "month" ? "month" : "season");
+  pctl.classList.toggle("on", !!per);
+  pctl.classList.toggle("away", !!per && !per.current);
+  pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
+  pMid.textContent = per ? per.short : "All dates";   // "Fall 2026"; the line above the list gives the months
+  pMid.title = !per ? "Show all dates, one month or one season"
+    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
+  const item = (label, note, on, pick, disabled) => {
+    const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
+    b.onclick = () => { closePops(); pick(); };
+    return b;
+  };
+  const kind = per ? per.kind : "";
+  pMenu.replaceChildren(
+    item("All dates", kind === "" ? "✓" : "", kind === "", () => kind && setPeriod(null)),
+    item("By month", kind === "month" ? "✓" : "", kind === "month", () => kind !== "month" && setPeriod({ kind: "month" })),
+    item("By season", kind === "season" ? "✓" : "Winter, Summer, Fall", kind === "season", () => kind !== "season" && setPeriod({ kind: "season" })),
+    ...(per ? [h("div", "sep"), item("This " + unit, per.current ? "you're here" : per.now.label, false, () => setPeriod(per.now), per.current)] : []));
+  if (!per) return;
+  for (const [b, dir, to] of [[pPrev, "Previous", per.prev], [pNext, "Next", per.next]]) {
+    b.title = `${dir} ${unit}: ${to.label}`; b.setAttribute("aria-label", b.title);
+  }
+}
+
+/* ---------- tool row: tabs, then search, Filter (person, project, show done) and the period ---------- */
+const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input");
+const fClear = h("button", "ghost", "Clear filters"), fCount = span("badge", "");
+fQ.type = "search"; fQ.placeholder = "Search"; fQ.value = filt.q; fQ.setAttribute("aria-label", "Search tasks, notes and projects");
+fDone.type = "checkbox"; fDone.checked = filt.done;
+const fBtn = h("button", "", icon("M4 6h16M7 12h10M10 18h4"), " Filter ", fCount);
+fBtn.setAttribute("aria-haspopup", "dialog");
+fBtn.style.cssText = "display: inline-flex; align-items: center; gap: 4px";
+const fPanel = h("div", "menu panel hidden",
+  h("label", "field", "Person", fWho), h("label", "field", "Project", fProj),
+  h("label", "check", fDone, "Show done tasks"), h("div", "", fClear));
+fPanel.lastChild.style.cssText = "display: flex; justify-content: flex-end";
+popup(fBtn, fPanel);
+const tabsBox = h("span", "tabs"), tabsRow = h("div", "toolbar", tabsBox,
+  h("span", "tools", h("label", "search", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5"), fQ),
+    h("span", "pop", fBtn, fPanel), pctl));
+const contextLine = h("div", "context"), plannerBody = h("div"), contentBox = h("div", "content", contextLine, plannerBody);
+const toast = h("div", "toast hidden");
+toast.setAttribute("role", "status");
+document.body.append(toast);
+function setFilt(k, v) {
+  filt[k] = v; store.set(FKEYS[k], k === "done" ? (v ? "1" : "0") : v);
+  plannerView();
+}
+fQ.oninput = () => setFilt("q", fQ.value);
+fQ.onkeydown = e => { if (e.key === "Escape") { fQ.value = ""; setFilt("q", ""); } };
+fWho.onchange = () => setFilt("who", fWho.value);
+fProj.onchange = () => setFilt("proj", fProj.value);
+fDone.onchange = () => setFilt("done", fDone.checked);
+fClear.onclick = () => {
+  fWho.value = ""; fProj.value = ""; fDone.checked = true;
+  for (const [k, v] of [["who", ""], ["proj", ""]]) { filt[k] = v; store.set(FKEYS[k], v); }
+  setFilt("done", true);
+};
+function options(sel, names, current, all) {     // a chosen name stays listed even if it has no tasks right now
+  const list = [...new Set([...names, ...(current ? [current] : [])])];
+  const key = list.join("\n");
+  if (sel.dataset.opts !== key) {
+    sel.replaceChildren(h("option", "", all), ...list.map(n => h("option", "", n)));
+    sel.firstChild.value = "";
+    sel.dataset.opts = key;
+  }
+  sel.value = current;
+}
+
+function showToast() {                           // the last edit's message, with Undo while it still applies
+  const m = state.msg;
+  toast.classList.toggle("hidden", !m);
+  if (!m) return toast.replaceChildren();
+  toast.classList.toggle("bad", !!m.bad);
+  const close = h("button", "", "×"); close.setAttribute("aria-label", "Dismiss");
+  close.onclick = () => { state.msg = null; showToast(); };
+  const undoBtn = m.undo && h("button", "", "Undo");
+  if (undoBtn) undoBtn.onclick = undo;
+  toast.replaceChildren(...[span("", m.text), undoBtn, close].filter(Boolean));
+}
+
+function plannerView() {
+  if (state.switched) {                             // another file: drop a person or project filter it doesn't have
+    state.switched = false;
+    if (filt.who && filt.who !== "(unassigned)" && !state.data.people.some(g => g.name === filt.who)) { filt.who = ""; store.set(FKEYS.who, ""); }
+    if (filt.proj && !state.data.targets.some(t => t.name === filt.proj)) { filt.proj = ""; store.set(FKEYS.proj, ""); }
+  }
+  const view = $("viewPane"), d = filtered(state.data);
+  options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
+  options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");
+  const n = [filt.who, filt.proj, !filt.done].filter(Boolean).length;
+  fCount.textContent = n ? String(n) : "";
+  fBtn.title = n ? `${n} filter${n > 1 ? "s" : ""} on` : "Filter by person or project, or hide done tasks";
+  fClear.disabled = !n;
+  showPeriod(state.data.period);
+  const tabs = [];
+  for (const [id, label] of TABS) {
+    const b = h("button", "tab" + (id === state.tab ? " on" : ""), label);
+    b.onclick = () => { state.tab = id; store.set("tab", id); plannerView(); };
+    tabs.push(b);
+  }
+  tabsBox.replaceChildren(...tabs);
+  const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
+  if ($("today").value.trim()) bits.push("As of " + d.today_label);
+  if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+    state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
+  contextLine.textContent = bits.join(" · ");
+  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d));
+  showToast();
+  if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
+}
+
+const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
+const guides = depth => Array.from({ length: depth }, () => span("g"));
+
+/* one task row: [guides][status][@project][title] | Who | Effort | Date | + ; the last four are click-to-edit cells */
+function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem } = {}) {
+  const row = h("div", "task s-" + t.status);
+  row.style.setProperty("--d", depth);
+  row.title = "line " + t.line;                         // hover shows where the task is in the text
+  row.dataset.line = t.line;
+  const lead = h("div", "lead", ...guides(depth), statusBox(t));
+  if (project) lead.append(span("proj", "@" + t.project));
+  const ttl = span("ttl", t.title);
+  lead.append(ttl);
+  ttl.onclick = e => {                                  // edit the task's text; with Edit alongside the click jumps to the line instead
+    if ($("viewPane").classList.contains("jump") || String(getSelection())) return;
+    e.stopPropagation();
+    if (typeof t.text !== "string") {                   // a server started before title editing existed sends no `text`
+      state.msg = { text: "To edit a task's text, restart the server (python3 planner.py --serve).", bad: true };
+      return showToast();
+    }
+    editCell(ttl, "task, like  draft (KA) (m) Oct24", t.text, v => {
+      v = v.trim();
+      if (!v || v === t.text) return;
+      editTask(t, "text", v, null, `Changed "${t.title}".`);
+    }, false, true);
+  };
+
+  const current = t.assignees.join(", ");
+  const who = cellButton("who r", "Change initials", current ? `${current}. Click to change (empty removes)` : "Assign: add initials",
+    [current ? span("t", current) : ADD()],
+    cell => editCell(cell, "initials: KA, RT (empty removes)", current, v => {
+      const next = v.trim().split(/[\s,]+/).filter(Boolean).join(", ");
+      if (next === current) return;
+      editTask(t, "who", v, null, next ? `Set "${t.title}" to ${next}.` : `Removed the initials from "${t.title}".`);
+    }));
+
+  const eff = t.effort && span("eff", t.effort.toUpperCase());
+  const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: XS, S, M, L or XL",
+    [eff || ADD()],
+    cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
+      { value: "", text: "None" }], t.effort || "", v => {
+      if (v === (t.effort || "")) return;
+      editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
+    }));
+
+  // Date: own dates, or (in People / Upcoming) the span, which may come from the parent or the subtasks (italic)
+  const sp = t.span, inherited = useSpan && !date && sp && sp.how !== "own";
+  const full = date ?? (useSpan ? sp && sp.label : t.when);
+  const shown = !date && t.loose && (!useSpan || (sp && sp.how === "own")) ? "~" + t.loose : full;
+  const rems = rem ? [rem] : t.reminders.map(r => "*" + r.spec);
+  const content = [];
+  if (rems.length) { const bell = icon(BELL, 12); content.push(bell); }
+  content.push(shown ? span("t", shown) : ADD());
+  if (t.overdue) content.push(span("sr", " (overdue)"));
+  const tip = [full && (inherited ? `${full} (from its ${sp.how === "parent" ? "parent" : "subtasks"})` : full),
+    t.overdue && "overdue", rems.length && "reminder " + rems.join(", "), "click to change"].filter(Boolean).join(" · ");
+  const dateCell = cellButton("date r" + (t.overdue ? " late" : "") + (inherited ? " inh" : ""), "Set date", tip, content,
+    cell => editCell(cell, "Oct24, Oct23--26, ~Q1 (empty clears)", t.date_text, v => {
+      v = v.trim();
+      if (v === (t.date_text || "")) return;
+      editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
+    }));
+
+  const sub = cellButton("sub mid", "Add a subtask", "Add a subtask", [ADD()],
+    cell => editCell(cell, "new subtask, like  draft (KA) Oct24", "", v => v.trim() &&
+      editTask(t, "subtask", v, null, `Added "${v.trim()}" under "${t.title}".`), true));
+
+  row.append(lead, who, size, dateCell, sub);
+  return row;
+}
+const pts = n => n + (n === 1 ? " pt" : " pts");
+const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
+const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
+const tasksN = n => n + (n === 1 ? " task" : " tasks");
+
+function noteNode(text, depth) { return h("div", "note", ...guides(depth), span("pad"), text); }
+function treeNode(t, depth = 0) {
+  const row = taskNode(t, { depth });
+  if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
+  return h("div", "", row, ...t.notes.map(n => noteNode(n, depth)), ...t.children.map(c => treeNode(c, depth + 1)));
+}
+function colHead(title, when) {                  // a section heading that also labels the right-hand columns
+  return h("div", "sechead", h("h2", "", title, when && span("when", when)),
+    span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
+}
+
+/* folded headings, remembered per browser: projects in Projects (key "collapsed"), people in People ("collapsedPeople") */
+const folds = {};
+function foldSet(name) {
+  if (!folds[name]) try { folds[name] = new Set(JSON.parse(store.get(name, "[]"))); } catch (e) { folds[name] = new Set(); }
+  return folds[name];
+}
+const CHEVRON = "M9 6l6 6-6 6";
+/* a heading that folds its rows away: returns [heading, shut]. While searching or filtering, everything is open. */
+function foldHead(name, key, what, label, count) {
+  const set = foldSet(name), open = filterOn(), shut = !open && set.has(key);
+  const fold = h("button", "fold", icon(CHEVRON, 14), ...label);
+  fold.setAttribute("aria-expanded", String(!shut));
+  fold.title = open ? `${what[0].toUpperCase() + what.slice(1)}s stay open while a search or filter is on`
+    : (shut ? "Show" : "Hide") + ` this ${what}'s tasks`;
+  fold.disabled = open;
+  fold.onclick = () => {
+    set[set.has(key) ? "delete" : "add"](key);
+    store.set(name, JSON.stringify([...set]));
+    plannerView();
+  };
+  return [h("h3", "ph" + (shut ? " shut" : ""), fold, count), shut];
+}
 function vProjects(d) {
   const out = h("div");
   for (const sec of d.projects) {
-    if (sec.title) out.append(h("h2", "sec", sec.title, sec.when && span("when", "  " + sec.when)));
+    out.append(colHead(sec.title || "Projects", sec.when));
     for (const p of sec.projects) {
-      const card = h("div", "card", h("h3", "", "@" + p.name, span("count", p.done + "/" + p.total + " done")));
-      for (const n of p.notes) card.append(h("div", "note", n));
-      for (const t of p.tasks) card.append(treeNode(t));
-      if (!p.tasks.length) card.append(h("div", "empty", "No tasks"));
-      out.append(card);
+      const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
+      const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + p.name, "project", [span("at", "@"), p.name],
+        span("count", p.done + "/" + p.total + " done" + effort));
+      out.append(head);
+      if (shut) continue;
+      for (const n of p.notes) out.append(noteNode(n, 0));
+      for (const t of p.tasks) out.append(treeNode(t));
+      out.append(addTaskRow(p));
     }
   }
-  if (!out.children.length) out.append(h("div", "empty", "No projects or tasks found."));
+  if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
+  return out;
+}
+function welcome() {                             // first run: no notes yet
+  const out = h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
+    h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24 , or open a file from the ⋯ menu."));
+  if (!editor.value.trim() && !state.file) {
+    const b = h("button", "", "Load the example");
+    b.onclick = async () => {
+      try { const r = await fetch("/api/example"); const d = await r.json(); if (r.ok && !editor.value.trim()) loadText(d.text, "example.txt"); }
+      catch (e) {}
+    };
+    out.append(b);
+  }
   return out;
 }
 
 function vTimeline(d) {
   const tl = d.timeline, out = h("div");
-  if (!tl.rows.length) out.append(h("div", "empty", "Nothing scheduled."));
+  if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
   else {
     const head = h("tr", "", h("th", "", "Task"));
-    tl.months.forEach((m, i) => head.append(h("th", "m", m.label[0] + (i === 0 || m.label === "Jan" ? " " + String(m.year).slice(2) : ""))));
+    for (const c of tl.columns) { const th = h("th", "m", c.head); th.title = c.start + " to " + c.end; head.append(th); }
     head.append(h("th", "", "When"));
     const table = h("table", "tl", head);
     for (const t of tl.rows) {
-      const nm = h("td", "name", t.status === "doing" ? "~ " : "", span("proj", "@" + t.project), t.title +
-        (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : ""));
-      nm.title = nm.textContent;
-      const tr = h("tr", "", nm);
+      const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
+      const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
+      nm.title = "@" + t.project + "  " + label;
+      const tr = h("tr", t.status === "done" ? "done" : "", nm);
+      tr.dataset.line = t.line;
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];
         const cell = h("i", on ? "on" : "");
-        if (on && (!prev || !next)) cell.classList.add("edge");
+        if (on && !prev) cell.classList.add("s");           // round only the bar's two ends
+        if (on && !next) cell.classList.add("e");
         tr.append(h("td", "c", cell));
       });
-      tr.append(h("td", "", span("when", t.span.label + (t.span.how === "parent" ? " (via parent)" : "")), t.overdue && span("flag", "OVERDUE")));
+      const w = h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""));
+      w.title = t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "");
+      if (t.span.how !== "own") w.style.fontStyle = "italic";
+      tr.append(w);
       table.append(tr);
     }
-    out.append(h("div", "", table));
+    out.append(h("div", "tlwrap", table));
   }
   if (tl.unscheduled.length) {
     out.append(h("h4", "grp", "Unscheduled"));
-    for (const t of tl.unscheduled) out.append(h("div", "line", taskNode(t, true, false)));
+    for (const t of tl.unscheduled) out.append(taskNode(t, { project: true }));
   }
+  if (d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
 function vPeople(d) {
   const out = h("div");
   for (const g of d.people) {
-    const card = h("div", "card", h("h3", "", g.name, span("count", g.tasks.length + " task(s)")));
-    for (const t of g.tasks) card.append(taskNode(t, true, true));
-    out.append(card);
+    const effort = sumPts(g.tasks);                // the tasks shown, so it follows the filters
+    if (!out.children.length) out.append(colHead("People"));
+    const [head, shut] = foldHead("collapsedPeople", g.name, "person", [g.name],
+      span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : "")));
+    out.append(head);
+    if (shut) continue;
+    for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
+    out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : " (" + g.name + ")"));
   }
-  if (!d.people.length) out.append(h("div", "empty", "No open tasks."));
+  if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
+  if (!d.people.length && d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
 function vUpcoming(d) {
-  const u = d.upcoming, out = h("div", "", span("hint", `Looking ahead ${u.days} days to ${u.horizon}`));
-  const group = (title, items, line) => {
+  const u = d.upcoming, out = h("div", "", colHead(`Next ${u.days} days`, "to " + u.horizon));
+  const group = (title, items, row) => {          // empty groups are left out
+    if (!items.length) return;
     out.append(h("h4", "grp", title));
-    if (!items.length) out.append(h("div", "empty", "(none)"));
-    for (const t of items) out.append(h("div", "line", line(t)));
+    for (const t of items) out.append(row(t));
   };
-  const dated = t => { const n = taskNode(t, true, false); n.prepend(span("d", t.span.label)); return n; };
-  group("Overdue", u.overdue, dated);
-  group("Due soon", u.due, dated);
-  group("Reminders", u.reminders, t => { const n = taskNode(t, true, false); n.prepend(span("d", t.date)); n.append(span("when", "  *" + t.spec)); return n; });
-  group("In progress", u.doing, t => taskNode(t, true, false));
+  group("Overdue", u.overdue, t => taskNode(t, { project: true, span: true }));
+  group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
+  group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
+  group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
+  if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
+    : "Nothing due, overdue or in progress in the next " + u.days + " days."));
+  if (d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
@@ -409,6 +1452,7 @@ function list(items) {                                  // nested by indent (tab
 /* ---------- start ---------- */
 if (!["plain", "planner", "markdown"].includes(state.mode)) state.mode = "plain";
 render(true);
+startFileMode();
 </script>
 </body>
 </html>
