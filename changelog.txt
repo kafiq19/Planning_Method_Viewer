@@ -5,6 +5,39 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.15  2026-10-31  Edit a task by clicking its title
+-------------------------------------------------
+- New: click a task's title in the planner to edit it. The box shows the
+  task's text as you wrote it after the dash, initials, effort and dates
+  included, so you can change any of it; Enter saves, Esc cancels, Undo
+  works. Only that line's text changes. With Edit alongside on, a click
+  still jumps to the line in the text instead.
+- Fix: a refused edit's message no longer ends in "undefined".
+- If the server was started before this version, clicking a title says
+  to restart it, instead of opening an empty box.
+- Code: new edit op `text` (set_text); Task.text and the `text` field in
+  to_data; editCell takes `fill`.
+
+
+1.3.14  2026-10-31  Fold people in People
+-------------------------------------------------
+- New: in the People tab, click a person's initials to fold their tasks
+  away or open them again, the same as projects in Projects. Remembered
+  in the browser; everything opens while a search or filter is on.
+- Code: foldHead (shared by vProjects and vPeople); localStorage key
+  collapsedPeople.
+
+
+1.3.13  2026-10-31  Jump to a task's line
+-------------------------------------------------
+- New: with Edit alongside on, clicking a task in the planner (any tab,
+  Timeline rows too) selects its line in the text and scrolls it into
+  view. Clicking its circle, Who, Effort, Date or + still edits as before.
+  Nothing in your text changes.
+- Code: goToLine and a delegated click on #viewPane in web/index.html;
+  Timeline rows carry data-line.
+
+
 1.3.12  2026-10-31  Text size and font
 -------------------------------------------------
 - New: Text size and Font in the ⋯ menu, remembered in the browser.

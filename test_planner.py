@@ -712,6 +712,34 @@ class TestSetAssignees(EditBase):
             planner.set_assignees("- a (KA)\n", 1, "RT", "b")
 
 
+class TestSetText(EditBase):
+    def test_replaces_only_the_text_after_the_dash(self):
+        text = read_example()
+        t = self.find(planner.parse(text), "complete powerpoint")
+        self.assertEqual(t.text, "complete powerpoint (JS) (m) Oct20--23 *Oct19")
+        out = planner.set_text(text, t.line, "  finish slides (JS, KA) (l) Oct21--23 *Oct19 ", t.title)
+        self.assert_one_line_changed(text, out, t.line, "\t~- finish slides (JS, KA) (l) Oct21--23 *Oct19\n")
+        n = self.find(planner.parse(out), "finish slides")
+        self.assertEqual((n.assignees, n.effort, n.parent.title, [c.title for c in n.children]),
+                         (["JS", "KA"], "l", "finish proposal", ["review with KA"]))
+
+    def test_keeps_indent_mark_trailing_space_and_crlf(self):
+        text = "@P\r\n- a\r\n    !-   b (KA)  \t\r\n- c"
+        self.assertEqual(planner.set_text(text, 3, "new b", "b"), "@P\r\n- a\r\n    !-   new b  \t\r\n- c")
+        self.assertEqual(planner.set_text(text, 4, "d", "c"), "@P\r\n- a\r\n    !-   b (KA)  \t\r\n- d")
+
+    def test_in_task_data(self):
+        d = planner.to_data(planner.parse("@P\n- a (KA) Oct24\n"))
+        self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["text"], "a (KA) Oct24")
+
+    def test_refused(self):
+        text = "@P\n-a\n- b\n"
+        for line, value, title in [(3, "", "b"), (3, "two\nlines", "b"), (3, "x", "stale"), (1, "x", None),
+                                   (2, "- x", "a")]:          # "-- x" would turn the task into a note
+            with self.subTest(value=value, title=title), self.assertRaises(planner.EditError):
+                planner.set_text(text, line, value, title)
+
+
 class TestAddSubtask(EditBase):
     def test_goes_after_last_subtask_and_its_notes(self):
         text = read_example()
@@ -922,6 +950,11 @@ class TestServer(Base):
         code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 1, "op": "task", "value": "b (KA)", "title": "P"})
         self.assertEqual((code, d["text"]), (200, "@P\n- a\n- b (KA)\n"))
         self.assertEqual(d["data"]["people"][0]["name"], "KA")
+
+    def test_edit_text(self):
+        code, d = self.post("/api/edit", {"text": "@P\n- a (KA)\n", "line": 2, "op": "text", "value": "b (RT) (s)", "title": "a"})
+        self.assertEqual((code, d["text"]), (200, "@P\n- b (RT) (s)\n"))
+        self.assertEqual(d["data"]["people"][0]["name"], "RT")
 
     def test_edit_stale_is_409(self):
         code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "op": "status", "value": "done",

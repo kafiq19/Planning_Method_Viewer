@@ -12,8 +12,8 @@ USAGE
                                        projects | timeline | people | upcoming
   --today Oct10                        pretend today is another date (for testing)
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it (paste/open/edit notes, dark mode;
-                                       click a task's box to change its status, or
-                                       click its Who / Effort / Date / + cells to edit it or add a subtask,
+                                       click a task's box to change its status, its title to edit
+                                       its text, or its Who / Effort / Date / + cells to edit it or add a subtask,
                                        or + Add task to add a task to a project)
 
 NOTE FORMAT (quick reference)
@@ -161,6 +161,7 @@ class Task:
     def __init__(self, text, status="open", level=0, line=None):
         self.status, self.level, self.line = status, level, line   # line: 1-based, in the source text
         self.col = 0                     # where `text` starts in that line (set by parse)
+        self.text = text                 # the text after the dash, tokens and all
         self.assignees, self.reminders, self.notes, self.children = [], [], [], []
         self.start = self.end = self.loose = None
         self.parent = self.project = None
@@ -311,6 +312,7 @@ def parse(text):
             status = {"!": "done", "~": "doing", "": "open"}[m.group(1)]
             t = Task(m.group(2), status, level, n)
             t.col = len(ws) + m.start(2)
+            t.text = m.group(2)              # the task's text after the dash, as written (for the `text` edit)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -597,7 +599,7 @@ def task_data(t, keep=None):
         return None
     sp = t.span()
     d = {
-        "title": t.title, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
+        "title": t.title, "text": t.text, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "effort": t.effort, "points": t.points,
         "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
@@ -885,6 +887,28 @@ def set_assignees(text, line, initials, title=None):
     return out
 
 
+def set_text(text, line, task_text, title=None):
+    """Replace the task's text after the dash (title and tokens, as written) with `task_text`.
+
+    The indentation, status mark, dash, trailing whitespace and line ending stay;
+    no other line changes. Refused if the line wouldn't read back as a task at
+    the same place in the outline.
+    """
+    lines, t = _task_at(text, line, title)
+    task_text = task_text.strip()
+    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+        raise EditError("a task is one line of text (to remove a task, edit the text by hand)")
+    raw = lines[line - 1]
+    lines[line - 1] = raw[:t.col] + task_text + raw[_content_end(raw):]
+    out = "".join(lines)
+    n = _find(out, line)
+    same = lambda a, b: (a and a.line) == (b and b.line)
+    if n is None or n.level != t.level or n.status != t.status or n.text != task_text \
+            or not same(n.parent, t.parent) or n.project.line != t.project.line:
+        raise EditError("the line wouldn't read back as that task, so edit it by hand")
+    return out
+
+
 def add_subtask(text, line, task_text, title=None):
     """Add `- task_text` as the last subtask of the task on `line`.
 
@@ -971,7 +995,7 @@ def add_task(text, line, task_text, title=None):
     return out
 
 
-EDITS = {"status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
+EDITS = {"text": set_text, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
 

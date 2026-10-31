@@ -118,6 +118,8 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .toast button { background: none; border: 0; color: inherit; font-weight: 600; padding: 2px 8px; }
 .toast button:hover { background: rgba(255, 255, 255, .15); }
 .hidden { display: none !important; }
+#viewPane.jump [data-line] { cursor: pointer; }      /* Edit alongside: a click on a task shows its line in the text */
+.measure { position: absolute; visibility: hidden; top: 0; left: -9999px; white-space: pre-wrap; overflow-wrap: break-word; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
 /* the views' text: size and font from the ⋯ menu (the text editor takes the size only and stays monospace) */
@@ -175,6 +177,8 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .editbox { position: absolute; z-index: 5; display: flex; align-items: center; }
 .editbox input { width: 15em; font-size: calc(13px * var(--fz)); padding: 3px 8px; box-shadow: 0 4px 14px rgba(20, 25, 40, .15); border-color: var(--accent); }
 .editbox.wide input { width: 18em; }
+.editbox.fill input { width: 100%; }
+#viewPane:not(.jump) .task .ttl { cursor: text; }    /* click a title to edit the task's text (with Edit alongside, it jumps instead) */
 /* the Effort cell's pick list: one choice of S / M / L / XL / none */
 .pickbox { position: absolute; z-index: 30; display: flex; flex-direction: column; min-width: 130px; padding: 4px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 25, 40, .18); }
@@ -614,7 +618,32 @@ function layout() {
   $("viewPane").classList.toggle("hidden", plain);
   $("splitWrap").classList.toggle("hidden", plain);
   $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
+  $("viewPane").classList.toggle("jump", split && state.mode === "planner");
   if (state.mode !== "planner") toast.classList.add("hidden");     // edit messages belong to Planner mode
+}
+
+/* Edit alongside: clicking a task (not one of its buttons) selects its line in the text box and scrolls it into view */
+$("viewPane").addEventListener("click", e => {
+  const row = e.target.closest("[data-line]");
+  if (!row || !$("viewPane").classList.contains("jump") || e.target.closest("button, input, select, a, .editbox, .pickbox")) return;
+  if (String(getSelection())) return;                   // the user is selecting text in the view, not jumping
+  goToLine(+row.dataset.line);
+});
+function goToLine(n) {
+  const v = editor.value, lines = v.split("\n");
+  if (!(n >= 1 && n <= lines.length)) return;
+  const start = lines.slice(0, n - 1).reduce((a, l) => a + l.length + 1, 0), end = start + lines[n - 1].length;
+  const m = document.createElement("div"), cs = getComputedStyle(editor);   // measure where the line sits, wrapping included
+  m.className = "measure";
+  for (const k of ["font", "letterSpacing", "tabSize", "padding", "border", "boxSizing"]) m.style[k] = cs[k];
+  m.style.width = editor.clientWidth + "px";
+  m.textContent = v.slice(0, start) + "\u200b";
+  document.body.append(m);
+  const y = m.scrollHeight - parseFloat(cs.paddingBottom) - parseFloat(cs.lineHeight);
+  m.remove();
+  editor.focus({ preventScroll: true });
+  editor.setSelectionRange(start, end);
+  editor.scrollTop = Math.max(0, y - editor.clientHeight / 3);       // the line a third of the way down
 }
 
 let timer;
@@ -690,8 +719,8 @@ async function editTask(t, op, value, btn, done) {
 const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
 
 /* a one-line input over a cell; Enter applies, Esc or leaving cancels */
-function editCell(cell, placeholder, initial, apply, wide) {
-  const input = h("input"), box = h("span", "editbox" + (wide ? " wide" : ""), input);
+function editCell(cell, placeholder, initial, apply, wide, fill) {   // fill: from the cell's left edge to the row's right edge
+  const input = h("input"), box = h("span", "editbox" + (wide ? " wide" : "") + (fill ? " fill" : ""), input);
   input.type = "text"; input.placeholder = placeholder; input.value = initial || "";
   input.setAttribute("aria-label", placeholder);
   const close = () => { if (box.isConnected) box.remove(); };
@@ -707,8 +736,9 @@ function editCell(cell, placeholder, initial, apply, wide) {
   box.style.top = (c.top - r.top) + "px"; box.style.height = c.height + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
   input.style.maxWidth = Math.max(80, r.width) + "px";
+  if (fill) { box.style.left = Math.max(0, c.left - r.left) + "px"; box.style.right = "8px"; }
   row.append(box);
-  if (box.getBoundingClientRect().left < r.left) {  // a narrow pane: it would stick out on the left, so keep it inside the row
+  if (!fill && box.getBoundingClientRect().left < r.left) {  // a narrow pane: it would stick out on the left, so keep it inside the row
     box.style.right = "auto"; box.style.left = "0";
   }
   input.focus(); input.select();
@@ -970,7 +1000,7 @@ function showToast() {                           // the last edit's message, wit
   close.onclick = () => { state.msg = null; showToast(); };
   const undoBtn = m.undo && h("button", "", "Undo");
   if (undoBtn) undoBtn.onclick = undo;
-  toast.replaceChildren(span("", m.text), undoBtn, close);
+  toast.replaceChildren(...[span("", m.text), undoBtn, close].filter(Boolean));
 }
 
 function plannerView() {
@@ -1010,7 +1040,21 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   row.dataset.line = t.line;
   const lead = h("div", "lead", ...guides(depth), statusBox(t));
   if (project) lead.append(span("proj", "@" + t.project));
-  lead.append(span("ttl", t.title));
+  const ttl = span("ttl", t.title);
+  lead.append(ttl);
+  ttl.onclick = e => {                                  // edit the task's text; with Edit alongside the click jumps to the line instead
+    if ($("viewPane").classList.contains("jump") || String(getSelection())) return;
+    e.stopPropagation();
+    if (typeof t.text !== "string") {                   // a server started before title editing existed sends no `text`
+      state.msg = { text: "To edit a task's text, restart the server (python3 planner.py --serve).", bad: true };
+      return showToast();
+    }
+    editCell(ttl, "task, like  draft (KA) (m) Oct24", t.text, v => {
+      v = v.trim();
+      if (!v || v === t.text) return;
+      editTask(t, "text", v, null, `Changed "${t.title}".`);
+    }, false, true);
+  };
 
   const current = t.assignees.join(", ");
   const who = cellButton("who r", "Change initials", current ? `${current}. Click to change (empty removes)` : "Assign: add initials",
@@ -1071,26 +1115,37 @@ function colHead(title, when) {                  // a section heading that also 
     span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
 }
 
-let collapsed;                                    // projects folded shut in the Projects tab, remembered per browser
-try { collapsed = new Set(JSON.parse(store.get("collapsed", "[]"))); } catch (e) { collapsed = new Set(); }
+/* folded headings, remembered per browser: projects in Projects (key "collapsed"), people in People ("collapsedPeople") */
+const folds = {};
+function foldSet(name) {
+  if (!folds[name]) try { folds[name] = new Set(JSON.parse(store.get(name, "[]"))); } catch (e) { folds[name] = new Set(); }
+  return folds[name];
+}
 const CHEVRON = "M9 6l6 6-6 6";
+/* a heading that folds its rows away: returns [heading, shut]. While searching or filtering, everything is open. */
+function foldHead(name, key, what, label, count) {
+  const set = foldSet(name), open = filterOn(), shut = !open && set.has(key);
+  const fold = h("button", "fold", icon(CHEVRON, 14), ...label);
+  fold.setAttribute("aria-expanded", String(!shut));
+  fold.title = open ? `${what[0].toUpperCase() + what.slice(1)}s stay open while a search or filter is on`
+    : (shut ? "Show" : "Hide") + ` this ${what}'s tasks`;
+  fold.disabled = open;
+  fold.onclick = () => {
+    set[set.has(key) ? "delete" : "add"](key);
+    store.set(name, JSON.stringify([...set]));
+    plannerView();
+  };
+  return [h("h3", "ph" + (shut ? " shut" : ""), fold, count), shut];
+}
 function vProjects(d) {
-  const out = h("div"), open = filterOn();       // while searching or filtering, everything is open so no match is hidden
+  const out = h("div");
   for (const sec of d.projects) {
     out.append(colHead(sec.title || "Projects", sec.when));
     for (const p of sec.projects) {
-      const key = (sec.title || "") + "\n" + p.name, shut = !open && collapsed.has(key);
       const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
-      const fold = h("button", "fold", icon(CHEVRON, 14), span("at", "@"), p.name);
-      fold.setAttribute("aria-expanded", String(!shut));
-      fold.title = open ? "Projects stay open while a search or filter is on" : shut ? "Show this project's tasks" : "Hide this project's tasks";
-      fold.disabled = open;
-      fold.onclick = () => {
-        collapsed[collapsed.has(key) ? "delete" : "add"](key);
-        store.set("collapsed", JSON.stringify([...collapsed]));
-        plannerView();
-      };
-      out.append(h("h3", "ph" + (shut ? " shut" : ""), fold, span("count", p.done + "/" + p.total + " done" + effort)));
+      const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + p.name, "project", [span("at", "@"), p.name],
+        span("count", p.done + "/" + p.total + " done" + effort));
+      out.append(head);
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
       for (const t of p.tasks) out.append(treeNode(t));
@@ -1127,6 +1182,7 @@ function vTimeline(d) {
       const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
       const tr = h("tr", t.status === "done" ? "done" : "", nm);
+      tr.dataset.line = t.line;
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];
         const cell = h("i", on ? "on" : "");
@@ -1155,7 +1211,10 @@ function vPeople(d) {
   for (const g of d.people) {
     const effort = sumPts(g.tasks);                // the tasks shown, so it follows the filters
     if (!out.children.length) out.append(colHead("People"));
-    out.append(h("h3", "ph", g.name, span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : ""))));
+    const [head, shut] = foldHead("collapsedPeople", g.name, "person", [g.name],
+      span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : "")));
+    out.append(head);
+    if (shut) continue;
     for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
     out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : " (" + g.name + ")"));
   }
