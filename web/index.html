@@ -11,6 +11,7 @@
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
   --open: #5f6778; --doing: #c77700; --done: #2f9e5b; --bad: #c42f2f; --bad-bg: #fde8e8;
   --code: #eef0f4; --hover: #f1f3f7; --logo-ink: #ffffff; --effort: #4b1d8f; --effort-text: #ffffff;
+  --fz: 1; --vfont: -apple-system, "Segoe UI", system-ui, sans-serif;   /* text size and font, chosen in the ⋯ menu */
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
@@ -71,6 +72,8 @@ input[type=text], input[type=search] { cursor: text; }
 .mi:hover, .mi:focus-visible { background: var(--hover); }
 .mi:disabled { background: none; }
 .mi .k { color: var(--muted); font-size: 12px; }
+.mi .seg button { padding: 2px 9px; line-height: 1.2; }
+.mi select { font-size: 13px; padding: 3px 6px; max-width: 9.5em; }
 .mi input[type=text] { width: 7.5em; font-size: 13px; padding: 3px 7px; }
 .sep { height: 1px; background: var(--line); margin: 5px 4px; }
 .panel { padding: 14px; gap: 12px; }
@@ -81,7 +84,7 @@ main { flex: 1; min-height: 0; display: flex; }
 #editorPane { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 #editorPane.solo { border-right: 0; }
 textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 16px; background: var(--panel);
-  color: var(--text); font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
+  color: var(--text); font: calc(14px * var(--fz))/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
 #viewPane { padding: 0; }
 .toolbar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 0 20px; padding: 0 24px;
   background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -105,7 +108,7 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .pctl .pcaret { border-left: 1px solid var(--line); padding: 5px 8px; }
 .pctl:not(.on) .pcaret { border-left: 0; padding-left: 0; }
 .content { padding: 14px 24px 80px; }
-.context { font-size: 13px; color: var(--muted); }
+.context { font-size: calc(13px * var(--fz)); color: var(--muted); }
 .content > .context { margin-bottom: 10px; }
 .context:empty { display: none; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
@@ -117,22 +120,24 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .hidden { display: none !important; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
+/* the views' text: size and font from the ⋯ menu (the text editor takes the size only and stays monospace) */
+.content, .md { font-family: var(--vfont); font-size: calc(15px * var(--fz)); }
 /* planner views: plain lists, details in right-hand columns (Who, Effort, Date), colour only where it means something */
 #viewPane { background: var(--panel); }
 .content { container-type: inline-size; }
 .content > div { max-width: 900px; margin: 0 auto; }
-.when { color: var(--muted); font-weight: normal; font-size: 13px; }
-.count { color: var(--muted); font-weight: normal; font-size: 13px; }
-.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) 76px 44px 172px 22px; align-items: center; column-gap: 6px; }
+.when { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
+.count { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
+.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) 22px; align-items: center; column-gap: 6px; }
 .sechead { margin: 20px 0 0; padding: 0 8px 3px; border-bottom: 1px solid var(--line); }
 .sechead:first-child { margin-top: 4px; }
-.sechead h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+.sechead h2 { margin: 0; font-size: calc(12px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sechead h2 .when { font-size: 12px; letter-spacing: 0; text-transform: none; margin-left: 8px; }
-.sechead .c { font-size: 11px; color: var(--muted); padding: 0 4px; }
+.sechead h2 .when { font-size: calc(12px * var(--fz)); letter-spacing: 0; text-transform: none; margin-left: 8px; }
+.sechead .c { font-size: calc(11px * var(--fz)); color: var(--muted); padding: 0 4px; }
 .sechead .c.r { text-align: right; }
 .sechead .c.mid { text-align: center; }
-h3.ph { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 10px 8px 1px; font-size: 15px; font-weight: 600; }
+h3.ph { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 10px 8px 1px; font-size: calc(15px * var(--fz)); font-weight: 600; }
 h3.ph .at { color: var(--muted); font-weight: normal; }
 h3.ph .fold { display: inline-flex; align-items: center; gap: 0; margin-left: -6px; padding: 1px 6px 1px 2px; border: 0; background: none;
   font: inherit; color: inherit; border-radius: 5px; }
@@ -140,12 +145,12 @@ h3.ph .fold:hover:not(:disabled) { background: var(--hover); }
 h3.ph .fold:disabled { opacity: 1; cursor: default; }
 h3.ph .fold svg { margin-right: 4px; color: var(--muted); transform: rotate(90deg); transition: transform .12s; }
 h3.ph.shut .fold svg { transform: none; }
-.task { min-height: 28px; padding: 0 8px; border-radius: 5px; font-size: 14px; }
+.task { min-height: calc(28px * var(--fz)); padding: 0 8px; border-radius: 5px; font-size: calc(14px * var(--fz)); }
 .task:hover, .task:focus-within { background: var(--hover); }
 .lead { display: flex; align-items: center; min-width: 0; padding: 3px 0; }
 .ttl { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 .g { align-self: stretch; flex: none; width: 18px; margin: -3px 0 -3px 10px; border-left: 1px solid var(--line); }
-.proj { color: var(--muted); font-size: 13px; margin-right: 8px; flex: none; }
+.proj { color: var(--muted); font-size: calc(13px * var(--fz)); margin-right: 8px; flex: none; }
 button.st { flex: none; width: 22px; height: 22px; padding: 0; margin-right: 6px; border: 1px solid transparent; border-radius: 11px;
   background: none; display: inline-flex; align-items: center; justify-content: center; }
 button.st svg { width: 16px; height: 16px; }
@@ -155,7 +160,7 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 /* the Who / Effort / Date cells and the + (subtask) cell: click to edit; empty ones show a faint + on the row */
 .cell { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 4px; border: 0; border-radius: 4px;
-  background: none; color: var(--muted); font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; }
+  background: none; color: var(--muted); font-size: calc(13px * var(--fz)); text-align: left; white-space: nowrap; overflow: hidden; }
 .cell.r { justify-content: flex-end; }
 .cell.mid { justify-content: center; }
 .cell:hover { background: var(--panel); color: var(--text); }
@@ -168,34 +173,34 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .task { position: relative; }
 .editbox { position: absolute; z-index: 5; display: flex; align-items: center; }
-.editbox input { width: 15em; font-size: 13px; padding: 3px 8px; box-shadow: 0 4px 14px rgba(20, 25, 40, .15); border-color: var(--accent); }
+.editbox input { width: 15em; font-size: calc(13px * var(--fz)); padding: 3px 8px; box-shadow: 0 4px 14px rgba(20, 25, 40, .15); border-color: var(--accent); }
 .editbox.wide input { width: 18em; }
 /* the Effort cell's pick list: one choice of S / M / L / XL / none */
 .pickbox { position: absolute; z-index: 30; display: flex; flex-direction: column; min-width: 130px; padding: 4px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 25, 40, .18); }
-.pickbox .mi { padding: 5px 8px; font-size: 13px; gap: 10px; justify-content: flex-start; }
+.pickbox .mi { padding: 5px 8px; font-size: calc(13px * var(--fz)); gap: 10px; justify-content: flex-start; }
 .pickbox .mi .k { margin-left: auto; }
 .pickbox .mi .ck { width: 1em; color: var(--accent); }
 /* "+ Add task" at the end of a project (and of each person, and of Timeline / Upcoming, with a project picker) */
 .addrow { display: flex; align-items: center; min-height: 28px; padding: 0 8px; }
-.addtask { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 2px 6px; margin-left: -4px; border-radius: 5px; }
+.addtask { border: 0; background: none; color: var(--muted); font-size: calc(13px * var(--fz)); padding: 2px 6px; margin-left: -4px; border-radius: 5px; }
 .addtask:hover { color: var(--text); background: var(--hover); }
 .addtask .plus { display: inline-block; width: 16px; text-align: center; margin-right: 4px; }
 .addform { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; padding: 2px 0; }
-.addform select { font-size: 13px; padding: 3px 6px; max-width: 100%; }
-.addform input { flex: 1; min-width: 10em; font-size: 13px; padding: 3px 8px; border-color: var(--accent); }
+.addform select { font-size: calc(13px * var(--fz)); padding: 3px 6px; max-width: 100%; }
+.addform input { flex: 1; min-width: 10em; font-size: calc(13px * var(--fz)); padding: 3px 8px; border-color: var(--accent); }
 .addform input:focus-visible { outline: none; }
-.eff { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
+.eff { font-size: calc(11px * var(--fz)); font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
 .dim .lead > :not(.g), .dim .cell { opacity: .5; }
-.note { display: flex; color: var(--muted); font-size: 12.5px; padding: 0 8px 3px; line-height: 1.35; }
+.note { display: flex; color: var(--muted); font-size: calc(12.5px * var(--fz)); padding: 0 8px 3px; line-height: 1.35; }
 .note .pad { flex: none; width: 28px; }
 .empty { color: var(--muted); padding: 12px 8px; }
 .err { color: var(--bad); background: var(--bad-bg); padding: 12px 16px; border-radius: 8px; }
-h4.grp { margin: 18px 0 2px; padding: 0 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+h4.grp { margin: 18px 0 2px; padding: 0 8px; font-size: calc(12px * var(--fz)); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .tlwrap { overflow-x: auto; }
-table.tl { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.tl { border-collapse: collapse; width: 100%; font-size: calc(14px * var(--fz)); }
 table.tl th, table.tl td { padding: 2px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-table.tl th { font-size: 11px; font-weight: 600; color: var(--muted); }
+table.tl th { font-size: calc(11px * var(--fz)); font-weight: 600; color: var(--muted); }
 table.tl th.m { text-align: center; width: 3.2%; }
 table.tl td.name { position: sticky; left: 0; background: var(--panel); max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 table.tl td.name .lead { display: inline-flex; vertical-align: middle; padding: 0; }
@@ -205,7 +210,7 @@ table.tl td.c + td.c i:not(.on) { border-left: 1px solid var(--panel); }   /* mo
 table.tl td.c i.on { background: var(--bar); }
 table.tl tr.done td.c i.on { opacity: .4; }
 table.tl td.c i.s { border-radius: 4px 0 0 4px; } table.tl td.c i.e { border-radius: 0 4px 4px 0; } table.tl td.c i.s.e { border-radius: 4px; }
-table.tl td.w { font-size: 13px; color: var(--muted); }
+table.tl td.w { font-size: calc(13px * var(--fz)); color: var(--muted); }
 table.tl td.w.late { color: var(--bad); font-weight: 600; }
 
 /* a narrow pane (Edit alongside, phones): a task's Who / Effort / Date wrap onto a line under its title */
@@ -227,7 +232,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 
 /* first run */
 .welcome { max-width: 520px; margin: 48px auto; text-align: center; color: var(--muted); }
-.welcome h2 { color: var(--text); font-size: 18px; margin: 0 0 6px; }
+.welcome h2 { color: var(--text); font-size: calc(18px * var(--fz)); margin: 0 0 6px; }
 .welcome p { margin: 0 0 16px; }
 
 /* narrow windows: the panes and the toolbar stack (task rows adapt to their pane, above) */
@@ -278,6 +283,8 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
       <div class="sep"></div>
       <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
       <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
+      <div class="mi" id="sizeWrap">Text size <span class="seg" id="textSize" role="radiogroup" aria-label="Text size"></span></div>
+      <label class="mi" id="fontWrap">Font <select id="font" aria-label="Font for the views"></select></label>
       <div class="sep"></div>
       <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
     </div>
@@ -331,6 +338,39 @@ $("theme").onclick = () => {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   store.set("theme", t); applyTheme(t); closePops();
 };
+
+/* ---------- text size and font (⋯ menu), remembered in this browser ---------- */
+const SIZES = [["Small", .9, 12], ["Default", 1, 14], ["Large", 1.15, 16], ["Larger", 1.3, 18]];   // name, scale, size of its "A"
+const FONTS = [                                                                // installed fonts only: no downloads
+  ["System", '-apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Rounded", 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT", "Varela Round", -apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Serif", 'Charter, "Bitstream Charter", "Iowan Old Style", Georgia, Cambria, serif'],
+  ["Legible", '"Atkinson Hyperlegible", Verdana, "DejaVu Sans", Tahoma, sans-serif'],
+  ["Condensed", '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, system-ui, sans-serif'],
+  ["Monospace", 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'],
+];
+function applyText() {
+  const size = SIZES.find(z => z[0] === store.get("textSize", "Default")) || SIZES[1];
+  const font = FONTS.find(f => f[0] === store.get("font", "System")) || FONTS[0];
+  document.documentElement.style.setProperty("--fz", size[1]);
+  document.documentElement.style.setProperty("--vfont", font[1]);
+  for (const b of $("textSize").children) { const on = b.dataset.size === size[0]; b.classList.toggle("on", on); b.setAttribute("aria-checked", String(on)); }
+  $("font").value = font[0];
+}
+for (const [name, , px] of SIZES) {
+  const b = document.createElement("button");
+  b.textContent = "A"; b.style.fontSize = px + "px"; b.dataset.size = name;
+  b.title = name; b.setAttribute("aria-label", name); b.setAttribute("role", "radio");
+  b.onclick = e => { e.stopPropagation(); store.set("textSize", name); applyText(); };
+  $("textSize").append(b);
+}
+for (const [name, stack] of FONTS) {
+  const o = document.createElement("option");
+  o.value = o.textContent = name; o.style.fontFamily = stack;
+  $("font").append(o);
+}
+$("font").onchange = () => { store.set("font", $("font").value); applyText(); };
+applyText();
 
 /* ---------- editor, files ---------- */
 const editor = $("editor");

@@ -5,6 +5,18 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.12  2026-10-31  Text size and font
+-------------------------------------------------
+- New: Text size and Font in the ⋯ menu, remembered in the browser.
+  Text size has four steps (Small, Default, Large, Larger) and applies to
+  the text editor and the views. Font offers System, Rounded, Serif,
+  Legible, Condensed and Monospace for the Planner and Markdown views; the
+  text editor stays fixed-width so tab indents line up. Only fonts already
+  on your computer are used (nothing is downloaded).
+- Code: SIZES, FONTS and applyText in web/index.html; CSS variables --fz
+  and --vfont; the views' font sizes and column widths are calc(... * --fz).
+
+
 1.3.11  2026-10-31  Extra-small effort
 -------------------------------------------------
 - New: effort size (xs), extra small, worth 1 point (the same as (s)).
