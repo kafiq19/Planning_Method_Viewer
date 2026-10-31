@@ -5,6 +5,26 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.0  2026-10-31  A calmer, simpler page
+------------------------------------------
+Phase 1, layout:
+- The header holds just the name, the file, its save state, the mode switch
+  and a "..." menu. Open file, Save, Edit alongside, Dark/Light mode and
+  Today moved into that menu. In file mode, "Saved" turns into an
+  "Unsaved - Save" button when there is something to save.
+- "Plain" mode is now called "Text".
+- Planner mode has one tool row: the tabs, then search, a Filter button
+  (person, project, show done; it shows how many are on) and the period.
+- The period is one compact control, "< Oct 2026 v >". Its menu picks All
+  dates, By month or By season and jumps back to this month or season; the
+  arrows say where they go when you hover them.
+- A quiet line above the list says which period is showing (and the Today
+  date, when it is set). Edit messages and Undo appear at the bottom of the
+  window, so nothing jumps.
+Code: popup() / closePops() for menus, showToast(), contextLine, pctl;
+icons are inline SVG.
+
+
 1.2.9  2026-10-31  Effort badge colour
 ---------------------------------------
 - Planner mode: the S / M / L / XL effort badge is now a solid deep purple

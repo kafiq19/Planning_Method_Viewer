@@ -9,45 +9,86 @@
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7384; --line: #e2e5eb;
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
   --open: #6b7384; --doing: #c77700; --done: #2f9e5b; --bad: #d63c3c; --bad-bg: #fde8e8;
-  --code: #eef0f4; --effort: #4b1d8f; --effort-text: #ffffff;
+  --code: #eef0f4; --hover: #f1f3f7; --effort: #4b1d8f; --effort-text: #ffffff;
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --panel: #1b1f29; --text: #e6e9f0; --muted: #98a0b3; --line: #2b3040;
   --accent: #6d93ff; --accent-text: #0e1220; --bar: #6d93ff; --bar-off: #252a37;
   --open: #98a0b3; --doing: #f0a63a; --done: #4cc47f; --bad: #ff7b7b; --bad-bg: #3a2024;
-  --code: #252a37; --effort: #7b3fe4; --effort-text: #ffffff;
+  --code: #252a37; --hover: #252a37; --effort: #7b3fe4; --effort-text: #ffffff;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
        display: flex; flex-direction: column; }
-header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px;
+header { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 20px;
          background: var(--panel); border-bottom: 1px solid var(--line); }
-header h1 { font-size: 17px; margin: 0 6px 0 0; }
-button, .btn, input[type=text], select { font: inherit; color: var(--text); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+.brand { font-size: 16px; font-weight: 600; }
+button, .btn, input[type=text], input[type=search], select { font: inherit; font-size: 14px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:hover, .btn:hover { border-color: var(--accent); }
-input[type=text] { cursor: text; width: 7.5em; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.seg button { border: 0; border-radius: 0; }
-.seg button + button { border-left: 1px solid var(--line); }
-.seg button.on, .tabs button.on { background: var(--accent); color: var(--accent-text); }
-label.chk { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+button:disabled:hover { border-color: var(--line); }
+input[type=text], input[type=search] { cursor: text; }
+.ghost { background: none; border-color: transparent; color: var(--muted); }
+.ghost:hover { color: var(--text); border-color: transparent; background: var(--hover); }
+.pill { font-size: 13px; padding: 2px 10px; border-radius: 12px; color: var(--accent); border-color: var(--accent); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--code); border-radius: 8px; }
+.seg button { border: 0; background: none; color: var(--muted); padding: 4px 12px; font-size: 13px; }
+.seg button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 25, 40, .15); }
 .spacer { flex: 1; }
 .hint { color: var(--muted); font-size: 13px; }
+.pop { position: relative; display: inline-flex; }
+.menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 240px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 8px 24px rgba(20, 25, 40, .14); }
+.mi { display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%; padding: 7px 10px; border: 0;
+  border-radius: 6px; background: none; text-align: left; font-size: 14px; color: var(--text); cursor: pointer; }
+.mi:hover, .mi:focus-visible { background: var(--hover); }
+.mi:disabled { background: none; }
+.mi .k { color: var(--muted); font-size: 12px; }
+.mi input[type=text] { width: 7.5em; font-size: 13px; padding: 3px 7px; }
+.sep { height: 1px; background: var(--line); margin: 5px 4px; }
+.panel { padding: 14px; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
 main { flex: 1; min-height: 0; display: flex; }
 .pane { flex: 1; min-width: 0; overflow: auto; }
 #editorPane { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 #editorPane.solo { border-right: 0; }
 textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 16px; background: var(--panel);
   color: var(--text); font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
-#viewPane { padding: 18px 24px 40px; }
+#viewPane { padding: 0; }
+.toolbar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 0 20px; padding: 0 24px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 10px 2px; color: var(--muted); }
+.tab:hover { border-color: transparent; border-bottom-color: var(--line); color: var(--text); }
+.tab.on, .tab.on:hover { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tools { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
+.search { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: var(--panel); color: var(--muted); }
+.search:focus-within { border-color: var(--accent); }
+.search input { border: 0; padding: 5px 0; width: 12em; outline: 0; background: none; }
+.badge { font-size: 12px; line-height: 1.5; color: var(--accent-text); background: var(--accent); border-radius: 9px; padding: 0 6px; }
+.badge:empty { display: none; }
+.pctl { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; }
+.pctl > button, .pctl > .pop > button { border: 0; border-radius: 0; background: none; }
+.pctl > button { color: var(--muted); padding: 5px 9px; }
+.pctl > button:hover { color: var(--text); background: var(--hover); }
+.pctl .pmid { font-weight: 600; padding: 5px 12px; }
+.pctl.on .pmid { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.pctl .caret { color: var(--muted); font-weight: normal; }
+.content { padding: 14px 24px 80px; }
+.context { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.context:empty { display: none; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 32px); background: var(--text); color: var(--panel); padding: 8px 10px 8px 16px; border-radius: 10px;
+  font-size: 14px; box-shadow: 0 8px 24px rgba(20, 25, 40, .25); }
+.toast.bad { background: var(--bad); color: #ffffff; }
+.toast button { background: none; border: 0; color: inherit; font-weight: 600; padding: 2px 8px; }
+.toast button:hover { background: rgba(255, 255, 255, .15); }
 .hidden { display: none !important; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
 /* planner views */
-.tabs { display: inline-flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
-.tabs button.on { border-color: var(--accent); }
 h2.sec { margin: 26px 0 2px; font-size: 18px; }
 h2.sec:first-child { margin-top: 0; }
 .sec .when, .when { color: var(--muted); font-weight: normal; font-size: 13px; }
@@ -65,27 +106,10 @@ button.box:disabled { opacity: .5; cursor: wait; }
 @media (hover: none) { .acts { visibility: visible; } }
 .acts button { padding: 0 7px; margin-left: 3px; font-size: 12px; color: var(--muted); }
 .ask { margin-left: 8px; font-size: 13px; padding: 1px 7px; width: 16em; }
-#fileStatus button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
+#fileStatus { display: inline-flex; align-items: center; gap: 6px; }
 #fileStatus.bad { color: var(--bad); }
-.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: -4px 0 14px; }
-.filters input[type=search] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
-  border-radius: 6px; padding: 5px 11px; width: 16em; max-width: 100%; }
-.filters select { padding: 4px 8px; max-width: 12em; }
-.filters button:disabled { opacity: .45; cursor: default; }
-.period { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.period button { padding: 3px 10px; font-size: 13px; }
-.period button.pstep { color: var(--muted); }
-.period button.pstep:hover { color: var(--text); }
-.period button:disabled { opacity: .45; cursor: default; }
-.pcur { display: inline-flex; flex-direction: column; align-items: center; min-width: 9em; line-height: 1.2;
-  padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; }
-.plabel { font-weight: 600; }
-.pnote { font-size: 11px; color: var(--accent); }
-.pnote:empty { display: none; }
+#fileStatus button { padding: 1px 8px; font-size: 13px; }
 .dim > .ttl, .dim > .who, .dim > .eff, .dim > .when, .dim > .rem { opacity: .5; }
-.msg { margin-left: 12px; font-size: 13px; }
-.msg.bad { color: var(--bad); }
-.msg button { padding: 0 8px; margin-left: 6px; font-size: 13px; }
 .s-open .box { color: var(--open); } .s-doing .box { color: var(--doing); } .s-done .box { color: var(--done); }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 .who, .rem { font-size: 12px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
@@ -123,19 +147,30 @@ h4.grp { margin: 22px 0 6px; font-size: 14px; text-transform: uppercase; letter-
 </head>
 <body>
 <header>
-  <h1>Planner</h1>
-  <label class="btn" id="openWrap">Open file<input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
-  <button id="save">Save</button>
+  <span class="brand">Planner</span>
+  <span id="fileName" class="hint"></span>
+  <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
   <span id="fileStatus" class="hint"></span>
+  <span class="spacer"></span>
   <span class="seg" id="modes">
-    <button data-mode="plain">Plain</button>
+    <button data-mode="plain">Text</button>
     <button data-mode="planner">Planner</button>
     <button data-mode="markdown">Markdown</button>
   </span>
-  <label class="chk" id="splitWrap"><input type="checkbox" id="split"> Edit alongside</label>
-  <span class="spacer"></span>
-  <label class="chk" id="todayWrap">Today <input type="text" id="today" placeholder="Oct12 or 2026-10-12"></label>
-  <button id="theme" title="Toggle dark mode">Dark</button>
+  <span class="pop">
+    <button id="more" class="ghost" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="Open, save, theme and more">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+    </button>
+    <div id="moreMenu" class="menu hidden" role="menu">
+      <label class="mi" id="openWrap" role="menuitem" tabindex="0">Open file… <span class="k">or drop a file</span><input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
+      <button class="mi" id="saveItem" role="menuitem">Save <span class="k">Ctrl/⌘-S</span></button>
+      <div class="sep"></div>
+      <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
+      <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
+      <div class="sep"></div>
+      <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
+    </div>
+  </span>
 </header>
 <main>
   <section class="pane" id="editorPane">
@@ -162,15 +197,27 @@ function h(tag, cls, ...kids) {
 }
 const span = (cls, text) => h("span", cls, text);
 
-/* ---------- theme ---------- */
+/* ---------- pop-up menus: one open at a time; a click outside or Esc closes them ---------- */
+const pops = [];
+function popup(btn, menu) {
+  const set = open => { menu.classList.toggle("hidden", !open); btn.setAttribute("aria-expanded", String(open)); };
+  btn.addEventListener("click", e => { e.stopPropagation(); const open = menu.classList.contains("hidden"); closePops(); set(open); });
+  pops.push(set);
+}
+function closePops() { for (const set of pops) set(false); }
+document.addEventListener("click", e => { if (!e.target.closest(".menu")) closePops(); });
+popup($("more"), $("moreMenu"));
+
+/* ---------- theme (follows the system until it is chosen in the menu) ---------- */
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
-  $("theme").textContent = t === "dark" ? "Light" : "Dark";
+  $("theme").firstChild.textContent = t === "dark" ? "Light mode " : "Dark mode ";
+  $("themeNote").textContent = store.get("theme", null) ? "" : "follows system";
 }
 applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 $("theme").onclick = () => {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  applyTheme(t); store.set("theme", t);
+  store.set("theme", t); applyTheme(t); closePops();
 };
 
 /* ---------- editor, files ---------- */
@@ -196,7 +243,9 @@ function loadText(text, name) {
   if (name) state.fileName = name;
   schedule();
 }
+$("openWrap").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 $("file").onchange = async e => {
+  closePops();
   const f = e.target.files[0];
   if (f) loadText(await f.text(), f.name);
   e.target.value = "";
@@ -210,12 +259,14 @@ function download() {
 const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
 const unsaved = () => state.file && editor.value !== state.file.saved;
 
-function showFile(problem) {
+function showFile(problem) {                                // header: file name, then "Saved" or the Save pill
   const st = $("fileStatus");
   st.classList.toggle("bad", !!problem);
+  $("fileName").textContent = state.file ? state.file.name : "";
+  $("save").classList.toggle("hidden", !unsaved() || !!problem);
   if (!state.file) return st.replaceChildren();
   if (problem) return st.replaceChildren(...problem);
-  st.replaceChildren(state.file.name + (unsaved() ? "  • unsaved" : "  saved"));
+  st.replaceChildren(unsaved() ? "" : "Saved");
 }
 
 function setFile(text, version) {                           // the page now matches the file on disk
@@ -284,8 +335,10 @@ window.addEventListener("focus", async () => {              // pick up edits mad
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  if (e.key === "Escape") closePops();
 });
 $("save").onclick = () => save();
+$("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
   e.preventDefault();
   document.body.classList.toggle("drop", ev === "dragover");
@@ -312,6 +365,7 @@ function layout() {
   $("viewPane").classList.toggle("hidden", plain);
   $("splitWrap").classList.toggle("hidden", plain);
   $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
+  if (state.mode !== "planner") toast.classList.add("hidden");     // edit messages belong to Planner mode
 }
 
 let timer;
@@ -470,38 +524,68 @@ function filtered(d) {
 
 /* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
 try { state.period = JSON.parse(store.get("period", "null")); } catch (e) { state.period = null; }
-const fPeriod = h("select", "", h("option", "", "All dates"), h("option", "", "By month"), h("option", "", "By season"));
-[...fPeriod.options].forEach((o, i) => { o.value = ["", "month", "season"][i]; });
-fPeriod.title = "Show one month or season at a time";
-const pPrev = h("button", "pstep"), pNext = h("button", "pstep"), pNow = h("button", "pnow");
-const pLabel = h("span", "plabel"), pNote = h("span", "pnote");
-const periodNav = h("span", "period", pPrev, h("span", "pcur", pLabel, pNote), pNext, pNow);
+const icon = (d, size = 15) => {                // a small stroke icon (inline SVG, no library)
+  const n = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  n.setAttribute("width", size); n.setAttribute("height", size); n.setAttribute("viewBox", "0 0 24 24");
+  n.setAttribute("aria-hidden", "true");
+  n.innerHTML = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return n;
+};
+const pPrev = h("button", "", "‹"), pNext = h("button", "", "›"), pMid = h("button", "pmid");
+const pMenu = h("div", "menu hidden"), pctl = h("span", "pctl", pPrev, h("span", "pop", pMid, pMenu), pNext);
+pMid.setAttribute("aria-haspopup", "menu");
+popup(pMid, pMenu);
 function setPeriod(p) {
   state.period = p ? { kind: p.kind, year: p.year, index: p.index } : null;
   store.set("period", JSON.stringify(state.period));
   render(false);
 }
-fPeriod.onchange = () => setPeriod(fPeriod.value ? { kind: fPeriod.value } : null);   // server picks the current one
 pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
 pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
-pNow.onclick = () => state.data.period && setPeriod(state.data.period.now);
-function showPeriod(per) {                       // each button says where it goes; the middle says what is showing
-  periodNav.classList.toggle("hidden", !per);
+function showPeriod(per) {       // ‹ › name where they go (on hover); the middle says what is showing and opens the menu
+  const unit = per && (per.kind === "month" ? "month" : "season");
+  pctl.classList.toggle("on", !!per);
+  pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
+  pMid.replaceChildren(per ? per.label : "All dates", " ", span("caret", "▾"));
+  pMid.title = "Show all dates, one month or one season";
+  const item = (label, note, on, pick, disabled) => {
+    const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
+    b.onclick = () => { closePops(); pick(); };
+    return b;
+  };
+  const kind = per ? per.kind : "";
+  pMenu.replaceChildren(
+    item("All dates", kind === "" ? "✓" : "", kind === "", () => kind && setPeriod(null)),
+    item("By month", kind === "month" ? "✓" : "", kind === "month", () => kind !== "month" && setPeriod({ kind: "month" })),
+    item("By season", kind === "season" ? "✓" : "Winter, Summer, Fall", kind === "season", () => kind !== "season" && setPeriod({ kind: "season" })),
+    ...(per ? [h("div", "sep"), item("This " + unit, per.current ? "you're here" : per.now.label, false, () => setPeriod(per.now), per.current)] : []));
   if (!per) return;
-  const unit = per.kind === "month" ? "month" : "season";
-  pPrev.textContent = "‹ " + per.prev.label;  pPrev.title = `Previous ${unit}: ${per.prev.label}`;
-  pNext.textContent = per.next.label + " ›";  pNext.title = `Next ${unit}: ${per.next.label}`;
-  pLabel.textContent = per.label;
-  pNote.textContent = per.current ? "this " + unit : "";
-  pNow.textContent = "This " + unit;  pNow.title = `Back to ${per.now.label}`;
-  pNow.disabled = per.current;
+  for (const [b, dir, to] of [[pPrev, "Previous", per.prev], [pNext, "Next", per.next]]) {
+    b.title = `${dir} ${unit}: ${to.label}`; b.setAttribute("aria-label", b.title);
+  }
 }
 
-const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input"), fClear = h("button", "", "Clear");
-fQ.type = "search"; fQ.placeholder = "Search tasks and notes"; fQ.value = filt.q;
+/* ---------- tool row: tabs, then search, Filter (person, project, show done) and the period ---------- */
+const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input");
+const fClear = h("button", "ghost", "Clear filters"), fCount = span("badge", "");
+fQ.type = "search"; fQ.placeholder = "Search"; fQ.value = filt.q; fQ.setAttribute("aria-label", "Search tasks, notes and projects");
 fDone.type = "checkbox"; fDone.checked = filt.done;
-const filterBar = h("div", "filters", fPeriod, periodNav, fQ, fWho, fProj, h("label", "chk", fDone, "Show done"), fClear);
-const tabsBox = h("div"), plannerBody = h("div");
+const fBtn = h("button", "", icon("M4 6h16M7 12h10M10 18h4"), " Filter ", fCount);
+fBtn.setAttribute("aria-haspopup", "dialog");
+fBtn.style.cssText = "display: inline-flex; align-items: center; gap: 4px";
+const fPanel = h("div", "menu panel hidden",
+  h("label", "field", "Person", fWho), h("label", "field", "Project", fProj),
+  h("label", "check", fDone, "Show done tasks"), h("div", "", fClear));
+fPanel.lastChild.style.cssText = "display: flex; justify-content: flex-end";
+popup(fBtn, fPanel);
+const tabsBox = h("span", ""), tabsRow = h("div", "toolbar", tabsBox,
+  h("span", "tools", h("label", "search", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5"), fQ),
+    h("span", "pop", fBtn, fPanel), pctl));
+const contextLine = h("div", "context"), plannerBody = h("div"), contentBox = h("div", "content", contextLine, plannerBody);
+const toast = h("div", "toast hidden");
+toast.setAttribute("role", "status");
+document.body.append(toast);
 function setFilt(k, v) {
   filt[k] = v; store.set(FKEYS[k], k === "done" ? (v ? "1" : "0") : v);
   plannerView();
@@ -512,8 +596,8 @@ fWho.onchange = () => setFilt("who", fWho.value);
 fProj.onchange = () => setFilt("proj", fProj.value);
 fDone.onchange = () => setFilt("done", fDone.checked);
 fClear.onclick = () => {
-  fQ.value = ""; fWho.value = ""; fProj.value = ""; fDone.checked = true;
-  for (const [k, v] of [["q", ""], ["who", ""], ["proj", ""]]) { filt[k] = v; store.set(FKEYS[k], v); }
+  fWho.value = ""; fProj.value = ""; fDone.checked = true;
+  for (const [k, v] of [["who", ""], ["proj", ""]]) { filt[k] = v; store.set(FKEYS[k], v); }
   setFilt("done", true);
 };
 function options(sel, names, current, all) {     // a chosen name stays listed even if it has no tasks right now
@@ -527,27 +611,42 @@ function options(sel, names, current, all) {     // a chosen name stays listed e
   sel.value = current;
 }
 
+function showToast() {                           // the last edit's message, with Undo while it still applies
+  const m = state.msg;
+  toast.classList.toggle("hidden", !m);
+  if (!m) return toast.replaceChildren();
+  toast.classList.toggle("bad", !!m.bad);
+  const close = h("button", "", "×"); close.setAttribute("aria-label", "Dismiss");
+  close.onclick = () => { state.msg = null; showToast(); };
+  const undoBtn = m.undo && h("button", "", "Undo");
+  if (undoBtn) undoBtn.onclick = undo;
+  toast.replaceChildren(span("", m.text), undoBtn, close);
+}
+
 function plannerView() {
   const view = $("viewPane"), d = filtered(state.data);
   options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
   options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");
-  fClear.disabled = !filterOn();
-  fPeriod.value = state.data.period ? state.data.period.kind : "";
+  const n = [filt.who, filt.proj, !filt.done].filter(Boolean).length;
+  fCount.textContent = n ? String(n) : "";
+  fBtn.title = n ? `${n} filter${n > 1 ? "s" : ""} on` : "Filter by person or project, or hide done tasks";
+  fClear.disabled = !n;
   showPeriod(state.data.period);
-  const tabs = h("div", "tabs");
+  const tabs = [];
   for (const [id, label] of TABS) {
-    const b = h("button", id === state.tab ? "on" : "", label);
+    const b = h("button", "tab" + (id === state.tab ? " on" : ""), label);
     b.onclick = () => { state.tab = id; store.set("tab", id); plannerView(); };
-    tabs.append(b);
+    tabs.push(b);
   }
-  const body = { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d);
-  const msg = state.msg && span("msg" + (state.msg.bad ? " bad" : ""), state.msg.text);
-  if (msg && state.msg.undo) { const u = h("button", "", "Undo"); u.onclick = undo; msg.append(u); }
-  const note = d.period && span("hint", state.tab === "upcoming" ? "  · Upcoming always shows the next "
-    + d.upcoming.days + " days" : "  · showing " + d.period.label + "; undated tasks hidden");
-  tabsBox.replaceChildren(tabs, span("hint", "  Today is " + d.today_label), note, msg);
-  plannerBody.replaceChildren(body);
-  if (view.children.length !== 3 || view.firstChild !== tabsBox) view.replaceChildren(tabsBox, filterBar, plannerBody);
+  tabsBox.replaceChildren(...tabs);
+  const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
+  if ($("today").value.trim()) bits.push("As of " + d.today_label);
+  if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+    state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
+  contextLine.textContent = bits.join(" · ");
+  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d));
+  showToast();
+  if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
 }
 
 function taskNode(t, showProject, showSpan) {
