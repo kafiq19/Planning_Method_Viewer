@@ -238,16 +238,55 @@ table.tl td.c i.s { border-radius: 4px 0 0 4px; } table.tl td.c i.e { border-rad
 table.tl td.w { font-size: calc(13px * var(--fz)); color: var(--muted); }
 table.tl td.w.late { color: var(--bad); font-weight: 600; }
 
+/* Week: six day columns (Sat/Sun shared) and This week by project on the right, the backlog below */
+.content.wide > div { max-width: 1280px; }
+.wtop { display: grid; grid-template-columns: minmax(0, 1fr) calc(250px * var(--fz)); gap: 16px; align-items: start; margin: 4px 0 8px; }
+.wdays { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; }
+.wday { min-width: 0; min-height: 150px; padding: 6px 5px 10px; border-left: 1px solid var(--line); }
+.wday:first-child { border-left: 0; }
+.wday.today { background: var(--hover); }
+.wday.over, .wback.over { outline: 2px dashed var(--accent); outline-offset: -3px; border-radius: 8px; }
+.whead { padding: 0 3px 6px; font-size: calc(12px * var(--fz)); font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wday.today .whead { color: var(--accent); }
+.wcard, .wline { position: relative; display: flex; align-items: flex-start; gap: 2px; cursor: grab; border-radius: 6px; }
+.wcard { margin-bottom: 4px; padding: 3px 5px 4px 2px; border: 1px solid var(--line); background: var(--panel); font-size: calc(13px * var(--fz)); }
+.wcard:hover, .wline:hover { border-color: var(--accent); }
+.wcard button.st, .wline button.st { margin-right: 2px; }
+.wbody { min-width: 0; padding-top: 2px; line-height: 1.3; overflow-wrap: anywhere; }
+.wmeta { display: block; color: var(--muted); font-size: calc(11.5px * var(--fz)); }
+.s-done .wt { color: var(--muted); text-decoration: line-through; }
+.wside { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 10px; }
+.wside h4.grp { margin: 0 0 4px; padding: 0; }
+.wproj { margin-top: 8px; }
+.wpname { font-size: calc(13px * var(--fz)); font-weight: 600; }
+.wline { align-items: center; padding: 1px 2px; border: 1px solid transparent; font-size: calc(13px * var(--fz)); }
+.wline .wbody { display: flex; align-items: baseline; gap: 8px; flex: 1; padding-top: 0; }
+.wline .wt { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wline .wd { flex: none; color: var(--muted); font-size: calc(12px * var(--fz)); }
+.wsum { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--line); text-align: right; color: var(--muted); font-size: calc(12px * var(--fz)); }
+.wempty { color: var(--muted); font-size: calc(12.5px * var(--fz)); }
+.wback { padding-bottom: 8px; }
+.sechead.wrow, .task.wrow { grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) calc(70px * var(--fz)); }
+.cell.plan .add { font-size: calc(12px * var(--fz)); }
+.cell.plan .t { color: var(--muted); }
+@container (max-width: 900px) { .wtop { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 560px) {
+  .wdays { grid-template-columns: minmax(0, 1fr); }
+  .wday { min-height: 0; border-left: 0; border-top: 1px solid var(--line); padding-bottom: 6px; }
+  .wday:first-child { border-top: 0; }
+}
+
 /* a narrow pane (Edit alongside, phones): a task's Who / Effort / Date wrap onto a line under its title */
 @container (max-width: 480px) {
-  .sechead { grid-template-columns: minmax(0, 1fr); }
+  .sechead, .sechead.wrow { grid-template-columns: minmax(0, 1fr); }
   .sechead .c { display: none; }
   .task { display: flex; flex-wrap: wrap; align-items: center; column-gap: 2px; padding: 2px 8px 4px; }
   .task .lead { flex: 1 0 100%; }
   .task::before { content: ""; order: 1; width: calc(var(--d, 0) * 28px + 24px); }   /* line details up under the title */
   .task .cell { order: 2; }
-  .task .cell:has(> .add:only-child):not(.sub) { display: none; }                    /* empty cells take no room */
-  .task .cell.sub { order: 3; margin-left: auto; }
+  .task .cell:has(> .add:only-child):not(.sub):not(.plan) { display: none; }         /* empty cells take no room */
+  .task .cell.sub, .task .cell.plan { order: 3; margin-left: auto; }
+  .task .cell.plan .add { visibility: visible; }                                     /* the only way to plan without dragging */
 }
 
 /* keyboard focus */
@@ -809,7 +848,7 @@ async function render(relayout) {
   const seq = ++state.seq;
   try {
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period }) });
+      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period, week: state.week }) });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
@@ -826,7 +865,7 @@ async function render(relayout) {
 }
 
 /* ---------- planner views ---------- */
-const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"]];
+const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"], ["week", "Week"]];
 
 /* ---------- status clicks: the server rewrites only the task's status mark ---------- */
 const NEXT = { open: "doing", doing: "done", done: "open" };
@@ -851,7 +890,7 @@ async function editTask(t, op, value, btn, done) {
   try {
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null,
-        period: state.period }) });
+        period: state.period, week: state.week }) });
     const res = await r.json();
     if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
     if (!r.ok) throw new Error(res.error || r.statusText);
@@ -915,7 +954,7 @@ function pickCell(cell, label, choices, current, apply) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task");               // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline");   // drop down from the cell, right edge on the cell's right edge
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
@@ -1039,7 +1078,10 @@ function filtered(d) {
     timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
     people: d.people.filter(g => !filt.who || g.name === filt.who)
       .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
-    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) } };
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) },
+    week: { ...d.week, days: d.week.days.map(x => ({ ...x, tasks: flat(x.tasks).filter(shown) })),
+      projects: d.week.projects.map(g => ({ ...g, tasks: flat(g.tasks).filter(shown) })).filter(g => g.tasks.length),
+      backlog: d.week.backlog.map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length) } };
 }
 
 /* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
@@ -1094,6 +1136,25 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   }
 }
 
+/* ---------- week: ‹ Oct 12-18 › on the Week tab (the server does the date math; not remembered: it opens on this week) ---------- */
+state.week = null;
+const wPrev = h("button", "", "‹"), wNext = h("button", "", "›"), wMid = h("button", "pmid");
+const wctl = h("span", "pctl on hidden", wPrev, wMid, wNext);
+const setWeek = w => { state.week = w ? { year: w.year, index: w.index } : null; render(false); };
+wPrev.onclick = () => setWeek(state.data.week.prev);
+wNext.onclick = () => setWeek(state.data.week.next);
+wMid.onclick = () => { if (!state.data.week.current) setWeek(null); };
+function showWeek(w, on) {
+  wctl.classList.toggle("hidden", !on); pctl.classList.toggle("hidden", on);
+  if (!on) return;
+  wctl.classList.toggle("away", !w.current);
+  wMid.textContent = w.label;
+  wMid.title = w.current ? "This week. Use ‹ › to step" : "Back to this week: " + w.now.label;
+  for (const [b, dir, to] of [[wPrev, "Previous", w.prev], [wNext, "Next", w.next]]) {
+    b.title = `${dir} week: ${to.label}`; b.setAttribute("aria-label", b.title);
+  }
+}
+
 /* ---------- tool row: tabs, then search, Filter (person, project, show done) and the period ---------- */
 const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input");
 const fClear = h("button", "ghost", "Clear filters"), fCount = span("badge", "");
@@ -1109,7 +1170,7 @@ fPanel.lastChild.style.cssText = "display: flex; justify-content: flex-end";
 popup(fBtn, fPanel);
 const tabsBox = h("span", "tabs"), tabsRow = h("div", "toolbar", tabsBox,
   h("span", "tools", h("label", "search", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5"), fQ),
-    h("span", "pop", fBtn, fPanel), pctl));
+    h("span", "pop", fBtn, fPanel), pctl, wctl));
 const contextLine = h("div", "context"), plannerBody = h("div"), contentBox = h("div", "content", contextLine, plannerBody);
 const toast = h("div", "toast hidden");
 toast.setAttribute("role", "status");
@@ -1165,6 +1226,8 @@ function plannerView() {
   fBtn.title = n ? `${n} filter${n > 1 ? "s" : ""} on` : "Filter by person or project, or hide done tasks";
   fClear.disabled = !n;
   showPeriod(state.data.period);
+  showWeek(state.data.week, state.tab === "week");
+  contentBox.classList.toggle("wide", state.tab === "week");
   const tabs = [];
   for (const [id, label] of TABS) {
     const b = h("button", "tab" + (id === state.tab ? " on" : ""), label);
@@ -1174,10 +1237,11 @@ function plannerView() {
   tabsBox.replaceChildren(...tabs);
   const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
   if ($("today").value.trim()) bits.push("As of " + d.today_label);
-  if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+  if (state.tab === "week") bits.push("Drag a task onto a day, or use its Plan cell" + (per ? " · the period doesn't apply here" : ""));
+  else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
   contextLine.textContent = bits.join(" · ");
-  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming }[state.tab](d));
+  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, week: vWeek }[state.tab](d));
   showToast();
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
 }
@@ -1186,7 +1250,7 @@ const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 
 const guides = depth => Array.from({ length: depth }, () => span("g"));
 
 /* one task row: [guides][status][@project][title] | Who | Effort | Date | + ; the last four are click-to-edit cells */
-function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem } = {}) {
+function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
   const row = h("div", "task s-" + t.status);
   row.style.setProperty("--d", depth);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
@@ -1249,6 +1313,13 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     cell => editCell(cell, "new subtask, like  draft (KA) Oct24", "", v => v.trim() &&
       editTask(t, "subtask", v, null, `Added "${v.trim()}" under "${t.title}".`), true));
 
+  if (week) {                                            // the Week backlog: a Plan cell instead of + (subtask)
+    row.classList.add("wrow");
+    const plan = cellButton("plan r", "Plan for a day", t.plan ? `Planned for ${t.plan_label} (another week). Click to plan it this week`
+      : "Plan for a day this week", [t.plan ? span("t", t.plan_label) : span("add", "Plan")], cell => planPick(cell, t, week));
+    row.append(lead, who, size, dateCell, plan);
+    return row;
+  }
   row.append(lead, who, size, dateCell, sub);
   return row;
 }
@@ -1390,6 +1461,79 @@ function vUpcoming(d) {
   if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
     : "Nothing due, overdue or in progress in the next " + u.days + " days."));
   if (d.targets.length) out.append(addTaskRow(null));
+  return out;
+}
+
+/* ---------- Week: plan tasks for days (>MonDD in the task's line, edit op "plan"); the server groups them ---------- */
+let dragged = null;                              // the task being dragged (this page only)
+function planPick(cell, t, w) {                 // the day list: Mon … Sat/Sun, and Unplan when it is planned
+  const day = w.days.find(x => x.dates.includes(t.plan));
+  pickCell(cell, "Plan for", [...w.days.map(x => ({ value: x.token, text: x.head, note: x.today ? "today" : "" })),
+    ...(t.plan ? [{ value: "", text: "Unplan" }] : [])], day ? day.token : null, v => planTask(t, v, w));
+}
+function planTask(t, token, w) {
+  const day = w.days.find(x => x.token === token), was = w.days.find(x => x.dates.includes(t.plan));
+  if (token && day === was) return;
+  editTask(t, "plan", token, null, !token ? `Unplanned "${t.title}".` : was ? `Moved "${t.title}" to ${day.head}.`
+    : `Planned "${t.title}" for ${day.head}.`);
+}
+function draggable(el, t) {
+  el.draggable = true;
+  el.addEventListener("dragstart", e => { dragged = t; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.title); });
+  el.addEventListener("dragend", () => { dragged = null; });
+}
+function dropZone(el, onDrop) {
+  el.addEventListener("dragover", e => { if (!dragged) return; e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
+  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const t = dragged; dragged = null; if (t) onDrop(t); });
+}
+function weekItem(cls, t, w, extra) {           // a planned task: status, title (+ meta); a click opens the day list, drag moves it
+  const body = h("span", "wbody", span("wt", t.title), ...extra);
+  const el = h("div", cls + " s-" + t.status, statusBox(t), body);
+  el.dataset.line = t.line;
+  el.title = "@" + t.project + "  " + t.title + "  (line " + t.line + ")";
+  el.onclick = e => {
+    if ($("viewPane").classList.contains("jump") || e.target.closest("button")) return;   // Edit alongside: the click jumps instead
+    e.stopPropagation(); planPick(el, t, w);
+  };
+  draggable(el, t);
+  return el;
+}
+function vWeek(d) {
+  const w = d.week, out = h("div");
+  const days = h("div", "wdays");
+  for (const day of w.days) {
+    const col = h("div", "wday" + (day.today ? " today" : ""), h("div", "whead", day.head + (day.today ? " · today" : "")));
+    for (const t of day.tasks)
+      col.append(weekItem("wcard", t, w, [span("wmeta", "@" + t.project + (t.effort ? " · " + t.effort.toUpperCase() : ""))]));
+    dropZone(col, t => planTask(t, day.token, w));
+    days.append(col);
+  }
+  const side = h("div", "wside", h("h4", "grp", "This week"));
+  for (const g of w.projects) {
+    const total = sumPts(g.tasks);                 // the tasks shown, so it follows the filters
+    side.append(h("div", "wproj", h("div", "wpname", "@" + g.name),
+      ...g.tasks.map(t => { const day = w.days.find(x => x.dates.includes(t.plan));
+        return weekItem("wline", t, w, [span("wd", day ? day.head.split(" ")[0] : t.plan_label)]); }),
+      h("div", "wsum", pts(total))));
+  }
+  if (!w.projects.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
+  out.append(h("div", "wtop", days, side));
+  const back = h("div", "wback", colHead("Backlog", "open tasks not planned this week"));
+  back.firstChild.classList.add("wrow");
+  back.firstChild.lastChild.textContent = "Plan";
+  back.firstChild.lastChild.classList.add("r");
+  for (const g of w.backlog) {
+    back.append(h("h3", "ph", h("span", "", span("at", "@"), g.name)));
+    for (const t of g.tasks) {                   // drag by the title side (the row's inputs stay selectable)
+      const row = taskNode(t, { depth: t.depth, week: w });
+      draggable(row.querySelector(".lead"), t);
+      back.append(row);
+    }
+  }
+  if (!w.backlog.length) back.append(h("div", "empty", d.filtered ? "No matching open tasks." : "Every open task is planned this week."));
+  dropZone(back, t => t.plan && planTask(t, "", w));   // drop a planned task here to unplan it
+  out.append(back);
   return out;
 }
 

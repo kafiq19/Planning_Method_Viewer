@@ -5,6 +5,25 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.5.0  2026-10-31  Weekly planner
+-------------------------------------------------
+- New: the Week tab. Days across the top (Monday to Friday, then Saturday
+  and Sunday together), "This week" on the right with the planned tasks per
+  project and their points, and the backlog of open tasks below.
+- Plan a task by dragging it onto a day, or with its Plan cell (works on
+  phones). Drag it to another day to move it, or onto the backlog to
+  unplan it; click a planned task for the same choices. Undo works.
+- New note syntax: >Oct14 marks the day you plan to work on a task. It is
+  separate from the due date: "draft report Oct24 >Oct14". Write it after
+  the date and before any reminder; the tool keeps that order when it edits.
+- New CLI view: python planner.py notes.txt week
+- example.txt plans two tasks this week (Oct 12 and Oct 14).
+- Code: RE_PLAN and Task.plan; edit op `plan` (set_plan); week_monday,
+  week_days, week_groups, view_week; to_data(projects, period, monday) adds
+  `week` and each task's `plan`; /api/parse and /api/edit take `week`.
+  Page: vWeek, planPick, draggable / dropZone, the week control.
+
+
 1.4.2  2026-10-31  Quick note
 -------------------------------------------------
 - New: the first tab is always "Quick note", a place to jot ideas down

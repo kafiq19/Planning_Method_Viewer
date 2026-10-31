@@ -4,11 +4,11 @@ Fall Planning  Sep01--Dec19
 -- client: Harbour Development Corp
 !- meet w. clients (KA)
 - finish proposal (KA) (l) Oct24
-	!- gather requirements (RT) (s)
+	!- gather requirements (RT) (s) >Oct12
 	~- complete powerpoint (JS) (m) Oct20--23 *Oct19
 		-- use Q3 numbers from Lisa's deck
 		- review with KA Oct22
-	- send to board (s) Oct24 *Oct23
+	- send to board (s) Oct24 >Oct14 *Oct23
 ~- annual report ~Q1
 	-- kickoff after holidays
 	- draft outline (KA) ~Jan

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-planner.py (KAFEEN Planner) - turn plain-text planning notes into four views:
-projects, timeline, people, and what's coming up.
+planner.py (KAFEEN Planner) - turn plain-text planning notes into five views:
+projects, timeline, people, what's coming up, and the week.
 Standard library only (Python 3.8+).
 
 USAGE
@@ -9,7 +9,7 @@ USAGE
                                        Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
   python planner.py notes.txt          read notes from a file instead
   python planner.py notes.txt people   show one view only:
-                                       projects | timeline | people | upcoming
+                                       projects | timeline | people | upcoming | week
   --today Oct10                        pretend today is another date (for testing)
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
                                        files from the page: each is a tab, saved automatically and reopened next time
@@ -30,6 +30,7 @@ NOTE FORMAT (quick reference)
   Oct23--26  Oct23--Nov03       date range
   ~Q1  ~Nov  ~wk43              loose date: sometime in that period
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
+  >Oct14                        planned: the day you mean to work on it (the Week view)
 """
 import os
 import re
@@ -46,9 +47,10 @@ RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
 RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
                        + MON + r"\d{1,2})\b")
-RE_RANGE = re.compile(r"(?<![\w*~])(" + MON + r")(\d{1,2})--(" + MON + r")?(\d{1,2})\b")
+RE_PLAN = re.compile(r"(?<!\S)>(" + MON + r")(\d{1,2})\b")
+RE_RANGE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})--(" + MON + r")?(\d{1,2})\b")
 RE_LOOSE = re.compile(r"(?<!\S)~(Q[1-4]|wk\d{1,2}|" + MON + r")\b")
-RE_DATE = re.compile(r"(?<![\w*~])(" + MON + r")(\d{1,2})\b")
+RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
 
 PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue stays overdue);
                     # anything earlier in the calendar means next year
@@ -171,8 +173,8 @@ class Task:
 
     def _parse(self, text):
         # Where each token sat in `text` (start, end), so an edit can change just that token.
-        self.at = {"assignees": [], "reminders": [], "date": None, "effort": None}
-        self.date_text = self.effort = None
+        self.at = {"assignees": [], "reminders": [], "date": None, "effort": None, "plan": None}
+        self.date_text = self.effort = self.plan = None
         self.points = 0
         original, keep = text, list(range(len(text)))   # keep[i]: index in `original` of text[i]
 
@@ -199,6 +201,11 @@ class Task:
         for m in ms:
             self.reminders.append((m.group(1), next_reminder(m.group(1))))
         self.at["reminders"] = cut(ms)
+        m = RE_PLAN.search(text)             # >Oct14: the day it is planned for (first valid one only)
+        d = m and resolve(MONTHS[m.group(1)], int(m.group(2)))
+        if d:
+            self.plan = d
+            self.at["plan"] = cut([m])[0]
 
         m = RE_RANGE.search(text)
         if m:
@@ -547,6 +554,55 @@ def view_people(projects):
     return out
 
 
+def week_monday(obj=None):
+    """Request value {year, index} (ISO year and week) -> that week's Monday; None -> this week's."""
+    if obj is None:
+        return TODAY - timedelta(days=TODAY.weekday())
+    if not isinstance(obj, dict) or type(obj.get("year")) is not int or type(obj.get("index")) is not int:
+        raise ValueError(f"bad week {obj!r}")
+    return date.fromisocalendar(obj["year"], obj["index"], 1)
+
+
+def week_label(monday):
+    """"Oct 12 - 18", "Oct 26 - Nov 1", with the year when it isn't TODAY's."""
+    sun = monday + timedelta(days=6)
+    return fspan(monday, sun)
+
+
+def week_days(monday):
+    """The Week view's six columns: [(heading, days)]; Saturday and Sunday share the last one."""
+    days = [monday + timedelta(days=i) for i in range(7)]
+    heads = [f"{n} {d.day}" for n, d in zip(("Mon", "Tue", "Wed", "Thu", "Fri"), days)]
+    return list(zip(heads, [[d] for d in days[:5]])) + [(f"Sat/Sun {days[5].day}-{days[6].day}", days[5:])]
+
+
+def week_groups(projects, monday):
+    """-> (columns, planned, backlog) for the week starting `monday`.
+    columns: [(heading, days, [(project, task)])]; planned: [(project, [tasks])], tasks planned this week,
+    done ones too; backlog: [(project, [(depth, task)])], every open task not planned this week, in outline order."""
+    sunday = monday + timedelta(days=6)
+    cols = [(head, days, []) for head, days in week_days(monday)]
+    planned, backlog = [], []
+    for p in projects:
+        mine, rest = [], []
+
+        def visit(t, depth):
+            if t.plan and monday <= t.plan <= sunday:
+                mine.append(t)
+                cols[min(t.plan.weekday(), 5)][2].append((p, t))
+            elif t.status != "done":
+                rest.append((depth, t))
+            for c in t.children:
+                visit(c, depth + 1)
+        for t in p.tasks:
+            visit(t, 0)
+        if mine:
+            planned.append((p, sorted(mine, key=lambda t: t.plan)))   # by day
+        if rest:
+            backlog.append((p, rest))
+    return cols, planned, backlog
+
+
 def upcoming_groups(projects):
     """-> (horizon, overdue, due, doing, reminders); dated lists are (date, project, task[, spec])."""
     horizon = TODAY + timedelta(days=UPCOMING_DAYS)
@@ -586,6 +642,29 @@ def view_upcoming(projects):
     return out
 
 
+def view_week(projects, monday=None):
+    monday = monday or week_monday()
+    cols, planned, backlog = week_groups(projects, monday)
+    out = ["WEEK", "====", f"Week of {week_label(monday)}  (plan a task for a day with >MonDD)"]
+    for head, _, items in cols:
+        out.append(f"\n{head}")
+        out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in items)
+        if not items:
+            out.append("    (nothing planned)")
+    out.append("\nBy project")
+    for p, tasks in planned:
+        out.append(f"  @{p.name}   {pts(effort_points(tasks)[1])}")
+        out.extend(f"    {BOX[t.status]} {fd(t.plan):<7} {t.label()}" for t in tasks)
+    if not planned:
+        out.append("    (nothing planned this week)")
+    out.append("\nBacklog (open tasks not planned this week)")
+    for p, items in backlog:
+        out.append(f"  @{p.name}")
+        out.extend(f"    {'    ' * depth}{BOX[t.status]} {t.label()}" + (f"   (planned {fd(t.plan)})" if t.plan else "")
+                   for depth, t in items)
+    return out
+
+
 # ---------- structured data (for the web page) ----------
 
 def iso(d):
@@ -603,6 +682,7 @@ def task_data(t, keep=None):
     d = {
         "title": t.title, "text": t.text, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "effort": t.effort, "points": t.points,
+        "plan": iso(t.plan), "plan_label": fd(t.plan) if t.plan else None,
         "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
@@ -623,8 +703,10 @@ def flat(p, t):
     return d
 
 
-def to_data(projects, period=None):
-    """Everything the four views show, as plain dicts and lists (JSON-ready).
+def to_data(projects, period=None, monday=None):
+    """Everything the five views show, as plain dicts and lists (JSON-ready).
+
+    `monday` (from week_monday) picks the Week view's week; default this week.
 
     With `period` (from period_from), Projects, Timeline and People show only tasks
     whose span overlaps it, and the timeline's columns are that period.
@@ -669,6 +751,13 @@ def to_data(projects, period=None):
         unscheduled = []
     people = [(n, [(p, t) for p, t in items if not inside or inside(t)]) for n, items in people_groups(projects)]
     horizon, overdue, due, doing, reminders = upcoming_groups(projects)
+    monday = monday or week_monday()
+    wcols, wplanned, wbacklog = week_groups(projects, monday)
+    this_monday = week_monday()
+
+    def wref(m):
+        y, w, _ = m.isocalendar()
+        return {"year": y, "index": w, "label": week_label(m)}
     return {
         "today": iso(TODAY), "today_label": fd(TODAY),
         "period": period and {
@@ -694,6 +783,16 @@ def to_data(projects, period=None):
             "due": [flat(p, t) for _, p, t in sorted(due, key=lambda r: r[0])],
             "reminders": [dict(flat(p, t), spec=spec, date=fd(d)) for d, spec, p, t in sorted(reminders, key=lambda r: r[0])],
             "doing": [flat(p, t) for p, t in doing]},
+        "week": {
+            **wref(monday), "start": iso(monday), "end": iso(monday + timedelta(days=6)),
+            "current": monday == this_monday,
+            "prev": wref(monday - timedelta(days=7)), "next": wref(monday + timedelta(days=7)), "now": wref(this_monday),
+            "days": [{"head": head, "token": f"{MONTH_NAMES[ds[0].month - 1]}{ds[0].day:02d}", "dates": [iso(x) for x in ds], "today": TODAY in ds,
+                      "tasks": [flat(p, t) for p, t in items]} for head, ds, items in wcols],
+            "projects": [{"name": p.name, "line": p.line, "points": effort_points(tasks)[1],
+                          "tasks": [flat(p, t) for t in tasks]} for p, tasks in wplanned],
+            "backlog": [{"name": p.name, "line": p.line, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
+                        for p, items in wbacklog]},
     }
 
 
@@ -769,8 +868,8 @@ def set_date(text, line, when, title=None):
         raw = raw[:s] + when + raw[e:] if when else _drop(raw, s, e, t.col)
     elif not when:
         raise EditError("that task has no date to clear")
-    elif t.at["reminders"]:
-        p = t.col + t.at["reminders"][0][0]
+    elif t.at["reminders"] or t.at["plan"]:                 # before >plan and reminders, so dates read in one order
+        p = t.col + min(s for s, _ in t.at["reminders"] + ([t.at["plan"]] if t.at["plan"] else []))
         raw = raw[:p] + when + " " + raw[p:]
     else:
         p = _content_end(raw)
@@ -781,6 +880,38 @@ def set_date(text, line, when, title=None):
     if (n.start, n.end) != ((probe.start, probe.end) if probe else (None, None)):
         raise EditError(f"the line wouldn't read as {when or 'undated'!r}; another date-like word "
                         "earlier in the line takes priority, so edit it by hand")
+    return out
+
+
+def set_plan(text, line, when, title=None):
+    """Plan the task for a day (`Oct14`; with or without the `>`), move it, or (empty) unplan it.
+
+    The task's `>MonDD` token is replaced in place; a new one goes before the first
+    reminder, or at the end of the line. Nothing else on the line moves.
+    """
+    lines, t = _task_at(text, line, title)
+    when = when.strip().lstrip(">").strip()
+    probe = Task("x >" + when) if when else None
+    if probe and (probe.plan is None or probe.title != "x"):
+        raise EditError(f"{when!r} is not a day (use Oct14)")
+    token = ">" + when if when else ""
+    raw = lines[line - 1]
+    if t.at["plan"]:
+        s, e = (t.col + i for i in t.at["plan"])
+        raw = raw[:s] + token + raw[e:] if token else _drop(raw, s, e, t.col)
+    elif not token:
+        raise EditError("that task isn't planned for a day")
+    elif t.at["reminders"]:
+        p = t.col + t.at["reminders"][0][0]
+        raw = raw[:p] + token + " " + raw[p:]
+    else:
+        p = _content_end(raw)
+        raw = raw[:p] + " " + token + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    if (n.plan, n.title, n.start, n.end) != (probe.plan if probe else None, t.title, t.start, t.end):
+        raise EditError("the line wouldn't read back as planned for that day, so edit it by hand")
     return out
 
 
@@ -803,7 +934,7 @@ def add_assignees(text, line, initials, title=None):
         p = s + max(i for i, c in enumerate(raw[s:e]) if c.isupper()) + 1
         raw = raw[:p] + ", " + ", ".join(new) + raw[p:]
     else:
-        tokens = t.at["reminders"] + [t.at[k] for k in ("effort", "date") if t.at[k]]
+        tokens = t.at["reminders"] + [t.at[k] for k in ("effort", "date", "plan") if t.at[k]]
         group = "(" + ", ".join(new) + ")"
         if tokens:
             p = t.col + min(s for s, _ in tokens)
@@ -837,7 +968,7 @@ def set_effort(text, line, size, title=None):
     elif not size:
         raise EditError("that task has no effort to clear")
     else:
-        tokens = t.at["reminders"] + ([t.at["date"]] if t.at["date"] else [])
+        tokens = t.at["reminders"] + [t.at[k] for k in ("date", "plan") if t.at[k]]
         if tokens:
             p = t.col + min(s for s, _ in tokens)
             raw = raw[:p] + ("" if raw[p - 1].isspace() else " ") + token + " " + raw[p:]
@@ -997,7 +1128,7 @@ def add_task(text, line, task_text, title=None):
     return out
 
 
-EDITS = {"text": set_text, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
+EDITS = {"text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
 
@@ -1158,15 +1289,16 @@ def make_server(port, notes_path=None, browse_root=None):
                     set_today(req["today"])
                 text = req.get("text", "")
                 period = period_from(req.get("period"))
+                monday = week_monday(req.get("week"))
                 if self.path == "/api/parse":
-                    return self._json(200, to_data(parse(text), period))
+                    return self._json(200, to_data(parse(text), period, monday))
                 op = EDITS.get(req["op"])
                 if op is None:
                     raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
                 if not isinstance(req["value"], str):
                     raise EditError("value must be text")
                 text = op(text, req["line"], req["value"], req.get("title"))
-                self._json(200, {"text": text, "data": to_data(parse(text), period)})
+                self._json(200, {"text": text, "data": to_data(parse(text), period, monday)})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -1291,7 +1423,7 @@ def serve(port, notes_path=None):
 
 
 VIEWS = {"projects": view_projects, "timeline": view_timeline,
-         "people": view_people, "upcoming": view_upcoming}
+         "people": view_people, "upcoming": view_upcoming, "week": view_week}
 
 
 def take_option(args, flag):
