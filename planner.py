@@ -13,7 +13,8 @@ USAGE
   --today Oct10                        pretend today is another date (for testing)
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it (paste/open/edit notes, dark mode;
                                        click a task's box to change its status, or
-                                       hover it to set a date or effort, add initials or a subtask)
+                                       click its Who / Effort / Date / + cells to edit it or add a subtask,
+                                       or + Add task to add a task to a project)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -22,7 +23,7 @@ NOTE FORMAT (quick reference)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
-  (s)  (m)  (l)  (xl)           effort: 1, 3, 5 or 8 points (lowercase only)
+  (xs) (s) (m) (l) (xl)         effort: 1, 1, 3, 5 or 8 points (lowercase only)
   Oct24                         due date
   Oct23--26  Oct23--Nov03       date range
   ~Q1  ~Nov  ~wk43              loose date: sometime in that period
@@ -39,7 +40,7 @@ MONTHS = {m: i for i, m in enumerate(MONTH_NAMES, 1)}
 MON = "(?:" + "|".join(MONTH_NAMES) + ")"
 WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])}
 
-RE_EFFORT = re.compile(r"(?<!\w)\(\s*(s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
+RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
 RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
                        + MON + r"\d{1,2})\b")
@@ -51,7 +52,7 @@ PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue sta
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
 BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]"}
-EFFORT = {"s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
+EFFORT = {"xs": 1, "s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
 TODAY = date.today()
 
 
@@ -268,8 +269,8 @@ def pts(n):
 
 
 class Project:
-    def __init__(self, name, section):
-        self.name, self.section = name, section
+    def __init__(self, name, section, line=None):
+        self.name, self.section, self.line = name, section, line   # line: the @ line (for "(no project)", its first line)
         self.tasks, self.notes = [], []
 
     def all_tasks(self):
@@ -283,7 +284,7 @@ def parse(text):
     def ensure_project():
         nonlocal project
         if project is None:
-            project = Project("(no project)", section)
+            project = Project("(no project)", section, n)
             projects.append(project)
         return project
 
@@ -295,7 +296,7 @@ def parse(text):
         line = raw.strip()
 
         if line.startswith("@"):
-            project = Project(line[1:].strip(), section)
+            project = Project(line[1:].strip(), section, n)
             projects.append(project)
             stack = []
             continue
@@ -652,7 +653,7 @@ def to_data(projects, period=None):
                          "projects": []}
             sections.append(seen[key])
         seen[key]["projects"].append({
-            "name": p.name, "notes": p.notes,
+            "name": p.name, "line": p.line, "notes": p.notes,
             "done": sum(t.status == "done" for t in tasks), "total": len(tasks),
             "points": dict(zip(("left", "total"), effort_points(tasks))),
             "tasks": shown})
@@ -675,6 +676,7 @@ def to_data(projects, period=None):
                 ("prev", period_step(*period, -1)), ("next", period_step(*period, 1)),
                 ("now", period_at(period[0], TODAY)))}},
         "projects": sections,
+        "targets": [{"name": p.name, "line": p.line, "section": p.section.title if p.section else None} for p in projects],
         "timeline": {
             "columns": [{"head": h, "start": iso(a), "end": iso(b)} for h, a, b in cols],
             "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
@@ -813,7 +815,7 @@ def add_assignees(text, line, initials, title=None):
 
 
 def set_effort(text, line, size, title=None):
-    """Set, replace or (with an empty `size`) clear the task's effort: s, m, l or xl.
+    """Set, replace or (with an empty `size`) clear the task's effort: xs, s, m, l or xl.
 
     An existing (size) token is replaced in place. A new one goes before the
     first date or reminder (as in `finish proposal (KA) (m) Oct24`), or at the
@@ -822,7 +824,7 @@ def set_effort(text, line, size, title=None):
     lines, t = _task_at(text, line, title)
     size = size.strip().strip("()").strip().lower()
     if size and size not in EFFORT:
-        raise EditError(f"{size!r} is not an effort (use s, m, l or xl; empty clears it)")
+        raise EditError(f"{size!r} is not an effort (use xs, s, m, l or xl; empty clears it)")
     raw = lines[line - 1]
     token = f"({size})"
     if t.at["effort"]:
@@ -923,8 +925,54 @@ def add_subtask(text, line, task_text, title=None):
     return out
 
 
+def add_task(text, line, task_text, title=None):
+    """Add `- task_text` as the last top-level task of the project on `line` (its @ line).
+
+    `title` is the project's name. The new line goes after the project's last line
+    (its tasks and notes, before blank lines and the next @ or heading), indented
+    like the project's first task. Existing lines are not changed, except that a
+    final line with no line ending gets one.
+    """
+    lines = text.splitlines(keepends=True)
+    if type(line) is not int or not 1 <= line <= len(lines):
+        raise EditError(f"line {line!r} is not in the text")
+    p = next((p for p in parse(text) if p.line == line), None)
+    if p is None or (title is not None and p.name != title):
+        raise EditError(f"line {line} is no longer that project (the text has changed)")
+    task_text = task_text.strip()
+    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+        raise EditError("a task is one line of text")
+    raw = lines[line - 1]
+    first = p.tasks[0] if p.tasks else None
+    fr = lines[first.line - 1] if first else ""
+    indent = fr[:len(fr) - len(fr.lstrip())]
+    ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
+    last = line                                 # last non-blank line of the project
+    for i in range(line, len(lines)):
+        r = lines[i]
+        c = r.strip()
+        if not c:
+            continue
+        rws = r[:len(r) - len(r.lstrip())]
+        lvl = rws.count("\t") + rws.count(" ") // 4
+        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
+            break
+        last = i + 1
+    if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
+        lines[last - 1] += ending
+        new_line = indent + "- " + task_text
+    else:
+        new_line = indent + "- " + task_text + ending
+    lines.insert(last, new_line)
+    out = "".join(lines)
+    n = _find(out, last + 1)
+    if n is None or n.parent is not None or n.project.line != line:
+        raise EditError("the new task wouldn't land in that project, so add it by hand")
+    return out
+
+
 EDITS = {"status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
-         "subtask": add_subtask}
+         "subtask": add_subtask, "task": add_task}
 
 
 # ---------- the notes file (--serve notes.txt) ----------

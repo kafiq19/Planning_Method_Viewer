@@ -127,7 +127,7 @@ class TestTokens(Base):
         self.assertEqual(t.title, "call (maybe)")
 
     def test_effort(self):
-        for size, points in (("s", 1), ("m", 3), ("l", 5), ("xl", 8)):
+        for size, points in (("xs", 1), ("s", 1), ("m", 3), ("l", 5), ("xl", 8)):
             with self.subTest(size=size):
                 t = self.task(f"write report (KA) ({size}) Oct24")
                 self.assertEqual((t.effort, t.points, t.title, t.assignees), (size, points, "write report", ["KA"]))
@@ -143,7 +143,7 @@ class TestTokens(Base):
         self.assertEqual((t.effort, t.assignees), (None, ["S", "XL"]))
 
     def test_effort_attached_to_word_or_unknown_stays_in_title(self):
-        for text in ("review file(s)", "a (xs)", "a (xxl)", "a (med)"):
+        for text in ("review file(s)", "a (xxs)", "a (xxl)", "a (med)"):
             with self.subTest(text=text):
                 t = self.task(text)
                 self.assertEqual((t.effort, t.title), (None, text))
@@ -342,7 +342,7 @@ class TestExample(Base):
 
     def test_effort_totals(self):
         self.assertEqual({p.name: planner.effort_points(p.all_tasks()) for p in self.ps},
-                         {"HDC": (9, 10), "MDM": (3, 3), "OPS": (8, 8)})
+                         {"HDC": (9, 10), "MDM": (4, 4), "OPS": (8, 8)})
         groups = dict(planner.people_groups(self.ps))
         self.assertEqual(planner.effort_points(t for _, t in groups["KA"])[0], 13)   # (l) + (xl)
         projects = "\n".join(planner.view_projects(self.ps))
@@ -351,7 +351,7 @@ class TestExample(Base):
         self.assertIn("\n@OPS   0/5 done   8 of 8 pts left", projects)
         people = "\n".join(planner.view_people(self.ps))
         self.assertIn("KA   5 task(s), 13 pts", people)
-        self.assertIn("RT   2 task(s), 8 pts", people)
+        self.assertIn("RT   2 task(s), 9 pts", people)
         self.assertIn("[~] @HDC  complete powerpoint [M]   Oct 20-23", people)
 
     def test_people(self):
@@ -399,7 +399,7 @@ class TestExample(Base):
         self.assertEqual((proposal["title"], proposal["effort"], proposal["points"]), ("finish proposal", "l", 5))
         annual = hdc["tasks"][2]
         self.assertEqual((annual["title"], annual["loose"], proposal["loose"]), ("annual report", "Q1", None))
-        self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 8, "(unassigned)": 4})
+        self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 9, "(unassigned)": 4})
 
 
 # ---------- periods (Month / Season picker) ----------
@@ -640,7 +640,7 @@ class TestSetEffort(EditBase):
             planner.set_effort("- a\n", 1, "")
 
     def test_rejects_bad_sizes(self):
-        for bad in ("xs", "xxl", "medium", "3", "S M"):
+        for bad in ("xxs", "xxl", "medium", "3", "S M"):
             with self.subTest(bad=bad), self.assertRaises(planner.EditError):
                 planner.set_effort("- a\n", 1, bad)
 
@@ -749,6 +749,46 @@ class TestAddSubtask(EditBase):
     def test_stale_title_refused(self):
         with self.assertRaises(planner.EditError):
             planner.add_subtask("- a\n", 1, "x", "not a")
+
+
+class TestAddTask(EditBase):
+    def test_goes_after_the_projects_last_line(self):
+        text = read_example()
+        p = next(p for p in planner.parse(text) if p.name == "HDC")
+        out = planner.add_task(text, p.line, "book venue (KA) Nov03", "HDC")
+        a, b = text.splitlines(keepends=True), out.splitlines(keepends=True)
+        new = self.find(planner.parse(out), "book venue")
+        self.assertEqual(b[new.line - 1], "- book venue (KA) Nov03\n")
+        self.assertEqual(a, b[:new.line - 1] + b[new.line:])
+        self.assertEqual((new.parent, new.project.name, new.project.line), (None, "HDC", p.line))
+        self.assertEqual(new.project.tasks[-1], new)
+
+    def test_after_subtasks_and_notes_before_blank_and_next_project(self):
+        self.assertEqual(planner.add_task("@P\n- a\n\t- b\n\t-- n\n\n@Q\n- c\n", 1, "x", "P"),
+                         "@P\n- a\n\t- b\n\t-- n\n- x\n\n@Q\n- c\n")
+        self.assertEqual(planner.add_task("@P\n- a\nWinter\n- b\n", 1, "x"), "@P\n- a\n- x\nWinter\n- b\n")
+
+    def test_empty_project_and_indent(self):
+        self.assertEqual(planner.add_task("@P\n\n@Q\n", 1, "x", "P"), "@P\n- x\n\n@Q\n")
+        self.assertEqual(planner.add_task("@P\n    - a\nFall\n", 1, "x"), "@P\n    - a\n    - x\nFall\n")
+
+    def test_no_project_and_line_endings(self):
+        self.assertEqual(planner.add_task("- a\n@Q", 1, "x", "(no project)"), "- a\n- x\n@Q")
+        self.assertEqual(planner.add_task("Win\n@P\r\n- a", 2, "x"), "Win\n@P\r\n- a\r\n- x")
+        self.assertEqual(planner.add_task("@P\r\n- a\r\n", 1, "x"), "@P\r\n- a\r\n- x\r\n")
+
+    def test_project_lines_in_data(self):
+        d = planner.to_data(planner.parse("Fall\n@P\n- a\n@Q\n"))
+        self.assertEqual(d["targets"], [{"name": "P", "line": 2, "section": "Fall"}, {"name": "Q", "line": 4, "section": "Fall"}])
+        self.assertEqual(d["projects"][0]["projects"][0]["line"], 2)
+
+    def test_rejects_bad_and_stale(self):
+        for bad in ("", "  ", "a\nb"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.add_task("@P\n- a\n", 1, bad)
+        for line, title in ((2, None), (1, "Q"), (9, None)):
+            with self.subTest(line=line), self.assertRaises(planner.EditError):
+                planner.add_task("@P\n- a\n", line, "x", title)
 
 
 class TestNotesFile(unittest.TestCase):
@@ -877,6 +917,11 @@ class TestServer(Base):
         self.assertEqual(code, 200)
         self.assertEqual(d["text"], text.replace("- site visit prep", "!- site visit prep"))
         self.assertEqual(d["data"]["upcoming"]["overdue"], [])
+
+    def test_edit_add_task(self):
+        code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 1, "op": "task", "value": "b (KA)", "title": "P"})
+        self.assertEqual((code, d["text"]), (200, "@P\n- a\n- b (KA)\n"))
+        self.assertEqual(d["data"]["people"][0]["name"], "KA")
 
     def test_edit_stale_is_409(self):
         code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "op": "status", "value": "done",

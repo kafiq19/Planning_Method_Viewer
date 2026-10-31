@@ -5,6 +5,46 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.11  2026-10-31  Extra-small effort
+-------------------------------------------------
+- New: effort size (xs), extra small, worth 1 point (the same as (s)).
+  Write it like the others, `fix typo (KA) (xs) Oct24`, or pick XS in the
+  Effort cell's list.
+- Code: RE_EFFORT and EFFORT take xs; EFFORTS in web/index.html.
+
+
+1.3.10  2026-10-31  Effort column; pick effort from a list
+-------------------------------------------------
+- Changed: the "Size" column is now called "Effort".
+- Changed: clicking a task's Effort cell opens a short list (S, M, L, XL
+  with their points, and None) instead of a text box. Pick one with a
+  click, or with the arrow keys and Enter; Esc cancels.
+- Code: pickCell (single-choice list under a cell) and EFFORTS in
+  web/index.html; the Effort column is 44px wide.
+
+
+1.3.9  2026-10-31  Add tasks from the planner views
+-------------------------------------------------
+- New: "+ Add task" adds a task to a project without leaving Planner mode:
+  at the end of each project in Projects, under each person in People
+  (their initials are filled in), and at the bottom of Timeline and
+  Upcoming, where you pick the project. The task goes at the end of the
+  project as one new line; nothing else in your text changes. Undo works.
+- Code: new edit op `task` (add_task); Project.line; to_data adds each
+  project's `line` and a `targets` list of all projects.
+
+
+1.3.8  2026-10-31  Cell editor stays visible in a narrow pane
+-------------------------------------------------
+- Fix: with Edit alongside in a narrow window, clicking Who, Size or Date
+  opened its input box partly off the left side of the planner pane, under
+  the text editor. The box now stays inside the row and sits on the line of
+  the cell you clicked.
+- Code: editCell clamps the box to the row and sizes it to the cell's line;
+  removed a stray `}` after the narrow-pane container query that made the
+  browser drop the `:focus` rule after it.
+
+
 1.3.7  2026-10-31  Fix the Open file dialog
 -------------------------------------------------
 - Fix: when the folder list couldn't be loaded, the Open file dialog stayed

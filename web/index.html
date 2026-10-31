@@ -117,13 +117,13 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .hidden { display: none !important; }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
-/* planner views: plain lists, details in right-hand columns (Who, Size, Date), colour only where it means something */
+/* planner views: plain lists, details in right-hand columns (Who, Effort, Date), colour only where it means something */
 #viewPane { background: var(--panel); }
 .content { container-type: inline-size; }
 .content > div { max-width: 900px; margin: 0 auto; }
 .when { color: var(--muted); font-weight: normal; font-size: 13px; }
 .count { color: var(--muted); font-weight: normal; font-size: 13px; }
-.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) 76px 36px 172px 22px; align-items: center; column-gap: 6px; }
+.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) 76px 44px 172px 22px; align-items: center; column-gap: 6px; }
 .sechead { margin: 20px 0 0; padding: 0 8px 3px; border-bottom: 1px solid var(--line); }
 .sechead:first-child { margin-top: 4px; }
 .sechead h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
@@ -153,7 +153,7 @@ button.st:hover { border-color: var(--line); background: var(--panel); }
 button.st:disabled { opacity: .5; cursor: wait; }
 .s-open .st { color: var(--muted); } .s-doing .st { color: var(--doing); } .s-done .st { color: var(--done); }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
-/* the Who / Size / Date cells and the + (subtask) cell: click to edit; empty ones show a faint + on the row */
+/* the Who / Effort / Date cells and the + (subtask) cell: click to edit; empty ones show a faint + on the row */
 .cell { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 4px; border: 0; border-radius: 4px;
   background: none; color: var(--muted); font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; }
 .cell.r { justify-content: flex-end; }
@@ -167,9 +167,24 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .cell.inh .t { font-style: italic; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .task { position: relative; }
-.editbox { position: absolute; top: 0; bottom: 0; z-index: 5; display: flex; align-items: center; }
+.editbox { position: absolute; z-index: 5; display: flex; align-items: center; }
 .editbox input { width: 15em; font-size: 13px; padding: 3px 8px; box-shadow: 0 4px 14px rgba(20, 25, 40, .15); border-color: var(--accent); }
 .editbox.wide input { width: 18em; }
+/* the Effort cell's pick list: one choice of S / M / L / XL / none */
+.pickbox { position: absolute; z-index: 30; display: flex; flex-direction: column; min-width: 130px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 25, 40, .18); }
+.pickbox .mi { padding: 5px 8px; font-size: 13px; gap: 10px; justify-content: flex-start; }
+.pickbox .mi .k { margin-left: auto; }
+.pickbox .mi .ck { width: 1em; color: var(--accent); }
+/* "+ Add task" at the end of a project (and of each person, and of Timeline / Upcoming, with a project picker) */
+.addrow { display: flex; align-items: center; min-height: 28px; padding: 0 8px; }
+.addtask { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 2px 6px; margin-left: -4px; border-radius: 5px; }
+.addtask:hover { color: var(--text); background: var(--hover); }
+.addtask .plus { display: inline-block; width: 16px; text-align: center; margin-right: 4px; }
+.addform { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; padding: 2px 0; }
+.addform select { font-size: 13px; padding: 3px 6px; max-width: 100%; }
+.addform input { flex: 1; min-width: 10em; font-size: 13px; padding: 3px 8px; border-color: var(--accent); }
+.addform input:focus-visible { outline: none; }
 .eff { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
 .dim .lead > :not(.g), .dim .cell { opacity: .5; }
 .note { display: flex; color: var(--muted); font-size: 12.5px; padding: 0 8px 3px; line-height: 1.35; }
@@ -193,7 +208,7 @@ table.tl td.c i.s { border-radius: 4px 0 0 4px; } table.tl td.c i.e { border-rad
 table.tl td.w { font-size: 13px; color: var(--muted); }
 table.tl td.w.late { color: var(--bad); font-weight: 600; }
 
-/* a narrow pane (Edit alongside, phones): a task's Who / Size / Date wrap onto a line under its title */
+/* a narrow pane (Edit alongside, phones): a task's Who / Effort / Date wrap onto a line under its title */
 @container (max-width: 480px) {
   .sechead { grid-template-columns: minmax(0, 1fr); }
   .sechead .c { display: none; }
@@ -203,7 +218,6 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
   .task .cell { order: 2; }
   .task .cell:has(> .add:only-child):not(.sub) { display: none; }                    /* empty cells take no room */
   .task .cell.sub { order: 3; margin-left: auto; }
-}
 }
 
 /* keyboard focus */
@@ -648,18 +662,117 @@ function editCell(cell, placeholder, initial, apply, wide) {
   };
   input.onblur = close;
   input.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task");               // float over the row, right edge on the cell's right edge
-  box.style.right = Math.max(0, row.getBoundingClientRect().right - cell.getBoundingClientRect().right) + "px";
+  const row = cell.closest(".task");               // float over the cell's line, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.top - r.top) + "px"; box.style.height = c.height + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  input.style.maxWidth = Math.max(80, r.width) + "px";
   row.append(box);
+  if (box.getBoundingClientRect().left < r.left) {  // a narrow pane: it would stick out on the left, so keep it inside the row
+    box.style.right = "auto"; box.style.left = "0";
+  }
   input.focus(); input.select();
 }
-function cellButton(cls, label, tip, content, edit) {    // a Who / Size / Date / + cell: shows its value, click edits it
+/* a single-choice list under a cell (the Effort cell): arrows move, Enter or a click picks, Esc or leaving cancels */
+function pickCell(cell, label, choices, current, apply) {
+  const box = h("div", "pickbox");
+  box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label);
+  const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
+  const outside = e => { if (!box.contains(e.target)) close(); };
+  const items = choices.map(({ value, text, note, badge }) => {
+    const on = value === current;
+    const b = h("button", "mi", span("ck", on ? "✓" : ""), badge ? span("eff", text) : text, note ? span("k", note) : "");
+    b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(on));
+    b.onclick = e => { e.stopPropagation(); close(); apply(value); };
+    return b;
+  });
+  box.append(...items);
+  box.onkeydown = e => {
+    e.stopPropagation();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); close(); cell.focus(); }
+  };
+  box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
+  box.onclick = e => e.stopPropagation();
+  const row = cell.closest(".task");               // drop down from the cell, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.bottom - r.top + 2) + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  row.append(box);
+  if (box.getBoundingClientRect().left < r.left) { box.style.right = "auto"; box.style.left = "0"; }
+  document.addEventListener("pointerdown", outside, true);
+  (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
+}
+function cellButton(cls, label, tip, content, edit) {    // a Who / Effort / Date / + cell: shows its value, click edits it
   const b = h("button", "cell " + cls, ...content);
   b.title = tip; b.setAttribute("aria-label", label);
   b.onclick = e => { e.stopPropagation(); edit(b); };
   return b;
 }
 const ADD = () => span("add", "+");
+
+/* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
+   Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
+function addTaskRow(project, prefill = "") {
+  const btn = h("button", "addtask", span("plus", "+"), "Add task");
+  btn.title = project ? "Add a task at the end of @" + project.name : "Add a task to a project";
+  const row = h("div", "addrow", btn);
+  btn.onclick = () => openAdd(btn, project, prefill);
+  return row;
+}
+function openAdd(btn, project, prefill) {
+  const targets = state.data.targets;
+  if (!project && !targets.length) {
+    state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
+    return showToast();
+  }
+  const input = h("input");
+  input.type = "text"; input.placeholder = "new task, like  draft (KA) (m) Oct24"; input.value = prefill;
+  input.setAttribute("aria-label", "New task");
+  let sel = null;
+  if (!project) {
+    const count = {};
+    for (const t of targets) count[t.name] = (count[t.name] || 0) + 1;
+    sel = h("select", "", ...targets.map((t, i) => {
+      const o = h("option", "", "@" + t.name + (count[t.name] > 1 && t.section ? " (" + t.section + ")" : ""));
+      o.value = i;
+      return o;
+    }));
+    sel.setAttribute("aria-label", "Project");
+    const last = store.get("addTo", ""), at = i => targets[i].line + "\n" + targets[i].name;
+    const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
+    sel.value = pick;
+  }
+  const form = h("div", "addform", ...(sel ? [sel] : []), input);
+  let closed = false, pressing = false;
+  const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
+    if (closed) return;
+    closed = true;
+    form.replaceWith(btn);
+  };
+  form.addEventListener("pointerdown", () => { pressing = true; setTimeout(() => { pressing = false; }, 500); });
+  form.addEventListener("focusout", () => setTimeout(() => {   // leaving the form cancels (a click on its own picker doesn't)
+    if (!pressing && !form.contains(document.activeElement)) cancel();
+  }));
+  form.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Escape") { cancel(); btn.focus(); }
+    else if (e.key === "Enter" && e.target === input) {
+      e.preventDefault();
+      const v = input.value.trim(), p = project || targets[sel.value];
+      cancel();
+      if (!v) return;
+      if (sel) store.set("addTo", p.line + "\n" + p.name);
+      editTask({ line: p.line, title: p.name }, "task", v, null, `Added "${v}" to @${p.name}.`);
+    }
+  };
+  btn.replaceWith(form);
+  input.focus();
+  if (prefill) input.setSelectionRange(0, 0);    // People: the person's initials are already there, type before them
+}
 
 function undo() {
   const u = state.msg && state.msg.undo;
@@ -849,8 +962,7 @@ function plannerView() {
 const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
 const guides = depth => Array.from({ length: depth }, () => span("g"));
 
-/* one task row: [guides][status][@project][title]......[actions on hover] | Who | Size | Date */
-/* one task row: [guides][status][@project][title] | Who | Size | Date | + ; the last four are click-to-edit cells */
+/* one task row: [guides][status][@project][title] | Who | Effort | Date | + ; the last four are click-to-edit cells */
 function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem } = {}) {
   const row = h("div", "task s-" + t.status);
   row.style.setProperty("--d", depth);
@@ -870,10 +982,10 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     }));
 
   const eff = t.effort && span("eff", t.effort.toUpperCase());
-  const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: s, m, l or xl",
+  const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: XS, S, M, L or XL",
     [eff || ADD()],
-    cell => editCell(cell, "effort: s, m, l or xl (empty clears)", t.effort, v => {
-      v = v.trim().toLowerCase();
+    cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
+      { value: "", text: "None" }], t.effort || "", v => {
       if (v === (t.effort || "")) return;
       editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
     }));
@@ -904,6 +1016,7 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   return row;
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
+const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
 const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
 const tasksN = n => n + (n === 1 ? " task" : " tasks");
 
@@ -915,7 +1028,7 @@ function treeNode(t, depth = 0) {
 }
 function colHead(title, when) {                  // a section heading that also labels the right-hand columns
   return h("div", "sechead", h("h2", "", title, when && span("when", when)),
-    span("c r", "Who"), span("c mid", "Size"), span("c r", "Date"), span("c", ""));
+    span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
 }
 
 let collapsed;                                    // projects folded shut in the Projects tab, remembered per browser
@@ -941,7 +1054,7 @@ function vProjects(d) {
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
       for (const t of p.tasks) out.append(treeNode(t));
-      if (!p.tasks.length) out.append(h("div", "empty", "No tasks"));
+      out.append(addTaskRow(p));
     }
   }
   if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
@@ -993,6 +1106,7 @@ function vTimeline(d) {
     out.append(h("h4", "grp", "Unscheduled"));
     for (const t of tl.unscheduled) out.append(taskNode(t, { project: true }));
   }
+  if (d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
@@ -1003,8 +1117,10 @@ function vPeople(d) {
     if (!out.children.length) out.append(colHead("People"));
     out.append(h("h3", "ph", g.name, span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : ""))));
     for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
+    out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : " (" + g.name + ")"));
   }
   if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
+  if (!d.people.length && d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
@@ -1021,6 +1137,7 @@ function vUpcoming(d) {
   group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
   if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
     : "Nothing due, overdue or in progress in the next " + u.days + " days."));
+  if (d.targets.length) out.append(addTaskRow(null));
   return out;
 }
 
