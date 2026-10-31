@@ -32,8 +32,16 @@ Phase 2, task rows:
   longer push the row around.
 - Upcoming hides empty groups. The Timeline has slimmer bars, and its task
   names stay in view when the chart scrolls sideways.
+Phase 3, polish:
+- Grey text and the overdue red are a little darker, so they are easy to
+  read on white and on the highlighted row.
+- Moving around with the keyboard shows a clear focus outline.
+- On a narrow window or phone the editor and views stack, and a task's
+  initials, size and date move onto a line under its title.
+- With no notes yet, Planner mode says how to start and offers "Load the
+  example".
 Code: popup() / closePops() for menus, showToast(), contextLine, pctl;
-taskNode(t, {project, span, depth, date, rem}), MARK, colHead; icons are
+GET /api/example and welcome(); taskNode(t, {project, span, depth, date, rem}), MARK, colHead; icons are
 inline SVG.
 
 

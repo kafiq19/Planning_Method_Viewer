@@ -6,9 +6,9 @@
 <title>Planner</title>
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7384; --line: #e2e5eb;
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5f6778; --line: #e2e5eb;
   --accent: #3b6cf6; --accent-text: #ffffff; --bar: #3b6cf6; --bar-off: #eef0f4;
-  --open: #6b7384; --doing: #c77700; --done: #2f9e5b; --bad: #d63c3c; --bad-bg: #fde8e8;
+  --open: #5f6778; --doing: #c77700; --done: #2f9e5b; --bad: #c42f2f; --bad-bg: #fde8e8;
   --code: #eef0f4; --hover: #f1f3f7; --effort: #4b1d8f; --effort-text: #ffffff;
 }
 :root[data-theme="dark"] {
@@ -144,6 +144,36 @@ table.tl td.c i.on { background: var(--bar); }
 table.tl td.c i.edge { border-radius: 4px; }
 table.tl td.w { font-size: 13px; color: var(--muted); }
 table.tl td.w.late { color: var(--bad); font-weight: 600; }
+
+/* keyboard focus */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.search input:focus-visible, textarea:focus-visible { outline: none; }
+
+/* first run */
+.welcome { max-width: 520px; margin: 48px auto; text-align: center; color: var(--muted); }
+.welcome h2 { color: var(--text); font-size: 18px; margin: 0 0 6px; }
+.welcome p { margin: 0 0 16px; }
+
+/* narrow windows: panes and the toolbar stack, task details wrap under the title */
+@media (max-width: 720px) {
+  header { padding: 8px 16px; }
+  main { flex-direction: column; }
+  #editorPane { border-right: 0; border-bottom: 1px solid var(--line); }
+  #editorPane:not(.solo) { flex: 0 0 40%; }
+  .toolbar { padding: 0 16px; }
+  .tools { margin-left: 0; }
+  .search input { width: 8em; }
+  .content { padding: 12px 16px 80px; }
+  .sechead { grid-template-columns: minmax(0, 1fr); }
+  .sechead .c { display: none; }
+  .task { grid-template-columns: auto auto minmax(0, 1fr); row-gap: 0; padding: 4px 10px; }
+  .task .lead { grid-column: 1 / -1; }
+  .task > .c { text-align: left; padding-left: 32px; font-size: 12px; }
+  .task > .c:empty { display: none; }
+  .task > .c + .c { padding-left: 0; }
+  .task .c.date { justify-content: flex-start; }
+}
 
 /* markdown view */
 .md { max-width: 760px; }
@@ -688,9 +718,10 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     const bell = icon(BELL, 13); bell.setAttribute("role", "img"); bell.setAttribute("aria-label", "Reminder " + rems.join(", "));
     dateCell.append(bell); dateCell.title = "Reminder: " + rems.join(", ");
   }
-  dateCell.append((when || "") + (t.overdue ? (when ? " · overdue" : "overdue") : ""));
+  const dateText = (when || "") + (t.overdue ? (when ? " · overdue" : "overdue") : "");
+  if (dateText) dateCell.append(dateText);
   if (when && !rems.length) dateCell.title = when;
-  row.append(lead, h("span", "c", t.assignees.join(", ")), size, dateCell);
+  row.append(lead, h("span", "c", t.assignees.join(", ") || null), size, dateCell);
   return row;
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
@@ -720,7 +751,20 @@ function vProjects(d) {
       if (!p.tasks.length) out.append(h("div", "empty", "No tasks"));
     }
   }
-  if (!out.children.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No projects or tasks found."));
+  if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
+  return out;
+}
+function welcome() {                             // first run: no notes yet
+  const out = h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
+    h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24 , or open a file from the ⋯ menu."));
+  if (!editor.value.trim() && !state.file) {
+    const b = h("button", "", "Load the example");
+    b.onclick = async () => {
+      try { const r = await fetch("/api/example"); const d = await r.json(); if (r.ok && !editor.value.trim()) loadText(d.text, "example.txt"); }
+      catch (e) {}
+    };
+    out.append(b);
+  }
   return out;
 }
 

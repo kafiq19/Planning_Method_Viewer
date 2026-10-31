@@ -1006,6 +1006,10 @@ def make_server(port, notes_path=None):
                 except (OSError, UnicodeDecodeError) as e:
                     return self._json(500, {"error": f"can't read {notes_path}: {e}"})
                 self._json(200, {"name": os.path.basename(notes_path), "text": text, "version": version})
+            elif path == "/api/example":            # the sample notes, for the page's "Load the example"
+                if not self._trusted():
+                    return
+                self._json(200, {"text": (Path(__file__).resolve().parent / "example.txt").read_text(encoding="utf-8")})
             else:
                 self._send(404, b"not found", "text/plain")
 

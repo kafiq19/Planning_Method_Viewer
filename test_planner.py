@@ -820,6 +820,12 @@ class TestServer(Base):
         with urllib.request.urlopen(self.url + "/") as r:
             self.assertIn(b"/api/edit", r.read())
 
+    def test_example(self):
+        with urllib.request.urlopen(self.url + "/api/example") as r:
+            self.assertEqual(json.loads(r.read()), {"text": read_example()})
+        req = urllib.request.Request(self.url + "/api/example", headers={"Origin": "https://evil.example"})
+        self.assertEqual(self.send(req)[0], 403)
+
     def test_parse(self):
         code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12"})
         self.assertEqual(code, 200)

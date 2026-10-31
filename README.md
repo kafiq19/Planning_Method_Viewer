@@ -47,7 +47,7 @@ python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
 ```
 
-Paste your notes, or use **Open file** in the **⋯** menu (or drag a file onto the page) to load a `.txt` or `.md`. **Save** (in ⋯, or Ctrl/⌘-S) downloads your edited text.
+Paste your notes, or press **Load the example** to try it, or use **Open file** in the **⋯** menu (or drag a file onto the page) to load a `.txt` or `.md`. **Save** (in ⋯, or Ctrl/⌘-S) downloads your edited text.
 
 If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows "Saved", or a **• Unsaved · Save** button when you have changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
 
