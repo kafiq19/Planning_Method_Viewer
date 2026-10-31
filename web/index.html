@@ -241,6 +241,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
     <div id="moreMenu" class="menu hidden" role="menu">
       <label class="mi" id="openWrap" role="menuitem" tabindex="0">Open file… <span class="k">or drop a file</span><input id="file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden></label>
       <button class="mi" id="saveItem" role="menuitem">Save <span class="k">Ctrl/⌘-S</span></button>
+      <button class="mi hidden" id="closeItem" role="menuitem">Close file <span class="k">stop autosaving</span></button>
       <div class="sep"></div>
       <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
       <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
@@ -320,34 +321,37 @@ function loadText(text, name) {
   if (name) state.fileName = name;
   schedule();
 }
-$("openWrap").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
-$("file").onchange = async e => {
-  closePops();
-  const f = e.target.files[0];
-  if (f) loadText(await f.text(), f.name);
-  e.target.value = "";
-};
 function download() {
   const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
   a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
 }
 
-/* ---------- file mode (python planner.py --serve notes.txt): Save writes to that file ---------- */
+/* ---------- the open file. Two kinds share the save / conflict / reload logic below:
+   - server file (python planner.py --serve notes.txt): read and written through /api/file; Save is manual.
+   - picked file (Open file or drop, in browsers with file access: Chrome, Edge, Brave): read and written
+     through its file handle, and saved automatically about a second after each change.
+   Elsewhere, Open file only loads the text and Save downloads it. ---------- */
 const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
 const unsaved = () => state.file && editor.value !== state.file.saved;
+const AUTOSAVE_MS = 1000;
+let autoTimer;
 
-function showFile(problem) {                                // header: file name, then "Saved" or the Save pill
-  const st = $("fileStatus");
+function showFile(problem) {                                // header: file name, then "Saved" / "Saving…" or the Save pill
+  const st = $("fileStatus"), f = state.file;
   st.classList.toggle("bad", !!problem);
-  $("fileName").textContent = state.file ? state.file.name : "";
-  $("save").classList.toggle("hidden", !unsaved() || !!problem);
-  if (!state.file) return st.replaceChildren();
+  $("fileName").textContent = f ? f.name : "";
+  $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.handle));
+  $("closeItem").classList.toggle("hidden", !(f && f.handle));
+  if (!f) return st.replaceChildren();
   if (problem) return st.replaceChildren(...problem);
-  st.replaceChildren(unsaved() ? "" : "Saved");
+  if (f.handle && f.denied) return st.replaceChildren(allowButton());
+  st.title = f.handle ? "Changes save to the file automatically" : "";
+  st.replaceChildren(unsaved() ? (f.handle ? "Saving…" : "") : "Saved");
+  if (f.handle && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
 }
 
 function setFile(text, version) {                           // the page now matches the file on disk
-  state.file.saved = nl(text); state.file.version = version;
+  state.file.saved = nl(text); state.file.version = version; state.file.blocked = false;
   store.set("fileVersion", version || "");
   if (editor.value !== state.file.saved) { replaceText(state.file.saved); schedule(); }
   showFile();
@@ -359,10 +363,22 @@ async function fileApi(body) {
   return [r, await r.json()];
 }
 
+/* picked files: the version is the file's last-modified time and size; line endings are kept as the file had them */
+async function handleRead(handle) {
+  const f = await handle.getFile(), text = await f.text();
+  return { text, version: f.lastModified + ":" + f.size, crlf: text.includes("\r\n") && !/(^|[^\r])\n/.test(text) };
+}
+async function readDisk() {                                 // -> {text, version} of the open file as it is on disk now
+  if (state.file.handle) return handleRead(state.file.handle);
+  const [, d] = await fileApi();
+  return d;
+}
+
 async function startFileMode() {
   let r, d;
   try { [r, d] = await fileApi(); } catch (e) { return; }  // page opened without the server
-  if (!r.ok || !d.name) return;
+  if (!r.ok) return;
+  if (!d.name) return startPicked();
   state.file = { name: d.name, version: d.version, saved: nl(d.text) };
   state.fileName = d.name;
   $("openWrap").classList.add("hidden");
@@ -376,36 +392,141 @@ async function startFileMode() {
   render(false);
 }
 
+/* ---------- picked files: open, remember for next time, reopen ---------- */
+const canPick = "showOpenFilePicker" in window;
+function idb(mode, fn) {                                    // the last picked file's handle lives in IndexedDB
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("kafeen-planner", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("handles");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("handles", mode), req = fn(tx.objectStore("handles"));
+      tx.oncomplete = () => resolve(req && req.result);
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+const rememberHandle = handle => idb("readwrite", st => handle ? st.put(handle, "last") : st.delete("last")).catch(() => {});
+
+async function openHandle(handle, quiet) {                 // make `handle` the open file; quiet: reopening on load
+  if (state.file && state.file.handle && unsaved()) await save();
+  let granted = (await handle.queryPermission({ mode: "readwrite" })) === "granted";
+  if (!granted && !quiet) {
+    try { granted = (await handle.requestPermission({ mode: "readwrite" })) === "granted"; } catch (e) {}
+  }
+  let disk;
+  try { disk = await handleRead(handle); } catch (e) { if (quiet) return showReopen(handle); throw e; }
+  state.file = { name: handle.name, handle, version: disk.version, saved: nl(disk.text), crlf: disk.crlf, denied: !granted };
+  state.fileName = handle.name;
+  rememberHandle(handle);
+  // On reopen, keep last session's unsaved edits only if they were made on this exact version of this file.
+  const keep = quiet && store.get("fileName", "") === handle.name && store.get("fileVersion", "") === disk.version
+    && store.get("text", "") !== state.file.saved;
+  store.set("fileName", handle.name); store.set("fileVersion", disk.version);
+  if (!keep) { editor.value = state.file.saved; store.set("text", editor.value); }
+  showFile();
+  render(false);
+}
+function allowButton() {                                    // the browser needs a click before the page may write the file
+  const b = h("button", "", "Allow saving to " + state.file.name);
+  b.onclick = async () => {
+    try { if ((await state.file.handle.requestPermission({ mode: "readwrite" })) !== "granted") return; } catch (e) { return; }
+    state.file.denied = false; showFile();
+  };
+  return b;
+}
+function showReopen(handle) {                               // after a reload: one click to reopen (and allow saving to) the file
+  const b = h("button", "pill", "Reopen " + handle.name);
+  b.title = "Open the file you were working on again; it saves automatically";
+  b.onclick = () => openHandle(handle).catch(e => showFile(["Can't open " + handle.name + ": " + e.message]));
+  $("fileStatus").replaceChildren(b);
+}
+async function startPicked() {                              // no server file: offer the last picked file again
+  if (!(window.indexedDB && window.FileSystemFileHandle && FileSystemFileHandle.prototype.queryPermission)) return;
+  let handle;
+  try { handle = await idb("readonly", st => st.get("last")); } catch (e) { return; }
+  if (!handle || state.file) return;
+  if ((await handle.queryPermission({ mode: "readwrite" })) === "granted") openHandle(handle, true);
+  else showReopen(handle);
+}
+async function pickFile() {
+  closePops();
+  let handle;
+  try {
+    [handle] = await showOpenFilePicker({ types: [{ description: "Notes", accept: { "text/plain": [".txt", ".md", ".markdown"] } }] });
+  } catch (e) { return; }                                   // cancelled
+  openHandle(handle).catch(e => showFile(["Can't open " + handle.name + ": " + e.message]));
+}
+$("openWrap").onclick = e => { if (canPick) { e.preventDefault(); pickFile(); } };
+$("openWrap").onkeydown = e => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  canPick ? pickFile() : $("file").click();
+};
+$("file").onchange = async e => {                           // browsers without file access: load the text only
+  closePops();
+  const f = e.target.files[0];
+  if (f) loadText(await f.text(), f.name);
+  e.target.value = "";
+};
+$("closeItem").onclick = async () => {                      // stop saving to the picked file and forget it
+  closePops();
+  if (state.file && state.file.handle && unsaved() && !state.file.blocked) await save();
+  clearTimeout(autoTimer);
+  state.file = null; rememberHandle(null);
+  showFile();
+};
+
 async function save(force) {
   if (!state.file) return download();
+  const f = state.file;
+  if (f.saving) { f.again = true; return; }                 // one write at a time; the newest text goes next
+  clearTimeout(autoTimer);
   const text = editor.value;
+  f.saving = true;
   showFile(["Saving…"]);
   try {
-    const [r, d] = await fileApi({ text, version: state.file.version, force: !!force });
-    if (r.status === 409 && d.conflict) return conflict();
-    if (!r.ok) throw new Error(d.error || r.statusText);
-    state.file.saved = text; state.file.version = d.version;
-    store.set("fileVersion", d.version);
+    if (f.handle) {
+      if (f.denied) return showFile();
+      const disk = await handleRead(f.handle);
+      if (disk.version !== f.version && !force) return conflict();
+      const w = await f.handle.createWritable();
+      await w.write(f.crlf ? text.replace(/\n/g, "\r\n") : text);
+      await w.close();
+      f.version = (await handleRead(f.handle)).version;
+    } else {
+      const [r, d] = await fileApi({ text, version: f.version, force: !!force });
+      if (r.status === 409 && d.conflict) return conflict();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      f.version = d.version;
+    }
+    f.saved = text; f.blocked = false;
+    store.set("fileVersion", f.version);
     showFile();
   } catch (e) {
+    f.blocked = true;                                       // don't retry automatically; Save (Ctrl/⌘-S) tries again
     showFile(["Not saved: " + e.message]);
+  } finally {
+    f.saving = false;
+    if (f.again) { f.again = false; if (state.file === f && unsaved() && !f.blocked) save(); }
   }
 }
 
-function conflict() {                                       // the file changed on disk under us
+function conflict() {                                       // the file changed on disk under us: never overwrite silently
+  state.file.blocked = true;
   const b = (label, fn) => { const x = h("button", "", label); x.onclick = fn; return x; };
   showFile([state.file.name + " changed on disk.",
     b("Load disk version", async () => {
       if (unsaved() && !confirm("Replace your unsaved changes with the version on disk?")) return;
-      const [, d] = await fileApi(); setFile(d.text, d.version);
+      const d = await readDisk(); setFile(d.text, d.version);
     }),
     b("Keep mine and overwrite", () => save(true))]);
 }
 
 window.addEventListener("focus", async () => {              // pick up edits made in another editor
-  if (!state.file) return;
+  if (!state.file || state.file.saving) return;
   let d;
-  try { [, d] = await fileApi(); } catch (e) { return; }
+  try { d = await readDisk(); } catch (e) { return; }
   if (d.version === state.file.version) return;
   if (unsaved()) conflict(); else setFile(d.text, d.version);
 });
@@ -419,8 +540,14 @@ $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
   e.preventDefault();
   document.body.classList.toggle("drop", ev === "dragover");
-  if (state.file) return document.body.classList.remove("drop");   // file mode: one file only
-  if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
+  if (state.file && !state.file.handle) return document.body.classList.remove("drop");   // server file: one file only
+  if (ev !== "drop") return;
+  const item = e.dataTransfer.items && e.dataTransfer.items[0];
+  const pending = canPick && item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle() : null;   // must start before any await
+  const handle = pending && await pending.catch(() => null);
+  if (handle && handle.kind === "file") return openHandle(handle).catch(err => showFile(["Can't open " + handle.name + ": " + err.message]));
+  const file = e.dataTransfer.files[0];
+  if (file && !(state.file && state.file.handle)) loadText(await file.text(), file.name);
 });
 $("today").value = store.get("today", "");
 $("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };

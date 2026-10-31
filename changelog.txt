@@ -5,6 +5,22 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.3.5  2026-10-31  Autosave for files opened in the page
+----------------------------------------------------------
+- In Chrome, Edge or Brave, a file opened with Open file (or dropped on the
+  page) is now saved back to that file automatically, about a second after
+  each change. The header shows "Saving..." then "Saved".
+- If the file was changed elsewhere, autosave stops and asks: load the disk
+  version or keep yours. Windows (CRLF) line endings are kept.
+- After a reload the file reopens by itself, or a "Reopen notes.txt" button
+  appears. "Close file" in the ... menu stops saving to it.
+- Files given on the command line (--serve notes.txt) still save only when
+  you press Save. Other browsers: Open file loads the text, Save downloads.
+Code: picked-file mode in web/index.html (showOpenFilePicker /
+getAsFileSystemHandle, handle kept in IndexedDB, AUTOSAVE_MS); save(),
+conflict() and the focus check work for both kinds of file.
+
+
 1.3.4  2026-10-31  Shorter season name in the period control
 ---------------------------------------------------------------
 - The period control shows "Fall 2026" instead of "Fall 2026 (Sep-Dec)";
