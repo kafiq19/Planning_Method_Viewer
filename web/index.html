@@ -45,6 +45,22 @@ input[type=text], input[type=search] { cursor: text; }
 .filechip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .filechip.none { background: none; color: var(--muted); }
 .filechip:disabled { opacity: 1; cursor: default; }
+/* open files as tabs in the header: [name ×] [name ×] + ; the active one is filled, a red dot marks unsaved edits */
+.ftabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
+.ftabs::-webkit-scrollbar { display: none; }
+.ftab { display: inline-flex; align-items: center; flex: none; max-width: 24ch; border-radius: 6px; color: var(--muted); }
+.ftab:hover { background: var(--hover); color: var(--text); }
+.ftab.on { background: var(--hover); color: var(--text); }
+.ftab .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; color: inherit;
+  font-size: 13px; padding: 3px 2px 3px 10px; }
+.ftab.on .n { font-weight: 600; cursor: default; }
+.ftab.warn .n::after { content: " •"; color: var(--bad); }
+.ftab .x { flex: none; width: 20px; height: 20px; margin-right: 3px; padding: 0; border: 0; border-radius: 4px; background: none;
+  color: var(--muted); font-size: 15px; line-height: 1; visibility: hidden; }
+.ftab.on .x, .ftab:hover .x, .ftab .x:focus-visible { visibility: visible; }
+.ftab .x:hover { background: var(--line); color: var(--text); }
+@media (hover: none) { .ftab .x { visibility: visible; } }
+.ftadd { flex: none; padding: 1px 8px; font-size: 16px; line-height: 1.2; }
 .picker { width: min(460px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 12px;
   background: var(--panel); color: var(--text); box-shadow: 0 16px 40px rgba(20, 25, 40, .25); }
 .picker::backdrop { background: rgba(10, 14, 22, .35); }
@@ -57,7 +73,10 @@ input[type=text], input[type=search] { cursor: text; }
 .pitem svg { flex: none; color: var(--muted); }
 .pitem.dir svg { color: var(--accent); }
 .pmsg { display: flex; flex-direction: column; gap: 10px; padding: 12px 8px; color: var(--muted); font-size: 13px; line-height: 1.45; }
-.pfoot { padding: 8px 16px 12px; font-size: 12px; color: var(--muted); }
+.pfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px 12px 16px; font-size: 12px; color: var(--muted); }
+.pfoot button { font-size: 13px; padding: 3px 10px; }
+.pnew { display: flex; gap: 6px; width: 100%; }
+.pnew input { flex: 1; min-width: 0; font-size: 13px; padding: 3px 8px; border-color: var(--accent); }
 .pill { font-size: 13px; padding: 2px 10px; border-radius: 12px; color: var(--accent); border-color: var(--accent); }
 .seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--code); border-radius: 8px; }
 .seg button { border: 0; background: none; color: var(--muted); padding: 4px 12px; font-size: 13px; }
@@ -268,6 +287,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 <header>
   <span class="brand" aria-label="KAFEEN Planner"><svg class="logo" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor"/><rect x="5" y="6.5" width="9" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="8" y="10.7" width="11" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="5" y="14.9" width="6" height="2.6" rx="1.3" fill="var(--logo-ink)"/></svg><span class="bname">KAFEEN</span><span class="bsub">Planner</span></span>
   <button id="fileChip" class="filechip none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
+  <span id="tabs" class="ftabs hidden" role="tablist" aria-label="Open files"></span>
   <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
   <span id="fileStatus" class="hint"></span>
   <span class="spacer"></span>
@@ -283,7 +303,6 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
     <div id="moreMenu" class="menu hidden" role="menu">
       <button class="mi" id="openWrap" role="menuitem">Open file… <span class="k">saves automatically</span></button>
       <button class="mi" id="saveItem" role="menuitem">Save <span class="k">Ctrl/⌘-S</span></button>
-      <button class="mi hidden" id="closeItem" role="menuitem">Close file <span class="k">stop autosaving</span></button>
       <div class="sep"></div>
       <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
       <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
@@ -308,8 +327,9 @@ const $ = id => document.getElementById(id);
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
-const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null };
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [] };
 
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
@@ -379,7 +399,7 @@ applyText();
 /* ---------- editor, files ---------- */
 const editor = $("editor");
 editor.value = store.get("text", "");
-editor.addEventListener("input", () => { store.set("text", editor.value); state.msg = null; showFile(); schedule(); });
+editor.addEventListener("input", () => { remember(); state.msg = null; showFile(); schedule(); });
 editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
   if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
   e.preventDefault();
@@ -395,7 +415,7 @@ editor.addEventListener("keydown", e => {            // Tab indents (the format 
 });
 
 function loadText(text, name) {
-  editor.value = text; store.set("text", text);
+  editor.value = text; remember();
   if (name) state.fileName = name;
   schedule();
 }
@@ -404,34 +424,78 @@ function download() {
   a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
 }
 
-/* ---------- the open file, read and written by the local server through /api/file. Two kinds:
-   - given on the command line (python planner.py --serve notes.txt): saved when you press Save.
-   - opened from the page (Open file… lists your home folder): saved automatically about a second after each change.
-   Either way the server checks the version first, so a change made elsewhere is never overwritten silently. ---------- */
+/* ---------- open files, read and written by the local server through /api/file. Two kinds:
+   - given on the command line (python planner.py --serve notes.txt): one file, saved when you press Save.
+   - opened from the page (Open file…, or + after the tabs): any number, shown as tabs in the header, each saved
+     automatically about a second after each change. The tabs are remembered in this browser ("openFiles",
+     "activeFile") and opened again on the next visit, like Notepad.
+   The text box shows one file at a time: switching tabs saves the current file first and loads the other from disk.
+   Edits that couldn't be saved yet are kept per file ("draft:<path>": {version, text}) and come back with the tab.
+   The server checks the version before every write, so a change made elsewhere is never overwritten silently. ---------- */
 const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
 const unsaved = () => state.file && editor.value !== state.file.saved;
 const AUTOSAVE_MS = 1000;
 let autoTimer;
+const baseName = p => p.split(/[\\/]/).pop();
+const draftKey = p => "draft:" + p;
+function readDraft(p) { try { return JSON.parse(store.get(draftKey(p), "null")); } catch (e) { return null; } }
+function remember() {                                       // keep the text box's text: untitled text, or a file's unsaved edits
+  const f = state.file;
+  if (!f) return store.set("text", editor.value);
+  if (editor.value === f.saved) store.del(draftKey(f.path));
+  else store.set(draftKey(f.path), JSON.stringify({ version: f.version || "", text: editor.value }));
+}
+function saveTabs() {
+  store.set("openFiles", JSON.stringify(state.tabs));
+  store.set("activeFile", state.file && state.file.picked ? state.file.path : "");
+}
 
-function showFile(problem) {                                // header: [doc] notes.txt · Saved, or the Save pill
+function showFile(problem) {                                // header: tabs (or the file chip) · Saved, or the Save pill
   const st = $("fileStatus"), f = state.file, chip = $("fileChip");
   st.classList.toggle("bad", !!problem);
   $("fileName").textContent = f ? f.name : "Untitled";
   chip.classList.toggle("none", !f);
-  chip.disabled = !!(f && !f.picked);                       // a command-line file can't be switched from the page
-  chip.title = f ? f.path + (f.picked ? "\nChanges save automatically. Click to open another file." : "") : "Not saved to a file. Click to open one.";
+  chip.disabled = !!f;                                      // a command-line file can't be switched from the page
+  chip.title = f ? f.path : "Not saved to a file. Click to open one.";
   $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
-  $("closeItem").classList.toggle("hidden", !(f && f.picked));
-  if (!f) { if (!problem) return st.replaceChildren(...(state.reopen ? [reopenButton()] : [])); return st.replaceChildren(...problem); }
+  showTabs();
   if (problem) return st.replaceChildren(...problem);
+  if (!f) return st.replaceChildren();
   st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
   if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
 }
 
+function tabLabel(p) {                                      // the file name, plus its folder when two open files share a name
+  const n = baseName(p);
+  return state.tabs.filter(q => baseName(q) === n).length > 1 ? n + " · " + baseName(p.slice(0, -n.length - 1)) : n;
+}
+function showTabs() {
+  const box = $("tabs"), on = state.tabs.length > 0 && !(state.file && !state.file.picked);
+  box.classList.toggle("hidden", !on);
+  $("fileChip").classList.toggle("hidden", on);
+  if (!on) return box.replaceChildren();
+  const kids = state.tabs.map(p => {
+    const active = !!state.file && state.file.path === p;
+    const warn = active ? state.file.blocked : !!readDraft(p);
+    const name = h("button", "n", tabLabel(p));
+    name.setAttribute("role", "tab"); name.setAttribute("aria-selected", String(active));
+    name.title = p + (active ? "\nChanges save automatically." : "") + (warn ? "\nHas changes that aren't saved yet." : "");
+    name.onclick = () => { if (!active) switchTo(p); };
+    const x = h("button", "x", "×");
+    x.title = "Close " + baseName(p); x.setAttribute("aria-label", x.title);
+    x.onclick = e => { e.stopPropagation(); closeTab(p); };
+    return h("span", "ftab" + (active ? " on" : "") + (warn ? " warn" : ""), name, x);
+  });
+  const add = h("button", "ftadd ghost", "+");
+  add.title = "Open another file"; add.setAttribute("aria-label", add.title);
+  add.onclick = () => openPicker();
+  box.replaceChildren(...kids, add);
+}
+
 function setFile(text, version) {                           // the page now matches the file on disk
   state.file.saved = nl(text); state.file.version = version; state.file.blocked = false;
-  store.set("fileVersion", version || "");
   if (editor.value !== state.file.saved) { replaceText(state.file.saved); schedule(); }
+  remember();
   showFile();
 }
 
@@ -442,46 +506,95 @@ async function fileApi(body, path = "/api/file") {
   try { d = await r.json(); } catch (e) { d = { error: r.status === 404 ? "OLD_SERVER" : r.statusText || "no answer from the server" }; }
   return [r, d];
 }
+// The file as it is on disk now. A file opened from the page is (re)opened, so this also works after a server restart.
+const fetchFile = f => f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
 
-function useFile(d) {                                       // make the server's open file the page's file
+function useFile(d) {                                       // show this file (from /api/file or /api/open) in the text box
   state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text), picked: !!d.picked };
-  state.fileName = d.name; state.reopen = null;
+  state.fileName = d.name; state.switched = true; state.msg = null;
   $("openWrap").classList.toggle("hidden", !d.picked);
-  // Keep unsaved edits from last time only if they were made on this exact version of this file.
-  const keep = store.get("fileName", "") === d.name && store.get("fileVersion", "") === (d.version || "")
-    && store.get("text", "") !== state.file.saved;
-  store.set("fileName", d.name); store.set("fileVersion", d.version || "");
-  if (d.picked) store.set("lastPath", d.path);
-  if (!keep) { editor.value = state.file.saved; store.set("text", editor.value); }
+  if (d.picked && !state.tabs.includes(d.path)) state.tabs.push(d.path);
+  const draft = readDraft(d.path), keep = !!draft && draft.text !== state.file.saved;
+  editor.value = keep ? draft.text : state.file.saved;
+  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
+  if (!keep) store.del(draftKey(d.path));
+  const stale = keep && draft.version !== (d.version || "");   // edits made on an older version: let the user choose
+  if (stale) state.file.blocked = true;
+  saveTabs();
   showFile();
+  if (stale) conflict();
   render(false);
+}
+
+async function leaveFile() {                                // before showing another file: save this one (if that fails, its draft stays)
+  const f = state.file;
+  if (!f || !f.picked) return;
+  clearTimeout(autoTimer);
+  while (f.saving) await new Promise(ok => setTimeout(ok, 50));
+  if (unsaved() && !f.blocked) await save();
+  remember();
+}
+
+async function switchTo(path, create) {                     // show an open file, or open one (create: make it first)
+  await leaveFile();
+  try {
+    const [r, d] = await fileApi(create ? { path, create: true } : { path }, "/api/open");
+    if (!r.ok) {
+      if (r.status === 404 && state.tabs.includes(path)) { state.tabs = state.tabs.filter(p => p !== path); saveTabs(); }
+      throw new Error(d.error === "OLD_SERVER" ? "restart the server (python3 planner.py --serve)" : d.error || r.statusText);
+    }
+    useFile(d);
+  } catch (e) {
+    if (!state.file) showUntitled();
+    showFile(["Can't open " + baseName(path) + ": " + e.message]);
+  }
+}
+const openPath = path => switchTo(path);
+
+function showUntitled() {                                   // no file: the text box holds the untitled text, kept in this browser
+  state.file = null; state.fileName = "notes.txt"; clearTimeout(autoTimer);
+  editor.value = store.get("text", "");
+  $("openWrap").classList.remove("hidden");
+  saveTabs(); showFile(); render(false);
+}
+
+async function closeTab(p) {                                // stop showing and saving this file (the file itself stays)
+  const active = !!state.file && state.file.path === p;
+  if (active) await leaveFile();
+  if (readDraft(p) && !confirm(baseName(p) + " has changes that couldn't be saved. Close it anyway and lose them?")) return;
+  store.del(draftKey(p));
+  const i = state.tabs.indexOf(p);
+  if (i >= 0) state.tabs.splice(i, 1);
+  fileApi({ path: p }, "/api/close").catch(() => {});
+  if (!active) { saveTabs(); return showFile(); }
+  state.file = null;
+  const next = state.tabs[Math.min(i, state.tabs.length - 1)];
+  if (next) return switchTo(next);
+  showUntitled();
 }
 
 async function startFileMode() {
   let r, d;
   try { [r, d] = await fileApi(); } catch (e) { return; }  // page opened without the server
   if (!r.ok) return;
-  if (d.name) return useFile(d);
-  const last = store.get("lastPath", "");                   // the server was restarted: offer last time's file again
-  if (last) { state.reopen = last; showFile(); }
-}
-
-async function openPath(path) {                             // open a notes file from the page (it then autosaves)
-  if (state.file && state.file.picked && unsaved() && !state.file.blocked) await save();
-  try {
-    const [r, d] = await fileApi({ path }, "/api/open");
-    if (!r.ok) throw new Error(d.error || r.statusText);
-    useFile(d);
-  } catch (e) {
-    if (path === state.reopen) { state.reopen = null; store.set("lastPath", ""); }
-    showFile(["Can't open " + path.split(/[\\/]/).pop() + ": " + e.message]);
+  if (d.name) return useFile(d);                            // a file given on the command line: just that one
+  let paths;
+  try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
+  if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
+  store.del("lastPath");
+  const gone = [];
+  for (const p of paths) {                                  // open last time's files again
+    let ok = false;
+    try { ok = (await fileApi({ path: p }, "/api/open"))[0].ok; } catch (e) {}
+    if (ok) state.tabs.push(p); else gone.push(baseName(p));
   }
-}
-function reopenButton() {
-  const b = h("button", "pill", "Reopen " + state.reopen.split(/[\\/]/).pop());
-  b.title = state.reopen;
-  b.onclick = () => openPath(state.reopen);
-  return b;
+  const active = store.get("activeFile", "");
+  const first = state.tabs.includes(active) ? active : state.tabs[0];
+  if (first) await switchTo(first); else { saveTabs(); showFile(); }
+  if (gone.length) {
+    state.msg = { text: `Couldn't reopen ${gone.join(", ")}: moved, renamed or deleted.`, bad: true, anyMode: true };
+    showToast();
+  }
 }
 
 /* ---------- Open file…: a small browser of your home folder (the server lists it; only .txt / .md files) ---------- */
@@ -489,8 +602,31 @@ const DOC = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5
 const FOLDER = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z";
 const picker = h("dialog", "picker"), pickPath = h("div", "ppath"), pickList = h("div", "plist");
 const pickCancel = h("button", "ghost", "Cancel");
-picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList,
-  h("div", "pfoot", "Files you open here save automatically."));
+const pickFoot = h("div", "pfoot");
+let pickDir = null;                                        // the folder the file browser shows
+picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList, pickFoot);
+function footer() {                                        // "Files … save automatically." and New file… (once a folder is shown)
+  const nb = h("button", "", "New file…");
+  nb.title = "Make a new, empty notes file in this folder";
+  nb.onclick = newFileForm;
+  pickFoot.replaceChildren(span("", "Files you open here save automatically."), ...(pickDir ? [nb] : []));
+}
+function newFileForm() {
+  const input = h("input"), ok = h("button", "", "Create"), form = h("form", "pnew", input, ok);
+  input.type = "text"; input.placeholder = "name, like  q4-plan.txt"; input.setAttribute("aria-label", "New file name");
+  form.onsubmit = e => {
+    e.preventDefault();
+    let n = input.value.trim();
+    if (!n) return;
+    if (/[\\/]/.test(n) || n.startsWith(".")) { input.setCustomValidity("Just a file name, without folders"); return input.reportValidity(); }
+    if (!/\.(txt|md|markdown)$/i.test(n)) n += ".txt";
+    picker.close();
+    switchTo(pickDir.replace(/[\\/]$/, "") + (pickDir.includes("\\") && !pickDir.includes("/") ? "\\" : "/") + n, true);
+  };
+  input.oninput = () => input.setCustomValidity("");
+  pickFoot.replaceChildren(form);
+  input.focus();
+}
 pickCancel.onclick = () => picker.close();
 picker.onclick = e => { if (e.target === picker) picker.close(); };     // a click on the backdrop closes it
 document.body.append(picker);
@@ -498,7 +634,7 @@ function pickProblem(text) {                               // the list can't be 
   const load = h("button", "", "Load a file's text instead");
   load.title = "Copies the text into the page; it won't be saved back to the file";
   load.onclick = () => { picker.close(); $("file").click(); };
-  pickPath.textContent = "";
+  pickPath.textContent = ""; pickDir = null; footer();
   pickList.replaceChildren(h("div", "pmsg", text, h("div", "", load)));
 }
 async function browse(dir) {
@@ -510,6 +646,7 @@ async function browse(dir) {
     : d.error || r.statusText);
   const shown = d.dir.startsWith(d.home) ? "~" + d.dir.slice(d.home.length) : d.dir;
   pickPath.textContent = shown || "~"; pickPath.title = d.dir;
+  pickDir = d.dir; footer();
   const row = (iconPath, label, cls, go) => { const b = h("button", "pitem " + cls, icon(iconPath, 16), span("", label)); b.onclick = go; return b; };
   const rows = [];
   if (d.parent) rows.push(row("M15 18l-6-6 6-6", "Up", "up", () => browse(d.parent)));
@@ -522,7 +659,7 @@ async function browse(dir) {
 function openPicker() {
   closePops();
   if (state.file && !state.file.picked) return;             // command-line file: one file only
-  pickList.replaceChildren();
+  pickList.replaceChildren(); pickDir = null; footer();
   if (!picker.open) picker.showModal();
   browse(null);
 }
@@ -533,16 +670,6 @@ $("file").onchange = async e => {                           // fallback without 
   if (f) loadText(await f.text(), f.name);
   e.target.value = "";
 };
-$("closeItem").onclick = async () => {                      // stop saving to the opened file
-  closePops();
-  if (state.file && state.file.picked && unsaved() && !state.file.blocked) await save();
-  clearTimeout(autoTimer);
-  try { await fileApi({ path: null }, "/api/open"); } catch (e) {}
-  state.file = null; store.set("lastPath", "");
-  $("openWrap").classList.remove("hidden");
-  showFile();
-};
-
 async function save(force) {
   if (!state.file) return download();
   const f = state.file;
@@ -552,11 +679,17 @@ async function save(force) {
   f.saving = true;
   showFile(["Saving…"]);
   try {
-    const [r, d] = await fileApi({ text, version: f.version, force: !!force });
+    const body = { path: f.path, text, version: f.version, force: !!force };
+    let [r, d] = await fileApi(body);
+    if (r.status === 409 && d.notOpen && f.picked) {        // the server was restarted: open the file again, then save
+      const [r2, d2] = await fileApi({ path: f.path }, "/api/open");
+      if (!r2.ok) throw new Error(d2.error || r2.statusText);
+      [r, d] = await fileApi(body);
+    }
     if (r.status === 409 && d.conflict) return conflict();
     if (!r.ok) throw new Error(d.error || r.statusText);
     f.version = d.version; f.saved = text; f.blocked = false;
-    store.set("fileVersion", d.version);
+    if (state.file === f) remember();
     showFile();
   } catch (e) {
     f.blocked = true;                                       // not retried automatically; Save (Ctrl/⌘-S) tries again
@@ -573,16 +706,18 @@ function conflict() {                                       // the file changed 
   showFile([state.file.name + " changed on disk.",
     b("Load disk version", async () => {
       if (unsaved() && !confirm("Replace your unsaved changes with the version on disk?")) return;
-      const [, d] = await fileApi(); setFile(d.text, d.version);
+      const [r, d] = await fetchFile(state.file);
+      if (r.ok) setFile(d.text, d.version);
     }),
     b("Keep mine and overwrite", () => save(true))]);
 }
 
 window.addEventListener("focus", async () => {              // pick up edits made in another editor
   if (!state.file || state.file.saving) return;
-  let d;
-  try { [, d] = await fileApi(); } catch (e) { return; }
-  if (!d.name || d.version === state.file.version) return;
+  const f = state.file;
+  let r, d;
+  try { [r, d] = await fetchFile(f); } catch (e) { return; }
+  if (!r.ok || state.file !== f || f.saving || d.version === f.version) return;
   if (unsaved()) conflict(); else setFile(d.text, d.version);
 });
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
@@ -619,7 +754,7 @@ function layout() {
   $("splitWrap").classList.toggle("hidden", plain);
   $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
   $("viewPane").classList.toggle("jump", split && state.mode === "planner");
-  if (state.mode !== "planner") toast.classList.add("hidden");     // edit messages belong to Planner mode
+  if (state.mode !== "planner" && !(state.msg && state.msg.anyMode)) toast.classList.add("hidden");   // edit messages belong to Planner mode
 }
 
 /* Edit alongside: clicking a task (not one of its buttons) selects its line in the text box and scrolls it into view */
@@ -692,7 +827,7 @@ function replaceText(text) {           // swap in the new text, keeping the curs
   const top = editor.scrollTop;
   editor.setRangeText(text.slice(a, text.length - b), a, old.length - b, "preserve");
   editor.scrollTop = top;
-  store.set("text", text);
+  remember();
   showFile();
 }
 
@@ -1004,6 +1139,11 @@ function showToast() {                           // the last edit's message, wit
 }
 
 function plannerView() {
+  if (state.switched) {                             // another file: drop a person or project filter it doesn't have
+    state.switched = false;
+    if (filt.who && filt.who !== "(unassigned)" && !state.data.people.some(g => g.name === filt.who)) { filt.who = ""; store.set(FKEYS.who, ""); }
+    if (filt.proj && !state.data.targets.some(t => t.name === filt.proj)) { filt.proj = ""; store.set(FKEYS.proj, ""); }
+  }
   const view = $("viewPane"), d = filtered(state.data);
   options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
   options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");

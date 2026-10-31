@@ -1037,15 +1037,56 @@ class TestServerPickedFile(Base):
         plan = os.path.join(self.root, "work", "plan.txt")
         code, d = self.post("/api/open", {"path": plan})
         self.assertEqual((code, d["name"], d["path"], d["text"], d["picked"]), (200, "plan.txt", plan, "@P\r\n- a\r\n", True))
-        code, d2 = self.post("/api/file", {"text": "@P\n- a\n- c\n", "version": d["version"]})
+        code, d2 = self.post("/api/file", {"path": plan, "text": "@P\n- a\n- c\n", "version": d["version"]})
         self.assertEqual(code, 200)
         with open(plan, "rb") as f:
             self.assertEqual(f.read(), b"@P\r\n- a\r\n- c\r\n")         # CRLF kept, like file mode
-        self.assertEqual(self.post("/api/file", {"text": "x", "version": d["version"]})[0], 409)   # stale version
-        self.assertEqual(self.get("/api/file")[1]["name"], "plan.txt")
-        self.assertEqual(self.post("/api/open", {"path": None})[1], {"name": None})
-        self.assertEqual(self.get("/api/file")[1], {"name": None})
-        self.assertEqual(self.post("/api/file", {"text": "x", "version": None})[0], 409)
+        code, c = self.post("/api/file", {"path": plan, "text": "x", "version": d["version"]})   # stale version
+        self.assertEqual((code, c["conflict"]), (409, True))
+        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[1]["text"], "@P\r\n- a\r\n- c\r\n")
+        self.assertEqual(self.get("/api/file")[1], {"name": None})          # no path: no command-line file
+        self.assertEqual(self.post("/api/close", {"path": plan})[1], {"closed": True})
+        code, c = self.post("/api/file", {"path": plan, "text": "x", "version": d2["version"]})
+        self.assertEqual((code, c.get("notOpen")), (409, True))               # closed: can't be written any more
+        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[0], 409)
+        with open(plan, "rb") as f:
+            self.assertEqual(f.read(), b"@P\r\n- a\r\n- c\r\n")
+
+    def test_several_files_open_at_once(self):
+        plan, notes = os.path.join(self.root, "work", "plan.txt"), os.path.join(self.root, "notes.md")
+        a, b = self.post("/api/open", {"path": plan})[1], self.post("/api/open", {"path": notes})[1]
+        self.assertEqual(self.post("/api/open", {"path": plan})[0], 200)     # opening an open file again is fine
+        self.assertEqual(self.post("/api/file", {"path": plan, "text": "A", "version": a["version"]})[0], 200)
+        self.assertEqual(self.post("/api/file", {"path": notes, "text": "B", "version": b["version"]})[0], 200)
+        for path, want in ((plan, b"A"), (notes, b"B")):
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), want)
+        self.post("/api/close", {"path": plan})
+        self.assertEqual(self.post("/api/file", {"path": notes, "text": "C", "version": planner.file_version(b"B")})[0], 200)
+        self.assertEqual(self.post("/api/file", {"path": plan, "text": "x", "version": planner.file_version(b"A")})[0], 409)
+
+    def test_unopened_files_cannot_be_read_or_written(self):
+        plan = os.path.join(self.root, "work", "plan.txt")             # e.g. after a server restart: open it first
+        for path in (plan, None, 5, os.path.join(self.root, "notes.md")):
+            with self.subTest(path=path):
+                code, d = self.post("/api/file", {"path": path, "text": "x", "version": None})
+                self.assertEqual((code, d.get("notOpen")), (409, True))
+        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[0], 409)
+        with open(plan, "rb") as f:
+            self.assertEqual(f.read(), b"@P\r\n- a\r\n")
+
+    def test_create_new_file(self):
+        new = os.path.join(self.root, "work", "q4.txt")
+        code, d = self.post("/api/open", {"path": new, "create": True})
+        self.assertEqual((code, d["name"], d["text"], d["picked"]), (200, "q4.txt", "", True))
+        self.assertTrue(os.path.isfile(new))
+        self.assertEqual(self.post("/api/file", {"path": new, "text": "@Q4\n", "version": d["version"]})[0], 200)
+        self.assertEqual(self.post("/api/open", {"path": new, "create": True})[0], 409)      # already exists
+        for bad in (os.path.join(self.root, "nofolder", "x.txt"), os.path.join(self.root, "x.png"),
+                    os.path.join(os.path.dirname(self.root), "x.txt")):
+            with self.subTest(path=bad):
+                self.assertEqual(self.post("/api/open", {"path": bad, "create": True})[0], 403)
+                self.assertFalse(os.path.exists(bad))
 
     def test_command_line_file_cannot_be_switched(self):
         with tempfile.TemporaryDirectory() as other:
@@ -1056,7 +1097,7 @@ class TestServerPickedFile(Base):
             try:
                 url = f"http://127.0.0.1:{server.server_address[1]}"
                 for req in (urllib.request.Request(url + "/api/browse"),
-                            urllib.request.Request(url + "/api/open", json.dumps({"path": None}).encode(),
+                            urllib.request.Request(url + "/api/open", json.dumps({"path": os.path.join(self.root, "notes.md")}).encode(),
                                                    {"Content-Type": "application/json"})):
                     self.assertEqual(self.send(req)[0], 409)
                 self.assertFalse(self.send(urllib.request.Request(url + "/api/file"))[1]["picked"])

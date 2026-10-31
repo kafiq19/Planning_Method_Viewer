@@ -5,6 +5,32 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.4.0  2026-10-31  Several files at once, as tabs
+-------------------------------------------------
+- New: files you open in the page are tabs in the header. Open more with
+  the + after the tabs, click a tab to switch, x to close it (the file
+  stays on disk). Each saves itself about a second after each change, and
+  switching saves the one you leave first.
+- New: the planner remembers your tabs. Start it again and the same files
+  open, on the tab you were using. A file that was moved or deleted is
+  left out, with a message saying so.
+- New: New file... in the file browser makes an empty notes file in the
+  folder you're looking at and opens it.
+- Changes that couldn't be saved (a conflict, a failed write) are kept per
+  file and come back when you return to its tab. Closing a tab that still
+  has them asks first.
+- The text you type without a file is kept separately and comes back when
+  you close the last tab.
+- Removed: the Reopen button and Close file in the menu (tabs replace them).
+- --serve notes.txt (a file on the command line) works as before: one file,
+  saved with Save.
+- Code: make_server keeps a list of open files; /api/file takes `path`;
+  new POST /api/close; /api/open takes `create`; 409 notOpen for a file
+  that isn't open (the page reopens it and retries). Page: showTabs,
+  switchTo, leaveFile, closeTab, remember / draft:<path>, openFiles and
+  activeFile in localStorage. AGENTS.md has design notes for this feature.
+
+
 1.3.15  2026-10-31  Edit a task by clicking its title
 -------------------------------------------------
 - New: click a task's title in the planner to edit it. The box shows the
