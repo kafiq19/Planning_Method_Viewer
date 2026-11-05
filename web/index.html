@@ -1303,7 +1303,7 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   const tip = [full && (inherited ? `${full} (from its ${sp.how === "parent" ? "parent" : "subtasks"})` : full),
     t.overdue && "overdue", rems.length && "reminder " + rems.join(", "), "click to change"].filter(Boolean).join(" · ");
   const dateCell = cellButton("date r" + (t.overdue ? " late" : "") + (inherited ? " inh" : ""), "Set date", tip, content,
-    cell => editCell(cell, "Oct24, Oct23--26, ~Q1 (empty clears)", t.date_text, v => {
+    cell => editCell(cell, "Oct24, Oct23--26, ~Q1, ~T1 (empty clears)", t.date_text, v => {
       v = v.trim();
       if (v === (t.date_text || "")) return;
       editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);

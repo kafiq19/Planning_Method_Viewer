@@ -49,7 +49,7 @@ These are extracted in this order. Each token is removed from the text, and what
 | Reminder | `\*(daily\|weekly\s+[A-Za-z]{3}[a-z]*\|monthly\s+\d{1,2}(?:st\|nd\|rd\|th)?\|MON\d{1,2})\b` | `reminders` (all matches) |
 | Plan | `(?<!\S)>(MON)(\d{1,2})\b` | `plan`: the day the task is planned for (first valid match only; resolved like a single date). Not a date: it doesn't change `start`, `end`, `span` or overdue |
 | Range | `(?<![\w*~>])(MON)(\d{1,2})--(MON)?(\d{1,2})\b` | `start`, `end` (first match only) |
-| Loose date | `(?<!\S)~(Q[1-4]\|wk\d{1,2}\|MON)\b` | `start`, `end`, `loose` (only if no range was found) |
+| Loose date | `(?<!\S)~(Q[1-4]\|T[1-3]\|wk\d{1,2}\|MON)\b` | `start`, `end`, `loose` (only if no range was found) |
 | Date | `(?<![\w*~>])(MON)(\d{1,2})\b` | `start = end` (only if neither of the above was found) |
 
 Each task has at most one date span, one effort and one plan. Later date, effort or plan tokens on the same line stay in the title (a leftover `>Oct14` is never read as a date). Effort is taken first, so removing initials can't glue it to a word; `file(s)` (no space before) is not effort, and `(S)` / `(XL)` are initials.
@@ -60,7 +60,7 @@ Each task has at most one date span, one effort and one plan. Later date, effort
 
 - **Single date `MonDD`:** the unique year *y* in {TODAY.year−1, TODAY.year, TODAY.year+1} such that `TODAY − 90d ≤ date < TODAY − 90d + 365d`. If no valid date exists (for example `Feb30`), the token is ignored and stays in the title.
 - **Range end:** the first occurrence of the end month and day **on or after** the resolved start. If the end month is omitted, it is the start month. `Dec15--Jan10` crosses the year correctly.
-- **Loose `~Q1` / `~Nov` / `~wkNN`:** the earliest candidate period (quarter, calendar month or ISO week Mon–Sun), across those three years, whose end is `≥ TODAY − 90d`.
+- **Loose `~Q1` / `~T1` / `~Nov` / `~wkNN`:** the earliest candidate period (quarter; trimester, the same months as the seasons in calendar order: `T1` Jan–Apr (Winter), `T2` May–Aug (Summer), `T3` Sep–Dec (Fall), from `SEASONS`; calendar month; or ISO week Mon–Sun), across those three years, whose end is `≥ TODAY − 90d`.
 - **One-off reminder `*MonDD`:** resolved like a single date. Its next-fire date is `None` if it is before TODAY.
 - **Repeating reminders:** `daily` fires TODAY. `weekly Ddd` fires on the next matching weekday, which can be TODAY. `monthly N` fires on the next day N that is ≥ TODAY, skipping months that don't have that day.
 
@@ -82,7 +82,7 @@ Each task has at most one date span, one effort and one plan. Later date, effort
 - Every task line starts with `- `, `~- ` or `!- ` after its indentation.
 - Subtasks are indented exactly one more tab than their parent.
 - Notes start with `-- ` and go directly under the task they describe.
-- Dates are `MonDD` with no space (`Oct24`, `Nov03`). Ranges are `Oct23--26` or `Oct23--Nov03`. Loose dates are `~Q1`, `~Nov` or `~wk43`.
+- Dates are `MonDD` with no space (`Oct24`, `Nov03`). Ranges are `Oct23--26` or `Oct23--Nov03`. Loose dates are `~Q1`, `~T1` (trimester: T1 Winter Jan–Apr, T2 Summer May–Aug, T3 Fall Sep–Dec), `~Nov` or `~wk43`.
 - A planned day is `>Oct14`, with a space before it, after the date and before any reminder: `draft report (KA) (m) Oct24 >Oct14 *Oct13`. It says when you mean to work on the task; the date stays the deadline.
 - Initials go in parentheses: `(KA)` or `(KA, RT)`.
 - Effort is `(xs)`, `(s)`, `(m)`, `(l)` or `(xl)`, lowercase, with a space before it. Write it after the initials and before the date: `finish proposal (KA) (m) Oct24`.
@@ -220,7 +220,7 @@ The parser silently ignores what it doesn't understand: the text just stays in t
   - `bad-date`: `Feb30`, `Oct32` → "no such date; it stays in the title".
   - `extra-date`: a second date token left in the title → "only the first date on a line counts".
   - `backwards-range`: `Oct26--20` (resolves to next year) → "the range ends before it starts".
-  - `bad-loose`: `~Q5`, `~wk54`, `~ Nov` → "loose dates are ~Q1-4, ~Jan…Dec, ~wk1-53".
+  - `bad-loose`: `~Q5`, `~wk54`, `~ Nov` → "loose dates are ~Q1-4, ~T1-3, ~Jan…Dec, ~wk1-53". (`~T4` too.)
   - `bad-reminder`: `*weekly Fry`, `*monthly 32nd`, `*tomorrow` → "this reminder never fires".
   - `bad-initials`: `(ka)`, `(KAREN)` → "initials are 1-4 capital letters". Must not flag the effort tokens `(xs)`, `(s)`, `(m)`, `(l)`, `(xl)`.
   - `bad-effort`: `(xxs)`, `(xxl)`, `(med)`, or a second effort token → "effort is (xs), (s), (m), (l) or (xl), once per task".

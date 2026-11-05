@@ -28,7 +28,8 @@ NOTE FORMAT (quick reference)
   (xs) (s) (m) (l) (xl)         effort: 1, 1, 3, 5 or 8 points (lowercase only)
   Oct24                         due date
   Oct23--26  Oct23--Nov03       date range
-  ~Q1  ~Nov  ~wk43              loose date: sometime in that period
+  ~Q1  ~T1  ~Nov  ~wk43         loose date: sometime in that period (T1-T3: trimesters
+                                Winter Jan-Apr, Summer May-Aug, Fall Sep-Dec)
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
   >Oct14                        planned: the day you mean to work on it (the Week view)
 """
@@ -49,7 +50,7 @@ RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?
                        + MON + r"\d{1,2})\b")
 RE_PLAN = re.compile(r"(?<!\S)>(" + MON + r")(\d{1,2})\b")
 RE_RANGE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})--(" + MON + r")?(\d{1,2})\b")
-RE_LOOSE = re.compile(r"(?<!\S)~(Q[1-4]|wk\d{1,2}|" + MON + r")\b")
+RE_LOOSE = re.compile(r"(?<!\S)~(Q[1-4]|T[1-3]|wk\d{1,2}|" + MON + r")\b")
 RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
 
 PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue stays overdue);
@@ -96,13 +97,17 @@ def month_end(y, m):
 
 
 def loose_span(label):
-    """~Q1 / ~Nov / ~wk43 -> (start, end) of the nearest matching period."""
+    """~Q1 / ~T1 / ~Nov / ~wk43 -> (start, end) of the nearest matching period.
+    T1-T3 are the trimesters, the same months as SEASONS (T1 = Winter, Jan-Apr)."""
     lo = TODAY - timedelta(PAST_DAYS)
     for y in (TODAY.year - 1, TODAY.year, TODAY.year + 1):
         try:
             if label.startswith("Q"):
                 m = (int(label[1]) - 1) * 3 + 1
                 s, e = date(y, m, 1), month_end(y, m + 2)
+            elif label.startswith("T"):
+                _, a, b = SEASONS[int(label[1]) - 1]
+                s, e = date(y, a, 1), month_end(y, b)
             elif label.startswith("wk"):
                 s = date.fromisocalendar(y, int(label[2:]), 1)
                 e = s + timedelta(days=6)
@@ -861,7 +866,7 @@ def set_date(text, line, when, title=None):
     when = when.strip()
     probe = Task("x " + when) if when else None
     if probe and (probe.end is None or probe.title != "x"):
-        raise EditError(f"{when!r} is not a date (use Oct24, Oct23--26, Oct23--Nov03, ~Q1, ~Nov or ~wk43)")
+        raise EditError(f"{when!r} is not a date (use Oct24, Oct23--26, Oct23--Nov03, ~Q1, ~T1, ~Nov or ~wk43)")
     raw = lines[line - 1]
     if t.at["date"]:
         s, e = (t.col + i for i in t.at["date"])

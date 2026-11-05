@@ -90,7 +90,7 @@ Pick how to view it:
 | `(xs)` `(s)` `(m)` `(l)` `(xl)` | Effort: extra small, small, medium, large, extra large, worth **1, 1, 3, 5 and 8 points** |
 | `Oct24` | Due date |
 | `Oct23--26` or `Oct23--Nov03` | Date range: start--end |
-| `~Q1` `~Nov` `~wk43` | Loose date: sometime in that quarter, month or week |
+| `~Q1` `~T1` `~Nov` `~wk43` | Loose date: sometime in that quarter, trimester, month or week. Trimesters follow the calendar like quarters: `~T1` is Winter (Jan-Apr), `~T2` Summer (May-Aug), `~T3` Fall (Sep-Dec), the same months as the seasons |
 | `*Oct17` | Reminder on a date |
 | `*weekly Fri` `*monthly 1st` `*daily` | Repeating reminder |
 | `>Oct14` | Planned: the day you mean to work on it (the **Week** tab). Separate from the due date: `draft report Oct24 >Oct14` is due Oct 24, planned for Oct 14 |

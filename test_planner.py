@@ -176,6 +176,35 @@ class TestTokens(Base):
         self.assertEqual((w.start, w.end), (date(2026, 10, 19), date(2026, 10, 25)))
         self.assertEqual(q.title, "x")
 
+    def test_loose_trimester(self):                           # same months as the seasons; calendar order
+        t1, t2, t3 = self.task("x ~T1"), self.task("x ~T2 y"), self.task("x ~T3")
+        self.assertEqual((t1.start, t1.end, t1.loose, t1.title), (date(2027, 1, 1), date(2027, 4, 30), "T1", "x"))
+        self.assertEqual((t2.start, t2.end, t2.title), (date(2026, 5, 1), date(2026, 8, 31), "x y"))   # within 90 days back
+        self.assertEqual((t3.start, t3.end), (date(2026, 9, 1), date(2026, 12, 31)))
+        for name, (_, a, b) in zip(("T1", "T2", "T3"), planner.SEASONS):
+            span = self.task("x ~" + name)
+            self.assertEqual((span.start.month, span.end.month), (a, b))
+        for bad in ("x ~T4", "x ~T0", "x ~t1", "x ~T12"):
+            with self.subTest(bad=bad):
+                self.assertEqual((self.task(bad).end, self.task(bad).title), (None, bad))
+        self.assertEqual(planner.fspan(t3.start, t3.end, t3.loose), "~T3 (Sep 1 - Dec 31)")
+        self.assertEqual(planner.set_date("- a\n", 1, "~T2"), "- a ~T2\n")
+
+    def test_loose_periods_fill_whole_months_on_the_timeline(self):
+        ps = planner.parse("@P\n- t1 ~T1\n- t2 ~T2\n- t3 ~T3\n" + "".join(f"- q{i} ~Q{i}\n" for i in range(1, 5)))
+        bars = lambda d: {r["title"]: "".join("#" if b else "." for b in r["bar"]) for r in d["timeline"]["rows"]}
+        months = [c["head"] for c in planner.to_data(ps)["timeline"]["columns"]]
+        self.assertEqual(months, ["O 26", "N", "D", "J 27", "F", "M", "A", "M", "J", "J", "A", "S"])
+        self.assertEqual(bars(planner.to_data(ps)), {                        # 12 months from Oct 2026
+            "t1": "...####.....", "t3": "###.........",     # T3 Sep-Dec: the chart starts in Oct
+            "q1": "...###......", "q2": "......###...", "q4": "###.........",
+            "t2": "............", "q3": "............"})    # May-Aug / Jul-Sep 2026: just ended, before the chart
+        self.assertTrue(all(r["before"] for r in planner.to_data(ps)["timeline"]["rows"] if r["title"] in ("t2", "q3")))
+        self.assertEqual(bars(planner.to_data(ps, ("season", 2027, 0))), {   # Winter 2027: Jan Feb Mar Apr
+            "t1": "####", "q1": "###.", "q2": "...#"})
+        timeline = "\n".join(planner.view_timeline(ps))
+        self.assertRegex(timeline, r"@P  t1 +\. \. \. # # # # \. \. \. \. \.  ~T1 \(Jan 1 2027 - Apr 30 2027\)")
+
     def test_only_first_date_counts(self):
         t = self.task("call Oct20 Oct22")
         self.assertEqual(t.end, date(2026, 10, 20))
@@ -338,7 +367,7 @@ class TestExample(Base):
     def test_counts(self):
         counts = {p.name: (sum(t.status == "done" for t in p.all_tasks()), len(list(p.all_tasks())))
                   for p in self.ps}
-        self.assertEqual(counts, {"HDC": (2, 11), "MDM": (1, 6), "OPS": (0, 5)})
+        self.assertEqual(counts, {"HDC": (2, 11), "MDM": (1, 6), "OPS": (0, 6)})
 
     def test_effort_totals(self):
         self.assertEqual({p.name: planner.effort_points(p.all_tasks()) for p in self.ps},
@@ -348,7 +377,7 @@ class TestExample(Base):
         projects = "\n".join(planner.view_projects(self.ps))
         self.assertIn("@HDC   2/11 done   9 of 10 pts left", projects)
         self.assertIn("[ ] finish proposal (KA) [L]   Oct 24", projects)
-        self.assertIn("\n@OPS   0/5 done   8 of 8 pts left", projects)
+        self.assertIn("\n@OPS   0/6 done   8 of 8 pts left", projects)
         people = "\n".join(planner.view_people(self.ps))
         self.assertIn("KA   5 task(s), 13 pts", people)
         self.assertIn("RT   2 task(s), 9 pts", people)

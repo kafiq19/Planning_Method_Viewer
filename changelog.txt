@@ -5,6 +5,19 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.5.1  2026-11-05  Trimesters: ~T1, ~T2, ~T3
+-------------------------------------------------
+- New: loose dates ~T1, ~T2 and ~T3 for trimesters, used like ~Q1. They
+  follow the calendar and cover the same months as the seasons: ~T1 is
+  Winter (Jan-Apr), ~T2 Summer (May-Aug), ~T3 Fall (Sep-Dec). Like ~Q1,
+  a trimester that ended more than about 3 months ago means next year's.
+- On the timeline, ~T1 to ~T3 and ~Q1 to ~Q4 fill their whole months
+  (~T1 = Jan, Feb, Mar, Apr), in the page and in `planner.py ... timeline`;
+  a test now pins this.
+- example.txt has one ~T1 task (term schedule, in @OPS).
+- Code: RE_LOOSE takes T[1-3]; loose_span reads the months from SEASONS.
+
+
 1.5.0  2026-10-31  Weekly planner
 -------------------------------------------------
 - New: the Week tab. Days across the top (Monday to Friday, then Saturday
