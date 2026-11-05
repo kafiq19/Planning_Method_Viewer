@@ -5,6 +5,37 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+1.5.3  2026-11-05  Faster entry: Tab, keep adding, fields, defaults
+-------------------------------------------------
+- New: Tab between a task's parts while editing: title -> Who -> Effort ->
+  Date -> the next task's title, saving each as you go; Shift-Tab goes
+  back. In the Effort list, type s, m, l or x to jump to a size.
+- New: keep adding. After Enter, + Add task and the + (subtask) box open
+  again, empty, for the next one; Esc stops. If something can't be added,
+  the box comes back with what you typed.
+- New: + Add task has small Who, Effort and Date fields after the title
+  (Tab between them); you can still type (KA) (m) Oct24 in the title.
+- New: My initials and Default effort in the menu fill in those fields
+  for every new task. In People, Who is that person.
+- Code: add_with_fields (ops task / subtask take {title, who, effort, date});
+  row.open / tabTo / findAgain in the page; editTask returns whether it
+  changed the text.
+
+
+1.5.2  2026-11-05  Fold every level in Projects
+-------------------------------------------------
+- New: in the Projects tab every level of grouping folds, not just
+  projects. Click a section's title (like "Fall Planning") to fold its
+  projects; click the small arrow left of a task's circle to fold its
+  subtasks, at any depth. A folded section says how many projects it
+  holds, a folded task how many subtasks it hides.
+- Folds are remembered in the browser; everything opens while a search
+  or filter is on, as before.
+- Code: foldButton (shared by sections, projects and people), task
+  chevrons in treeNode; localStorage keys collapsedSections and
+  collapsedTasks.
+
+
 1.5.1  2026-11-05  Trimesters: ~T1, ~T2, ~T3
 -------------------------------------------------
 - New: loose dates ~T1, ~T2 and ~T3 for trimesters, used like ~Q1. They

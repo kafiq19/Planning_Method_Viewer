@@ -882,6 +882,27 @@ class TestSetText(EditBase):
                 planner.set_text(text, line, value, title)
 
 
+class TestAddWithFields(EditBase):
+    def test_task_and_subtask_with_fields(self):
+        text = "@P\n- a\n\t- b\n\n@Q\n- c\n"
+        out = planner.add_with_fields("task", text, 1, {"title": "draft report", "who": "KA, RT", "effort": "M", "date": "Oct24"}, "P")
+        self.assertEqual(out, "@P\n- a\n\t- b\n- draft report (KA, RT) (m) Oct24\n\n@Q\n- c\n")
+        out = planner.add_with_fields("subtask", text, 2, {"title": "x", "date": "~T1", "who": "", "effort": None}, "a")
+        self.assertEqual(out, "@P\n- a\n\t- b\n\t- x ~T1\n\n@Q\n- c\n")
+        out = planner.add_with_fields("task", "@P", 1, {"title": "first", "effort": "s"}, "P")   # file with no final newline
+        self.assertEqual(out, "@P\n- first (s)")
+
+    def test_fields_override_tokens_in_the_title(self):
+        out = planner.add_with_fields("task", "@P\n", 1, {"title": "y (JS) Oct20", "who": "KA", "date": "Oct24"}, "P")
+        self.assertEqual(out, "@P\n- y (KA) Oct24\n")
+
+    def test_refused_as_a_whole(self):
+        for fields in ({"title": "x", "date": "Oct32"}, {"title": "x", "effort": "huge"}, {"title": "x", "who": "ka"},
+                       {"title": "", "who": "KA"}, {"who": "KA"}, {"title": "x", "date": 5}, "nope"):
+            with self.subTest(fields=fields), self.assertRaises(planner.EditError):
+                planner.add_with_fields("task", "@P\n- a\n", 1, fields, "P")
+
+
 class TestAddSubtask(EditBase):
     def test_goes_after_last_subtask_and_its_notes(self):
         text = read_example()
@@ -1097,6 +1118,16 @@ class TestServer(Base):
         code, d = self.post("/api/edit", {"text": "@P\n- a (KA)\n", "line": 2, "op": "text", "value": "b (RT) (s)", "title": "a"})
         self.assertEqual((code, d["text"]), (200, "@P\n- b (RT) (s)\n"))
         self.assertEqual(d["data"]["people"][0]["name"], "RT")
+
+    def test_edit_task_with_fields(self):
+        code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 1, "op": "task", "title": "P",
+                                          "value": {"title": "b", "who": "RT", "effort": "s", "date": "Oct24"}})
+        self.assertEqual((code, d["text"]), (200, "@P\n- a\n- b (RT) (s) Oct24\n"))
+        code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 1, "op": "task", "title": "P",
+                                          "value": {"title": "b", "date": "soon"}})
+        self.assertEqual(code, 409)
+        code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 2, "op": "date", "title": "a", "value": {"x": 1}})
+        self.assertEqual(code, 409)
 
     def test_edit_stale_is_409(self):
         code, d = self.post("/api/edit", {"text": read_example(), "line": 17, "op": "status", "value": "done",

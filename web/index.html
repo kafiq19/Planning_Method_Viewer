@@ -168,6 +168,19 @@ h3.ph .fold:hover:not(:disabled) { background: var(--hover); }
 h3.ph .fold:disabled { opacity: 1; cursor: default; }
 h3.ph .fold svg { margin-right: 4px; color: var(--muted); transform: rotate(90deg); transition: transform .12s; }
 h3.ph.shut .fold svg { transform: none; }
+/* Projects: sections and tasks with subtasks fold too (the section's title is a fold button; a task gets a chevron left of its circle) */
+.sechead h2 .fold { display: inline-flex; align-items: center; margin-left: -6px; padding: 1px 6px 1px 2px; border: 0; border-radius: 5px;
+  background: none; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; }
+.sechead h2 .fold:hover:not(:disabled) { background: var(--hover); }
+.sechead h2 .fold:disabled { opacity: 1; cursor: default; }
+.sechead h2 .fold svg { margin-right: 4px; transform: rotate(90deg); transition: transform .12s; }
+.sechead.shut h2 .fold svg { transform: none; }
+.tog { position: absolute; left: calc(var(--d, 0) * 28px - 8px); top: 5px; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); }
+.tog:hover { background: var(--line); color: var(--text); }
+.tog svg { transform: rotate(90deg); transition: transform .12s; }
+.task.shut .tog svg { transform: none; }
+.hidden-n { flex: none; margin-left: 8px; color: var(--muted); font-size: calc(12px * var(--fz)); white-space: nowrap; }
 .task { min-height: calc(28px * var(--fz)); padding: 0 8px; border-radius: 5px; font-size: calc(14px * var(--fz)); }
 .task:hover, .task:focus-within { background: var(--hover); }
 .lead { display: flex; align-items: center; min-width: 0; padding: 3px 0; }
@@ -215,6 +228,9 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .addform select { font-size: calc(13px * var(--fz)); padding: 3px 6px; max-width: 100%; }
 .addform input { flex: 1; min-width: 10em; font-size: calc(13px * var(--fz)); padding: 3px 8px; border-color: var(--accent); }
 .addform input:focus-visible { outline: none; }
+.addform .fwho { flex: 0 0 5.5em; min-width: 0; }
+.addform .fdate { flex: 0 0 7em; min-width: 0; }
+.addform .feff { flex: none; }
 .eff { font-size: calc(11px * var(--fz)); font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
 .dim .lead > :not(.g), .dim .cell { opacity: .5; }
 .note { display: flex; color: var(--muted); font-size: calc(12.5px * var(--fz)); padding: 0 8px 3px; line-height: 1.35; }
@@ -349,6 +365,9 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
       <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
       <div class="mi" id="sizeWrap">Text size <span class="seg" id="textSize" role="radiogroup" aria-label="Text size"></span></div>
       <label class="mi" id="fontWrap">Font <select id="font" aria-label="Font for the views"></select></label>
+      <div class="sep"></div>
+      <label class="mi" title="Filled in for each new task (+ Add task)">My initials <input type="text" id="defWho" placeholder="KA" maxlength="14"></label>
+      <label class="mi" title="Filled in for each new task (+ Add task)">Default effort <select id="defEffort"><option value="">None</option></select></label>
       <div class="sep"></div>
       <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
     </div>
@@ -786,6 +805,11 @@ for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListen
   if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
 });
 $("today").value = store.get("today", "");
+$("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
+$("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
+for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
+$("defEffort").value = store.get("defEffort", "");
+$("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
 $("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };
 
 /* ---------- modes ---------- */
@@ -883,8 +907,9 @@ function replaceText(text) {           // swap in the new text, keeping the curs
   showFile();
 }
 
-async function editTask(t, op, value, btn, done) {
+async function editTask(t, op, value, btn, done) {   // -> true if the text changed (callers can await it to go on)
   const before = editor.value, seq = ++state.seq;
+  let ok = false;
   clearTimeout(timer);
   if (btn) btn.disabled = true;
   try {
@@ -897,16 +922,18 @@ async function editTask(t, op, value, btn, done) {
     replaceText(res.text);
     state.data = res.data;
     state.msg = { text: done, undo: { before, after: res.text } };
+    ok = true;
   } catch (err) {
     state.msg = { text: "Not changed: " + err.message, bad: true };
-    if (seq === state.seq) return render(false);
+    if (seq === state.seq) { await render(false); return false; }
   }
   if (seq === state.seq) plannerView();
+  return ok;
 }
 const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
 
-/* a one-line input over a cell; Enter applies, Esc or leaving cancels */
-function editCell(cell, placeholder, initial, apply, wide, fill) {   // fill: from the cell's left edge to the row's right edge
+/* a one-line input over a cell; Enter applies, Esc or leaving cancels; with `tab`, Tab / Shift-Tab apply and move on */
+function editCell(cell, placeholder, initial, apply, wide, fill, tab) {   // fill: from the cell's left edge to the row's right edge
   const input = h("input"), box = h("span", "editbox" + (wide ? " wide" : "") + (fill ? " fill" : ""), input);
   input.type = "text"; input.placeholder = placeholder; input.value = initial || "";
   input.setAttribute("aria-label", placeholder);
@@ -915,6 +942,7 @@ function editCell(cell, placeholder, initial, apply, wide, fill) {   // fill: fr
     e.stopPropagation();
     if (e.key === "Enter") { e.preventDefault(); const v = input.value; input.onblur = null; close(); apply(v); }
     else if (e.key === "Escape") { close(); cell.focus(); }
+    else if (e.key === "Tab" && tab) { e.preventDefault(); const v = input.value; input.onblur = null; close(); tab(e.shiftKey ? -1 : 1, v); }
   };
   input.onblur = close;
   input.onclick = e => e.stopPropagation();
@@ -930,8 +958,9 @@ function editCell(cell, placeholder, initial, apply, wide, fill) {   // fill: fr
   }
   input.focus(); input.select();
 }
-/* a single-choice list under a cell (the Effort cell): arrows move, Enter or a click picks, Esc or leaving cancels */
-function pickCell(cell, label, choices, current, apply) {
+/* a single-choice list under a cell (the Effort cell): arrows or a letter move, Enter or a click picks, Esc or leaving
+   cancels; with `tab`, Tab / Shift-Tab keep the choice (the one moved to, else the current one) and move on */
+function pickCell(cell, label, choices, current, apply, tab) {
   const box = h("div", "pickbox");
   box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label);
   const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
@@ -944,12 +973,22 @@ function pickCell(cell, label, choices, current, apply) {
     return b;
   });
   box.append(...items);
+  let moved = false;
   box.onkeydown = e => {
     e.stopPropagation();
     const i = items.indexOf(document.activeElement);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
+      e.preventDefault(); moved = true;
       items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key.length === 1 && /\w/.test(e.key)) {      // a letter: the next choice starting with it (s, m, l, x …)
+      const k = e.key.toLowerCase(), n = items.length;
+      for (let j = 1; j <= n; j++) {
+        const c = choices[(i + j) % n];
+        if (String(c.text).toLowerCase().startsWith(k)) { moved = true; items[(i + j) % n].focus(); break; }
+      }
+    } else if (e.key === "Tab" && tab) {
+      e.preventDefault(); close();
+      tab(e.shiftKey ? -1 : 1, moved && i >= 0 ? choices[i].value : current);
     } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); close(); cell.focus(); }
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
@@ -973,22 +1012,35 @@ const ADD = () => span("add", "+");
 
 /* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
    Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
-function addTaskRow(project, prefill = "") {
+function addTaskRow(project, who = "") {           // who: People prefills that person's initials
   const btn = h("button", "addtask", span("plus", "+"), "Add task");
   btn.title = project ? "Add a task at the end of @" + project.name : "Add a task to a project";
+  btn.dataset.key = (project ? "p\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
   const row = h("div", "addrow", btn);
-  btn.onclick = () => openAdd(btn, project, prefill);
+  btn.onclick = () => openAdd(btn, project, who);
   return row;
 }
-function openAdd(btn, project, prefill) {
+/* + Add task: the title, then optional Who / Effort / Date fields (Tab moves between them), prefilled with the
+   defaults from ⋯. Enter adds it and opens the form again for the next one; Esc or clicking away ends. The fields
+   go to the server separately (op "task" with {title, who, effort, date}); the page never writes note syntax. */
+function openAdd(btn, project, presetWho, keep) {
   const targets = state.data.targets;
   if (!project && !targets.length) {
     state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
     return showToast();
   }
   const input = h("input");
-  input.type = "text"; input.placeholder = "new task, like  draft (KA) (m) Oct24"; input.value = prefill;
-  input.setAttribute("aria-label", "New task");
+  input.type = "text"; input.placeholder = "new task"; input.setAttribute("aria-label", "New task");
+  const fWhoIn = h("input", "fwho"), fDate = h("input", "fdate");
+  fWhoIn.type = fDate.type = "text";
+  fWhoIn.placeholder = "Who"; fWhoIn.setAttribute("aria-label", "Who (initials)");
+  fDate.placeholder = "Date"; fDate.setAttribute("aria-label", "Date, like Oct24 or ~T1");
+  const fEff = h("select", "feff", h("option", "", "Effort"), ...EFFORTS.map(([v]) => h("option", "", v.toUpperCase())));
+  fEff.firstChild.value = ""; [...fEff.options].slice(1).forEach((o, i) => { o.value = EFFORTS[i][0]; });
+  fEff.setAttribute("aria-label", "Effort");
+  fWhoIn.value = keep ? keep.who : presetWho || store.get("defWho", "");
+  fEff.value = keep ? keep.effort : store.get("defEffort", "");
+  if (keep && keep.title) { input.value = keep.title; fDate.value = keep.date || ""; }
   let sel = null;
   if (!project) {
     const count = {};
@@ -1003,7 +1055,7 @@ function openAdd(btn, project, prefill) {
     const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
     sel.value = pick;
   }
-  const form = h("div", "addform", ...(sel ? [sel] : []), input);
+  const form = h("div", "addform", ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
   let closed = false, pressing = false;
   const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
     if (closed) return;
@@ -1017,18 +1069,23 @@ function openAdd(btn, project, prefill) {
   form.onkeydown = e => {
     e.stopPropagation();
     if (e.key === "Escape") { cancel(); btn.focus(); }
-    else if (e.key === "Enter" && e.target === input) {
+    else if (e.key === "Enter" && e.target !== sel) {
       e.preventDefault();
       const v = input.value.trim(), p = project || targets[sel.value];
+      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim() };
       cancel();
       if (!v) return;
       if (sel) store.set("addTo", p.line + "\n" + p.name);
-      editTask({ line: p.line, title: p.name }, "task", v, null, `Added "${v}" to @${p.name}.`);
+      const plain = !fields.who && !fields.effort && !fields.date;
+      const done = editTask({ line: p.line, title: p.name }, "task", plain ? v : fields, null, `Added "${v}" to @${p.name}.`);
+      done.then(ok => {                            // keep adding: the form again, empty, same Who / Effort; refused: as typed
+        const again = [...plannerBody.querySelectorAll(".addtask")].find(b => b.dataset.key === btn.dataset.key);
+        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields);
+      });
     }
   };
   btn.replaceWith(form);
   input.focus();
-  if (prefill) input.setSelectionRange(0, 0);    // People: the person's initials are already there, type before them
 }
 
 function undo() {
@@ -1250,6 +1307,27 @@ const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 
 const guides = depth => Array.from({ length: depth }, () => span("g"));
 
 /* one task row: [guides][status][@project][title] | Who | Effort | Date | + ; the last four are click-to-edit cells */
+/* Tab between a row's editable parts: title → Who → Effort → Date → the next row's title (Shift-Tab goes back).
+   `applied` is the edit being saved (or nothing); the views are redrawn after it, so the row is found again by its line. */
+const TAB_ORDER = ["title", "who", "size", "date"];
+function findAgain(row) {                         // -> () => the same task's row after a redraw (by line, and which copy)
+  const rows = () => [...plannerBody.querySelectorAll(".task")];
+  const line = row.dataset.line, nth = rows().filter(r => r.dataset.line === line).indexOf(row);
+  return () => { const same = rows().filter(r => r.dataset.line === line); return same[nth] || same[0]; };
+}
+async function tabTo(row, kind, dir, applied) {
+  const again = findAgain(row);
+  const ok = await applied;
+  if (applied && ok === false) return;               // refused: stay put (the message says why)
+  const here = again();
+  if (!here) return;
+  const all = [...plannerBody.querySelectorAll(".task")];
+  let i = TAB_ORDER.indexOf(kind) + dir, to = here;
+  if (i >= TAB_ORDER.length) { to = all[all.indexOf(here) + 1]; i = 0; }
+  else if (i < 0) { to = all[all.indexOf(here) - 1]; i = TAB_ORDER.length - 1; }
+  if (to && to.open) to.open[TAB_ORDER[i]]();
+}
+
 function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
   const row = h("div", "task s-" + t.status);
   row.style.setProperty("--d", depth);
@@ -1259,37 +1337,47 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   if (project) lead.append(span("proj", "@" + t.project));
   const ttl = span("ttl", t.title);
   lead.append(ttl);
-  ttl.onclick = e => {                                  // edit the task's text; with Edit alongside the click jumps to the line instead
-    if ($("viewPane").classList.contains("jump") || String(getSelection())) return;
-    e.stopPropagation();
+  const open = row.open = {};                           // each editable part's editor, so Tab can move between them
+  const tabber = kind => (dir, v) => tabTo(row, kind, dir, open[kind].apply(v));
+  open.title = () => {                                  // edit the task's text
     if (typeof t.text !== "string") {                   // a server started before title editing existed sends no `text`
       state.msg = { text: "To edit a task's text, restart the server (python3 planner.py --serve).", bad: true };
       return showToast();
     }
-    editCell(ttl, "task, like  draft (KA) (m) Oct24", t.text, v => {
-      v = v.trim();
-      if (!v || v === t.text) return;
-      editTask(t, "text", v, null, `Changed "${t.title}".`);
-    }, false, true);
+    editCell(ttl, "task, like  draft (KA) (m) Oct24", t.text, open.title.apply, false, true, tabber("title"));
+  };
+  open.title.apply = v => {
+    v = v.trim();
+    if (!v || v === t.text) return;
+    return editTask(t, "text", v, null, `Changed "${t.title}".`);
+  };
+  ttl.onclick = e => {                                  // with Edit alongside the click jumps to the line instead
+    if ($("viewPane").classList.contains("jump") || String(getSelection())) return;
+    e.stopPropagation();
+    open.title();
   };
 
   const current = t.assignees.join(", ");
   const who = cellButton("who r", "Change initials", current ? `${current}. Click to change (empty removes)` : "Assign: add initials",
     [current ? span("t", current) : ADD()],
-    cell => editCell(cell, "initials: KA, RT (empty removes)", current, v => {
-      const next = v.trim().split(/[\s,]+/).filter(Boolean).join(", ");
-      if (next === current) return;
-      editTask(t, "who", v, null, next ? `Set "${t.title}" to ${next}.` : `Removed the initials from "${t.title}".`);
-    }));
+    cell => editCell(cell, "initials: KA, RT (empty removes)", current, open.who.apply, false, false, tabber("who")));
+  open.who = () => who.click();
+  open.who.apply = v => {
+    const next = v.trim().split(/[\s,]+/).filter(Boolean).join(", ");
+    if (next === current) return;
+    return editTask(t, "who", v, null, next ? `Set "${t.title}" to ${next}.` : `Removed the initials from "${t.title}".`);
+  };
 
   const eff = t.effort && span("eff", t.effort.toUpperCase());
   const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: XS, S, M, L or XL",
     [eff || ADD()],
     cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
-      { value: "", text: "None" }], t.effort || "", v => {
-      if (v === (t.effort || "")) return;
-      editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
-    }));
+      { value: "", text: "None" }], t.effort || "", open.size.apply, tabber("size")));
+  open.size = () => size.click();
+  open.size.apply = v => {
+    if (v === (t.effort || "")) return;
+    return editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
+  };
 
   // Date: own dates, or (in People / Upcoming) the span, which may come from the parent or the subtasks (italic)
   const sp = t.span, inherited = useSpan && !date && sp && sp.how !== "own";
@@ -1303,15 +1391,23 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
   const tip = [full && (inherited ? `${full} (from its ${sp.how === "parent" ? "parent" : "subtasks"})` : full),
     t.overdue && "overdue", rems.length && "reminder " + rems.join(", "), "click to change"].filter(Boolean).join(" · ");
   const dateCell = cellButton("date r" + (t.overdue ? " late" : "") + (inherited ? " inh" : ""), "Set date", tip, content,
-    cell => editCell(cell, "Oct24, Oct23--26, ~Q1, ~T1 (empty clears)", t.date_text, v => {
-      v = v.trim();
-      if (v === (t.date_text || "")) return;
-      editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
-    }));
+    cell => editCell(cell, "Oct24, Oct23--26, ~Q1, ~T1 (empty clears)", t.date_text, open.date.apply, false, false, tabber("date")));
+  open.date = () => dateCell.click();
+  open.date.apply = v => {
+    v = v.trim();
+    if (v === (t.date_text || "")) return;
+    return editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
+  };
 
-  const sub = cellButton("sub mid", "Add a subtask", "Add a subtask", [ADD()],
-    cell => editCell(cell, "new subtask, like  draft (KA) Oct24", "", v => v.trim() &&
-      editTask(t, "subtask", v, null, `Added "${v.trim()}" under "${t.title}".`), true));
+  const sub = cellButton("sub mid", "Add a subtask", "Add subtasks (Enter adds one and opens the next; Esc ends)", [ADD()],
+    () => open.sub(""));
+  open.sub = (initial = "") => editCell(sub, "new subtask, like  draft (KA) Oct24 (Esc ends)", initial, v => {
+    v = v.trim();
+    if (!v) return;
+    const again = findAgain(row);
+    editTask(t, "subtask", v, null, `Added "${v}" under "${t.title}".`)
+      .then(ok => { const here = again(); if (here) here.open.sub(ok ? "" : v); });   // keep adding; refused: as typed
+  }, true);
 
   if (week) {                                            // the Week backlog: a Plan cell instead of + (subtask)
     row.classList.add("wrow");
@@ -1329,17 +1425,36 @@ const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum
 const tasksN = n => n + (n === 1 ? " task" : " tasks");
 
 function noteNode(text, depth) { return h("div", "note", ...guides(depth), span("pad"), text); }
-function treeNode(t, depth = 0) {
+const countTasks = list => list.reduce((n, c) => n + 1 + countTasks(c.children), 0);
+function treeNode(t, depth = 0, key = "") {      // a task and its subtree; a task with subtasks folds (key: its path of titles)
   const row = taskNode(t, { depth });
   if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
-  return h("div", "", row, ...t.notes.map(n => noteNode(n, depth)), ...t.children.map(c => treeNode(c, depth + 1)));
+  key += "\n" + t.title;
+  let shut = false;
+  if (t.children.length && !filterOn()) {          // while searching or filtering, everything is open
+    const set = foldSet("collapsedTasks"), n = countTasks(t.children);
+    shut = set.has(key);
+    const tog = h("button", "tog", icon(CHEVRON, 12));
+    tog.title = shut ? `Show ${tasksN(n).replace("task", "subtask")}` : "Hide the subtasks";
+    tog.setAttribute("aria-label", tog.title); tog.setAttribute("aria-expanded", String(!shut));
+    tog.onclick = e => {
+      e.stopPropagation();
+      set[set.has(key) ? "delete" : "add"](key);
+      store.set("collapsedTasks", JSON.stringify([...set]));
+      plannerView();
+    };
+    row.prepend(tog);
+    if (shut) { row.classList.add("shut"); row.querySelector(".lead").append(span("hidden-n", tasksN(n).replace("task", "subtask"))); }
+  }
+  return h("div", "", row, ...(shut ? [] : [...t.notes.map(n => noteNode(n, depth)), ...t.children.map(c => treeNode(c, depth + 1, key))]));
 }
 function colHead(title, when) {                  // a section heading that also labels the right-hand columns
   return h("div", "sechead", h("h2", "", title, when && span("when", when)),
     span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
 }
 
-/* folded headings, remembered per browser: projects in Projects (key "collapsed"), people in People ("collapsedPeople") */
+/* folds, remembered per browser: in Projects, sections ("collapsedSections"), projects ("collapsed") and tasks with
+   subtasks ("collapsedTasks", by section, project and the path of titles); in People, people ("collapsedPeople") */
 const folds = {};
 function foldSet(name) {
   if (!folds[name]) try { folds[name] = new Set(JSON.parse(store.get(name, "[]"))); } catch (e) { folds[name] = new Set(); }
@@ -1347,7 +1462,8 @@ function foldSet(name) {
 }
 const CHEVRON = "M9 6l6 6-6 6";
 /* a heading that folds its rows away: returns [heading, shut]. While searching or filtering, everything is open. */
-function foldHead(name, key, what, label, count) {
+/* a fold button: returns [button, shut]. While searching or filtering, everything is open and the button is inactive. */
+function foldButton(name, key, what, label) {
   const set = foldSet(name), open = filterOn(), shut = !open && set.has(key);
   const fold = h("button", "fold", icon(CHEVRON, 14), ...label);
   fold.setAttribute("aria-expanded", String(!shut));
@@ -1359,12 +1475,23 @@ function foldHead(name, key, what, label, count) {
     store.set(name, JSON.stringify([...set]));
     plannerView();
   };
+  return [fold, shut];
+}
+function foldHead(name, key, what, label, count) {   // a project or person heading that folds its rows away
+  const [fold, shut] = foldButton(name, key, what, label);
   return [h("h3", "ph" + (shut ? " shut" : ""), fold, count), shut];
 }
 function vProjects(d) {
   const out = h("div");
   for (const sec of d.projects) {
-    out.append(colHead(sec.title || "Projects", sec.when));
+    const [sfold, sshut] = foldButton("collapsedSections", sec.title || "", "section", [sec.title || "Projects"]);
+    const head = colHead(sfold, sec.when);
+    out.append(head);
+    if (sshut) {                                   // folded: just the heading, with how many projects it holds
+      head.classList.add("shut");
+      head.firstChild.append(span("when", sec.projects.length + (sec.projects.length === 1 ? " project" : " projects")));
+      continue;
+    }
     for (const p of sec.projects) {
       const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
       const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + p.name, "project", [span("at", "@"), p.name],
@@ -1372,7 +1499,7 @@ function vProjects(d) {
       out.append(head);
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
-      for (const t of p.tasks) out.append(treeNode(t));
+      for (const t of p.tasks) out.append(treeNode(t, 0, (sec.title || "") + "\n" + p.name));
       out.append(addTaskRow(p));
     }
   }
@@ -1440,7 +1567,7 @@ function vPeople(d) {
     out.append(head);
     if (shut) continue;
     for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
-    out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : " (" + g.name + ")"));
+    out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : g.name));
   }
   if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
   if (!d.people.length && d.targets.length) out.append(addTaskRow(null));

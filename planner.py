@@ -13,10 +13,11 @@ USAGE
   --today Oct10                        pretend today is another date (for testing)
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
                                        files from the page: each is a tab, saved automatically and reopened next time
-                                       (paste/open/edit notes, dark mode;
-                                       click a task's box to change its status, its title to edit
-                                       its text, or its Who / Effort / Date / + cells to edit it or add a subtask,
-                                       or + Add task to add a task to a project)
+                                       The page: tabs Projects / Timeline / People / Upcoming / Week and a
+                                       Quick note; click a task's box, title or Who / Effort / Date / + cells
+                                       to edit it (Tab moves between them), + Add task (with Who / Effort /
+                                       Date fields) to add tasks one after another, fold any level in Projects,
+                                       and plan tasks for days in Week
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -1133,6 +1134,29 @@ def add_task(text, line, task_text, title=None):
     return out
 
 
+def add_with_fields(op, text, line, fields, title=None):
+    """Op `task` or `subtask` with the new task's fields given separately:
+    {"title": "draft report", "who": "KA", "effort": "m", "date": "Oct24"} (all but the title optional).
+
+    The line is added with the title alone, then who, effort and date are set on it by the
+    same edits as the page's cells (set_assignees, set_effort, set_date), so each is checked
+    and lands in the usual order. If any is refused, the whole edit is refused.
+    """
+    if not isinstance(fields, dict) or not isinstance(fields.get("title"), str):
+        raise EditError("value must be text, or {title, who, effort, date}")
+    out = EDITS[op](text, line, fields["title"], title)
+    a, b = text.splitlines(), out.splitlines()
+    n = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), len(a)) + 1   # the new line
+    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date)):
+        value = fields.get(key)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str):
+            raise EditError(f"{key} must be text")
+        out = edit(out, n, value, _find(out, n).title)
+    return out
+
+
 EDITS = {"text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
@@ -1300,9 +1324,12 @@ def make_server(port, notes_path=None, browse_root=None):
                 op = EDITS.get(req["op"])
                 if op is None:
                     raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
-                if not isinstance(req["value"], str):
+                if isinstance(req["value"], dict) and req["op"] in ("task", "subtask"):
+                    text = add_with_fields(req["op"], text, req["line"], req["value"], req.get("title"))
+                elif not isinstance(req["value"], str):
                     raise EditError("value must be text")
-                text = op(text, req["line"], req["value"], req.get("title"))
+                else:
+                    text = op(text, req["line"], req["value"], req.get("title"))
                 self._json(200, {"text": text, "data": to_data(parse(text), period, monday)})
             except EditError as e:
                 self._json(409, {"error": str(e)})
