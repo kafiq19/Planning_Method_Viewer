@@ -249,7 +249,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 /* Week: six day columns (Sat/Sun shared) and This week by project on the right, the backlog below */
 .content.wide > div { max-width: 1280px; }
 .wtop { display: grid; grid-template-columns: minmax(0, 1fr) calc(250px * var(--fz)); gap: 16px; align-items: start; margin: 4px 0 8px; }
-.wdays { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; }
+.wdays { display: grid; grid-template-columns: repeat(var(--ncols, 6), minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; }
 .wday { min-width: 0; min-height: 150px; padding: 6px 5px 10px; border-left: 1px solid var(--line); }
 .wday:first-child { border-left: 0; }
 .wday.today { background: var(--hover); }
@@ -389,3 +389,26 @@ td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
 @container (max-width: 480px) {
   .task .cell.more { order: 3; }
 }
+
+/* ---------- the Planner: levels, ☆ priorities, project chips, columns that can't be planned ---------- */
+.wbox { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wlevels button { font-size: 13px; padding: 3px 9px; }
+.star { flex: none; display: inline-flex; padding: 1px; border: 0; background: none; color: var(--muted); opacity: .55; border-radius: 4px; }
+.star:hover:not(:disabled) { opacity: 1; color: var(--doing); }
+.star.on { opacity: 1; color: var(--doing); }
+.star:disabled { opacity: .2; }
+.task .lead .star { margin: 0 2px 0 -2px; }
+.wcard .star, .wline .star { margin-top: 1px; }
+.wprio { margin: 4px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.wprio h4.grp { margin: 0 0 4px; padding: 0; }
+.wprio h4 .when { font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.wprio .wline { cursor: pointer; }
+.wday.off { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--hover) 6px 7px); }
+.wday.off .whead { opacity: .6; }
+.pchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 10px; font-size: calc(13px * var(--fz)); }
+.pchips .plabel { color: var(--muted); margin-right: 2px; }
+.pchip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 9px; border-radius: 12px; background: var(--hover); }
+.pchip button { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 14px; line-height: 1.3; border-radius: 10px; }
+.pchip button:hover { color: var(--text); background: var(--line); }
+.pchips select { font-size: 12.5px; padding: 2px 6px; }
+.pchips .ghost { font-size: 12.5px; padding: 2px 6px; }

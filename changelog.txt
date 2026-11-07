@@ -5,6 +5,26 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.3  2026-11-06  Portfolio, part 4: the Planner
+-------------------------------------------------
+- New: the Week tab is now the Planner, by Year, Season, Month or Week.
+  The columns are the next step down (trimesters, months, weeks, days);
+  drag a task onto one, or use its Plan cell. Planning writes >T3, >Nov,
+  >wk45 or >Oct14, and a task planned for a day also shows in its week,
+  month and season.
+- New: top priorities. Click the ☆ on a task to make it a top priority
+  for the period you're looking at (^wk45, ^Nov, ^T3, ^yr); they're
+  listed at the top of the Planner.
+- New: On the calendar: choose which projects are on the Planner (× takes
+  one off, + Add project puts it back).
+- New: in a portfolio there is one Planner for every project, first in
+  the drawer; the Planner tab on a project page takes you there.
+- Code: RE_PLAN (day, week, month, trimester) and RE_PRIO; plan_of,
+  priority_of, plan_label; planner_* (periods, columns, star, groups;
+  week_groups is gone); to_data's "planner" replaces "week"; requests
+  send planner {kind, year, index}; op "priority"; set_plan takes any
+  level. In the page: vPlanner, wSeg, starButton, projectChips.
+
 2.0.2  2026-11-06  Portfolio, part 3: circle, archive, delete
 -------------------------------------------------
 - New: purple circling. Mark a notable task with (!) in front of it,

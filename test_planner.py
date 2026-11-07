@@ -800,18 +800,21 @@ class TestSetPlan(EditBase):
                 planner.set_plan(text, 1, value, title)
 
 
-class TestWeek(Base):
+class TestPlanner(Base):
     def setUp(self):
         super().setUp()
         self.ps = planner.parse(read_example())
 
-    def test_columns_planned_and_backlog(self):
-        cols, planned, backlog = planner.week_groups(self.ps, planner.date(2026, 10, 12))
-        self.assertEqual([h for h, _, _ in cols], ["Mon 12", "Tue 13", "Wed 14", "Thu 15", "Fri 16", "Sat/Sun 17-18"])
-        self.assertEqual({h: [t.title for _, t in items] for h, _, items in cols if items},
-                         {"Mon 12": ["gather requirements"], "Wed 14": ["send to board"]})
-        self.assertEqual([(p.name, [t.title for t in ts]) for p, ts in planned],
-                         [("HDC", ["gather requirements", "send to board"])])
+    def groups(self, ps, period):
+        cols, planned, backlog, prios = planner.planner_groups(ps, period)
+        return {c[0]: [t.title for _, t in c[5]] for c in cols if c[5]}, planned, backlog, prios
+
+    def test_week_columns_planned_and_backlog(self):
+        cols, planned, backlog, _ = planner.planner_groups(self.ps, ("week", 2026, 42))
+        self.assertEqual([c[0] for c in cols], ["Mon 12", "Tue 13", "Wed 14", "Thu 15", "Fri 16", "Sat/Sun 17-18"])
+        self.assertEqual([c[3] for c in cols], ["Oct12", "Oct13", "Oct14", "Oct15", "Oct16", "Oct17"])
+        self.assertEqual(self.groups(self.ps, ("week", 2026, 42))[0], {"Mon 12": ["gather requirements"], "Wed 14": ["send to board"]})
+        self.assertEqual([(p.name, [t.title for t in ts]) for p, ts in planned], [("HDC", ["gather requirements", "send to board"])])
         self.assertEqual(planner.effort_points(planned[0][1])[1], 2)      # (s) + (s), done ones count
         hdc = dict((p.name, items) for p, items in backlog)["HDC"]
         titles = [t.title for _, t in hdc]
@@ -821,38 +824,118 @@ class TestWeek(Base):
 
     def test_weekend_and_other_weeks(self):
         ps = planner.parse("@P\n- sat >Oct17\n- sun >Oct18\n- next >Oct19\n")
-        cols, planned, backlog = planner.week_groups(ps, planner.date(2026, 10, 12))
-        self.assertEqual([t.title for _, t in cols[5][2]], ["sat", "sun"])
+        cols, _, backlog, _ = planner.planner_groups(ps, ("week", 2026, 42))
+        self.assertEqual([t.title for _, t in cols[5][5]], ["sat", "sun"])
         self.assertEqual([t.title for _, t in backlog[0][1]], ["next"])   # planned for another week: still in the backlog
-        cols, _, _ = planner.week_groups(ps, planner.date(2026, 10, 19))
-        self.assertEqual([t.title for _, t in cols[0][2]], ["next"])
+        self.assertEqual(self.groups(ps, ("week", 2026, 43))[0], {"Mon 19": ["next"]})
+
+    def test_levels_roll_up(self):
+        ps = planner.parse("@P\n- day >Oct14\n- week >wk43\n- month >Nov\n- season >T3\n- edge >wk44\n- open\n")
+        self.assertEqual(self.groups(ps, ("month", 2026, 10))[0],
+                         {"Oct 12-18": ["day"], "Oct 19-25": ["week"], "Oct 26-31": ["edge"]})
+        self.assertEqual(self.groups(ps, ("month", 2026, 11))[0], {"Nov 1": ["edge"]})   # a week across two months: in both
+        cols, planned, backlog, _ = planner.planner_groups(ps, ("month", 2026, 11))
+        self.assertEqual([t.title for _, ts in planned for t in ts], ["edge", "month"])   # by start; >Nov: planned this month, no column
+        self.assertEqual([t.title for _, items in backlog for _, t in items], ["day", "week", "season", "open"])
+        self.assertEqual(self.groups(ps, ("season", 2026, 2))[0], {"Oct": ["day", "week"], "Nov": ["month"]})
+        self.assertEqual(self.groups(ps, ("year", 2026, 0))[0], {"Fall Sep-Dec": ["day", "week", "month", "season", "edge"]})
+        cols, *_ = planner.planner_groups(ps, ("year", 2026, 0))
+        self.assertEqual([c[4] for c in cols], [False, True, True])      # Winter 2026 is past: >T1 means Winter 2027
+
+    def test_month_columns_are_mon_sun_weeks(self):
+        cols = planner.planner_columns("month", 2026, 11)
+        self.assertEqual([(h, t) for h, _, _, t in cols][:2], [("Nov 1", "wk44"), ("Nov 2-8", "wk45")])
+        self.assertEqual((cols[0][1], cols[0][2]), (planner.date(2026, 10, 26), planner.date(2026, 11, 1)))
+
+    def test_priorities(self):
+        ps = planner.parse("@P\n- a ^wk42\n!- b ^wk42 ^Oct\n- c ^wk43\n- d ^yr ^T3\n")
+        for period, want in [(("week", 2026, 42), ["a", "b"]), (("month", 2026, 10), ["b"]),
+                             (("season", 2026, 2), ["d"]), (("year", 2026, 0), ["d"])]:
+            with self.subTest(period=period):
+                self.assertEqual([t.title for _, t in planner.planner_groups(ps, period)[3]], want)
+        self.assertEqual(planner.planner_star("week", 2026, 42), ("wk42", True))
+        self.assertEqual(planner.planner_star("year", 2027, 0), ("yr", False))  # ^yr is always this year
+        self.assertEqual(planner.planner_star("month", 2028, 1), ("Jan", False))
+
+    def test_planner_from(self):
+        self.assertEqual(planner.planner_from(None), ("week", 2026, 42))
+        self.assertEqual(planner.planner_from({"kind": "season"}), ("season", 2026, 2))
+        self.assertEqual(planner.planner_from({"kind": "year"}), ("year", 2026, 0))
+        self.assertEqual(planner.planner_from({"kind": "week", "year": 2027, "index": 1}), ("week", 2027, 1))
+        for bad in ({"kind": "day"}, {"kind": "week", "year": 2026, "index": 60}, {"kind": "month", "year": 2026, "index": 13},
+                    {"kind": "year", "year": 2026, "index": 2}, {"kind": "week", "year": "2026", "index": 3}, 5):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                planner.planner_from(bad)
+        self.assertEqual(planner.planner_step("week", 2026, 53, 1), ("week", 2027, 1))
+        self.assertEqual(planner.planner_step("year", 2026, 0, -1), ("year", 2025, 0))
 
     def test_week_monday(self):
         self.assertEqual(planner.week_monday(), planner.date(2026, 10, 12))
         self.assertEqual(planner.week_monday({"year": 2027, "index": 1}), planner.date(2027, 1, 4))
-        for bad in ({"year": 2026}, {"year": "2026", "index": 3}, 5, {"year": 2026, "index": 60}):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                planner.week_monday(bad)
 
     def test_to_data(self):
-        w = planner.to_data(self.ps)["week"]
-        self.assertEqual((w["label"], w["current"], w["prev"]["label"], w["next"]["label"]),
-                         ("Oct 12-18", True, "Oct 5-11", "Oct 19-25"))
-        self.assertEqual([(d["head"], d["token"], d["today"]) for d in w["days"]][:2],
-                         [("Mon 12", "Oct12", True), ("Tue 13", "Oct13", False)])
-        self.assertEqual(w["days"][5]["token"], "Oct17")
-        self.assertEqual(w["days"][5]["dates"], ["2026-10-17", "2026-10-18"])
-        self.assertEqual(w["days"][2]["tasks"][0]["plan_label"], "Oct 14")
+        w = planner.to_data(self.ps)["planner"]
+        self.assertEqual((w["kind"], w["label"], w["current"], w["prev"]["label"], w["next"]["label"], w["column_kind"]),
+                         ("week", "Oct 12-18", True, "Oct 5-11", "Oct 19-25", "day"))
+        self.assertEqual([(c["head"], c["token"], c["today"], c["ok"]) for c in w["columns"]][:2],
+                         [("Mon 12", "Oct12", True, True), ("Tue 13", "Oct13", False, True)])
+        self.assertEqual((w["columns"][5]["start"], w["columns"][5]["end"]), ("2026-10-17", "2026-10-18"))
+        t = w["columns"][2]["tasks"][0]
+        self.assertEqual((t["plan_label"], t["plan_kind"], t["plan_token"], t["plan_end"]), ("Oct 14", "day", "Oct14", "2026-10-14"))
+        self.assertEqual(w["star"], {"token": "wk42", "ok": True, "kind": "week", "start": "2026-10-12", "end": "2026-10-18"})
         self.assertEqual([(g["name"], g["points"]) for g in w["projects"]], [("HDC", 2)])
         self.assertEqual(w["backlog"][0]["tasks"][1]["depth"], 1)
-        w = planner.to_data(self.ps, None, planner.date(2026, 10, 26))["week"]
-        self.assertEqual((w["label"], w["current"], w["projects"]), ("Oct 26 - Nov 1", False, []))
+        w = planner.to_data(self.ps, None, ("season", 2026, 2))["planner"]
+        self.assertEqual((w["label"], w["now"]["label"], [c["head"] for c in w["columns"]]), ("Fall 2026", "Fall 2026", ["Sep", "Oct", "Nov", "Dec"]))
 
     def test_cli_view(self):
         out = "\n".join(planner.view_week(self.ps))
         self.assertIn("Week of Oct 12-18", out)
         self.assertIn("Wed 14\n    [ ] @HDC  send to board", out)
         self.assertIn("  @HDC   2 pts", out)
+
+
+class TestPlanLevels(EditBase):
+    def test_tokens(self):
+        for text, want in [("a >wk45", ("week", "wk45", planner.date(2026, 11, 2), planner.date(2026, 11, 8))),
+                           ("a >Nov", ("month", "Nov", planner.date(2026, 11, 1), planner.date(2026, 11, 30))),
+                           ("a >T1", ("season", "T1", planner.date(2027, 1, 1), planner.date(2027, 4, 30))),
+                           ("a >wk54 >Nov", ("month", "Nov", planner.date(2026, 11, 1), planner.date(2026, 11, 30)))]:
+            with self.subTest(text=text):
+                t = self.task(text)
+                self.assertEqual((t.plan_kind, t.plan_token, t.plan, t.plan_end), want)
+        self.assertEqual(self.task("a >wk54 >Nov").title, "a >wk54")
+        self.assertEqual(self.task("a >Nov Oct24").end, planner.date(2026, 10, 24))    # >Nov is never the date
+        self.assertEqual(planner.plan_label("season", planner.date(2027, 1, 1), planner.date(2027, 4, 30)), "Winter 2027")
+
+    def test_priority_tokens(self):
+        t = self.task("a ^wk42 ^Nov ^yr ^T4 b")
+        self.assertEqual([(x[0], x[1]) for x in t.priorities], [("wk42", "week"), ("Nov", "month"), ("yr", "year")])
+        self.assertEqual(t.title, "a ^T4 b")
+        self.assertEqual(self.task("x^Nov").priorities, [])
+
+    def test_set_plan_any_level(self):
+        self.assertEqual(planner.set_plan("- a (KA) Oct24 ^wk42 *daily\n", 1, "Nov"), "- a (KA) Oct24 >Nov ^wk42 *daily\n")
+        self.assertEqual(planner.set_plan("- a >Nov\n", 1, ">wk45"), "- a >wk45\n")
+        self.assertEqual(planner.set_plan("- a >T3\n", 1, ""), "- a\n")
+        for bad in ("wk54", "Q1", "Fall"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_plan("- a\n", 1, bad)
+
+    def test_set_priority(self):
+        self.assertEqual(planner.set_priority("- a >Nov *daily\n", 1, "wk42"), "- a >Nov ^wk42 *daily\n")
+        self.assertEqual(planner.set_priority("- a ^wk42\n", 1, "^wk42"), "- a ^wk42\n")       # already
+        self.assertEqual(planner.set_priority("- a ^wk42 ^Nov\r\n", 1, "-wk42"), "- a ^Nov\r\n")
+        self.assertEqual(planner.set_priority("- a\n", 1, "-wk42"), "- a\n")
+        self.assertEqual(planner.set_priority("- a\n", 1, "yr"), "- a ^yr\n")
+        for bad in ("wk54", "Q1", "-x"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_priority("- a\n", 1, bad)
+
+    def test_other_edits_go_before_plan_and_priorities(self):
+        self.assertEqual(planner.set_date("- a ^wk42\n", 1, "Oct24"), "- a Oct24 ^wk42\n")
+        self.assertEqual(planner.add_assignees("- a >Nov ^wk42\n", 1, "KA"), "- a (KA) >Nov ^wk42\n")
+        self.assertEqual(planner.set_effort("- a ^yr\n", 1, "m"), "- a (m) ^yr\n")
 
 
 class TestSetText(EditBase):
@@ -1169,15 +1252,21 @@ class TestServer(Base):
         self.assertEqual([t["title"] for t in d["data"]["projects"][0]["projects"][0]["tasks"]], ["a"])
         self.assertEqual(self.post("/api/parse", {"text": "", "period": {"kind": "week"}})[0], 400)
 
-    def test_parse_and_edit_with_week(self):
-        week = {"year": 2026, "index": 43}
-        code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12", "week": week})
-        self.assertEqual((code, d["week"]["label"]), (200, "Oct 19-25"))
+    def test_parse_and_edit_with_planner(self):
+        week = {"kind": "week", "year": 2026, "index": 43}
+        code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12", "planner": week})
+        self.assertEqual((code, d["planner"]["label"]), (200, "Oct 19-25"))
         code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 2, "op": "plan", "value": "Oct20",
-                                          "title": "a", "today": "2026-10-12", "week": week})
+                                          "title": "a", "today": "2026-10-12", "planner": week})
         self.assertEqual((code, d["text"]), (200, "@P\n- a >Oct20\n"))
-        self.assertEqual(d["data"]["week"]["days"][1]["tasks"][0]["title"], "a")
-        self.assertEqual(self.post("/api/parse", {"text": "", "week": {"year": 2026}})[0], 400)
+        self.assertEqual(d["data"]["planner"]["columns"][1]["tasks"][0]["title"], "a")
+        code, d = self.post("/api/edit", {"text": "@P\n- a\n", "line": 2, "op": "priority", "value": "wk43",
+                                          "title": "a", "today": "2026-10-12", "planner": week})
+        self.assertEqual(d["data"]["planner"]["priorities"][0]["title"], "a")
+        code, d = self.post("/api/parse", {"text": "", "today": "2026-10-12", "planner": {"kind": "month"}})
+        self.assertEqual(d["planner"]["label"], "Oct 2026")
+        self.assertEqual(self.post("/api/parse", {"text": "", "planner": {"kind": "week", "year": 2026}})[0], 400)
+        self.assertEqual(self.post("/api/parse", {"text": "", "planner": {"kind": "decade"}})[0], 400)
 
     def test_edit_bad_op_or_value_is_409(self):
         for extra in ({"op": "explode", "value": ""}, {"op": "date", "value": 5}):
