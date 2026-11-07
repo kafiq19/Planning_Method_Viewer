@@ -30,6 +30,7 @@ python planner.py notes.txt timeline  # show just one view
 python planner.py --serve             # open the web page (see below)
 python planner.py --serve notes.txt   # ...and edit notes.txt directly
 python planner.py --serve ~/Kafeen    # serve a portfolio folder (see Portfolio below)
+python planner.py ~/Kafeen week       # the views over a whole portfolio, in the terminal
 ```
 
 To try it on the included sample:
@@ -138,7 +139,7 @@ To see the views as of another day, use `--today`, for example `python planner.p
 
 ---
 
-## Portfolio (in progress)
+## Portfolio
 
 A **portfolio** is a folder with one sub-folder per project. Each project keeps its files side by side, so they stay plain text you can open anywhere and sync with any folder-sync tool:
 
@@ -147,9 +148,9 @@ Kafeen/
   HDC/
     backlog.kf          the project's planning notes
     quicknote.kf        a quick note for this project
-    habits.kf           repeating tasks (coming soon)
+    habits.kf           repeating tasks (habits)
     notes/              notes pages (.kf, .txt or .md), in sections (sub-folders) if you like
-    archive/2026.kf     finished tasks, by year (coming soon)
+    archive/2026.kf     finished tasks, by year
   MDM/ ...
   .trash/               anything you delete goes here, never gone for good
 ```
@@ -161,7 +162,7 @@ python planner.py --import notes.txt ~/Kafeen           # one project, named aft
 python planner.py --import notes.txt ~/Kafeen --split   # one project per @ line
 ```
 
-Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio.
+Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio. In the terminal, `python planner.py ~/Kafeen` (or `… ~/Kafeen week`) shows the views over every project, the week with each day's habits.
 
 In the page, **click the KAFEEN logo** to open the project drawer:
 

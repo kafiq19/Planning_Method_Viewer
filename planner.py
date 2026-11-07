@@ -10,6 +10,7 @@ USAGE
   python planner.py                    paste your notes, then press
                                        Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
   python planner.py notes.txt          read notes from a file instead
+  python planner.py ~/Kafeen week      a portfolio folder: the views over every project (week: with habits)
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming | week
   --today Oct10                        pretend today is another date (for testing)
@@ -877,17 +878,21 @@ def view_upcoming(projects):
     return out
 
 
-def view_week(projects, monday=None):
+def view_week(projects, monday=None, habits=None):
     monday = monday or week_monday()
     cols, planned, backlog, prios = planner_groups(projects, planner_at("week", monday))
+    rows = habit_rows(habits or [], monday, monday + timedelta(days=6))
     out = ["WEEK", "====", f"Week of {week_label(monday)}  (plan a task for a day with >MonDD)"]
     if prios:
         out.append("\nTop priorities (^wk" + str(monday.isocalendar()[1]) + ")")
         out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in prios)
-    for head, _, _, _, _, items in cols:
+    for head, a, b, _, _, items in cols:
         out.append(f"\n{head}")
         out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in items)
-        if not items:
+        hab = [(d, p, t, d in done) for p, t, _, due, done in rows for d in due if a <= d <= b]
+        out.extend(f"    {'[x]' if ok else '[ ]'} @{p.name}  {t.title}  (habit" + (f", {('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[d.weekday()]})" if a != b else ")")
+                   for d, p, t, ok in sorted(hab, key=lambda x: x[0]))
+        if not items and not hab:
             out.append("    (nothing planned)")
     out.append("\nBy project")
     for p, tasks in planned:
@@ -2020,11 +2025,11 @@ def page_data(text, name=None, period=None, plan=None, habits=False):
     return d
 
 
-def portfolio_data(root, period=None, plan=None):
-    """to_data over every project's backlog (All projects). Each project and task carries its backlog's
-    `path` and its project `folder`; sections with the same title are shown together; `targets` lists
-    every project folder (line 0 when its backlog has no tasks of its own yet); `versions` maps each
-    backlog's path to its version, for edits."""
+def portfolio_projects(root):
+    """Every project's backlog and habits in the portfolio `root`, parsed: -> (projects, habits, versions, own).
+    Each Project gets `path` (its file) and `folder`; sections with the same title become one; `own` lists a
+    line-0 target for each project whose backlog has no tasks of its own yet; `versions` maps each file's path
+    to its version."""
     projects, versions, sections, own, habits = [], {}, {}, [], []
     for info in portfolio_tree(root)["projects"]:
         hrel = info["files"]["habits"]
@@ -2042,6 +2047,13 @@ def portfolio_data(root, period=None, plan=None):
         if not any(pr.name == info["name"] and pr.section is None and pr.line for pr in ps):
             own.append({"name": info["name"], "line": 0, "path": rel, "folder": info["name"], "section": None})
         projects += ps
+    return projects, habits, versions, own
+
+
+def portfolio_data(root, period=None, plan=None):
+    """to_data over every project's backlog (All projects; `portfolio_projects`), with the habits for the Planner,
+    `targets` led by the line-0 ones, and `versions` for edits."""
+    projects, habits, versions, own = portfolio_projects(root)
     d = to_data(projects, period, plan, habits)
     d["targets"] = own + d["targets"]
     d["versions"] = versions
@@ -2494,14 +2506,24 @@ def main(argv):
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())
-        elif not os.path.isfile(a):
-            sys.exit(f"planner.py: {a!r} is not a file or a view ({' | '.join(VIEWS)})")
+        elif not os.path.isfile(a) and not os.path.isdir(a):
+            sys.exit(f"planner.py: {a!r} is not a file, a portfolio folder or a view ({' | '.join(VIEWS)})")
         elif path is not None:
             sys.exit(f"planner.py: only one notes file at a time (got {path!r} and {a!r})")
         else:
             path = a
 
-    if path:
+    habits = None
+    if path and os.path.isdir(path):                           # a portfolio: every project's backlog (and habits)
+        try:
+            projects, habits, _, _ = portfolio_projects(path)
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"planner.py: can't read the portfolio {path!r}: {e}")
+        for p in projects + habits:                            # a sub-group reads "HDC · Stream"
+            if p.name != p.folder:
+                p.name = f"{p.folder} · {p.name}"
+        text = None
+    elif path:
         try:
             with open(path, encoding="utf-8") as f:
                 text = f.read()
@@ -2517,12 +2539,13 @@ def main(argv):
     except AttributeError:
         pass
 
-    projects = parse(text)
+    if text is not None:
+        projects = parse(text)
     if not projects:
         print("No projects or tasks found.")
         return
     for name in chosen or list(VIEWS):
-        print("\n".join(VIEWS[name](projects)))
+        print("\n".join(view_week(projects, None, habits) if name == "week" else VIEWS[name](projects)))
         print()
 
 

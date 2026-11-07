@@ -1438,8 +1438,8 @@ class TestCLI(unittest.TestCase):
 
     def test_bad_arguments_give_one_line_errors(self):
         cases = [
-            ((EXAMPLE, "timline"), "is not a file or a view"),
-            (("no-such-file.txt",), "is not a file or a view"),
+            ((EXAMPLE, "timline"), "is not a file, a portfolio folder or a view"),
+            (("no-such-file.txt",), "is not a file, a portfolio folder or a view"),
             ((EXAMPLE, EXAMPLE), "only one notes file"),
             ((EXAMPLE, "--today"), "--today needs a value"),
             ((EXAMPLE, "--today", "Feb30"), "bad --today value"),
@@ -1479,6 +1479,23 @@ class TestCLI(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertIn("No projects or tasks found.", self.run_cli(stdin="\n"))
+
+    def test_portfolio_folder(self):
+        out = self.run_cli(PORTFOLIO, "--today", "2026-10-12")
+        for heading in ("PROJECTS", "TIMELINE", "PEOPLE", "UPCOMING", "WEEK"):
+            self.assertIn(heading, out)
+        self.assertIn("site visit prep   Sep 30   OVERDUE", out)
+        self.assertIn("Mon 12\n    [x] @HDC  gather requirements (RT)\n    [ ] @HDC  inbox zero  (habit)", out)
+        with tempfile.TemporaryDirectory() as d:
+            for rel, text in (("A/backlog.kf", "- own\n@Stream\n- b\n"), ("A/habits.kf", "- walk *weekly Sat, Sun\n")):
+                os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
+                with open(os.path.join(d, rel), "w", encoding="utf-8") as f:
+                    f.write(text)
+            out = self.run_cli(d, "projects", "week", "--today", "2026-10-12")
+            self.assertIn("@A   0/1 done", out)
+            self.assertIn("@A · Stream   0/1 done", out)                  # a sub-group, under its project's name
+            self.assertIn("Sat/Sun 17-18\n    [ ] @A  walk  (habit, Sat)\n    [ ] @A  walk  (habit, Sun)", out)
+            self.assertIn("No projects or tasks found.", self.run_cli(os.path.join(d, "A")))   # a project folder isn't a portfolio
 
     def test_import(self):
         with tempfile.TemporaryDirectory() as d:

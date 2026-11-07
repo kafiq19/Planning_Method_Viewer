@@ -5,6 +5,17 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.5  2026-11-06  Portfolio, part 6: the terminal, and polish
+-------------------------------------------------
+- New: the terminal views read a portfolio folder:
+  python planner.py ~/Kafeen  (or  ~/Kafeen week ). A project's sub-group
+  reads "HDC · Stream", and the week lists each day's habits.
+- Changed: the README's Portfolio section is complete (no more "coming
+  soon").
+- Code: portfolio_projects (shared by portfolio_data and the CLI);
+  view_week(projects, monday, habits). AGENTS.md: the portfolio plan is
+  done; the check view is next on the roadmap.
+
 2.0.4  2026-11-06  Portfolio, part 5: habits
 -------------------------------------------------
 - New: a Habits page for each project (habits.kf). A habit is a task with
