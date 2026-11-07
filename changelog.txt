@@ -5,6 +5,29 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.7  2026-11-06  One Projects folder
+-------------------------------------------------
+- Changed: python planner.py --serve is all you need. Your projects live
+  in the Projects folder next to planner.py, which the planner finds by
+  itself (and makes if it's missing).
+- Removed: --serve FOLDER, and Create a portfolio, Open a folder…, Switch
+  portfolio… and Close portfolio in the drawer. --serve notes.txt still
+  edits one file. Because --serve now always opens Projects, the file
+  tabs, Open file and the browser-kept Quick note no longer appear.
+- New: + New project makes the project's files straight away: empty
+  backlog.kf, quicknote.kf and habits.kf, and the notes/ and archive/
+  folders.
+- New: a sample project, Projects/Example. Delete it whenever you like.
+- Changed: --import notes.txt puts the project in Projects unless you give
+  another folder.
+- Changed: git ignores Projects/ except Projects/Example.
+- Code: PROJECTS; new_project writes the placeholders. Gone: POST
+  /api/portfolio ops use and leave, `root` and `can` in GET /api/portfolio,
+  and in the page state.canFolio, portfolioPath, drawNoFolio, useFolio,
+  closeFolio, openPicker("folder"). /api/browse answers 409 while a projects
+  folder is served. The file-tabs code stays, reached only through
+  make_server without a folder (the tests).
+
 2.0.6  2026-11-06  The project drawer without a portfolio folder
 -------------------------------------------------
 - Fixed: the KAFEEN logo did nothing unless the planner was started with

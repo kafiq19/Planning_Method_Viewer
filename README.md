@@ -27,10 +27,9 @@ python planner.py                     # paste your notes, then press
                                       #   Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
 python planner.py notes.txt           # or read your notes from a file
 python planner.py notes.txt timeline  # show just one view
-python planner.py --serve             # open the web page (see below)
-python planner.py --serve notes.txt   # ...and edit notes.txt directly
-python planner.py --serve ~/Kafeen    # serve a portfolio folder (see Portfolio below)
-python planner.py ~/Kafeen week       # the views over a whole portfolio, in the terminal
+python planner.py --serve             # open the web page on your Projects folder (see below)
+python planner.py --serve notes.txt   # ...or edit just notes.txt
+python planner.py ./Projects week     # the views over all your projects, in the terminal
 ```
 
 To try it on the included sample:
@@ -44,12 +43,12 @@ python planner.py example.kf
 ## The web page
 
 ```
-python planner.py --serve             # opens http://localhost:8765
+python planner.py --serve             # opens http://localhost:8765 on your Projects folder
 python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
 ```
 
-Paste your notes, or press **Load the example** to try it, or use **Open file** in the **⋯** menu (or **+** after the tabs) to pick a `.kf`, `.txt` or `.md` file from your home folder (`.kf` is the KAFEEN planner format; the notes inside are the same as in a `.txt`). A file opened this way **saves itself** about a second after each change, and shows up as a **tab** in the header. Open as many as you like (one per project, say) with the **+** after the tabs, click a tab to switch, and **×** to close it (the file itself stays on disk). Next time you start the planner, the same files open again, on the tab you were using, like Notepad. To start a new planning file, press **New file…** at the bottom of the file browser and give it a name. The header shows "Saving…" then "Saved"; a red dot on a tab means its latest changes couldn't be saved yet (they're kept, and come back when you return to the tab). If a file was changed somewhere else in the meantime, nothing is overwritten and you choose which version to keep. Your tabs are remembered in this browser. The first tab is always **Quick note**, a place to jot ideas down without a file. It's kept in your browser (the header says "Kept in this browser"), so it survives reloads, crashes and restarts, and it can't be closed by accident. **Save** while it's showing downloads it as a file.
+`--serve` needs nothing else: it finds the `Projects` folder next to `planner.py` (see [Projects](#projects)) and shows your projects. Everything saves itself about a second after each change.
 
 If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows "Saved", or a **• Unsaved · Save** button when you have changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
 
@@ -108,7 +107,7 @@ To plan a task, drag it from the backlog onto a column, or click its **Plan** ce
 
 Click the **☆** on a task to make it a **top priority** for the period you're looking at (it adds `^wk45`, `^Nov`, `^T3` or `^yr`); they're listed at the top. Since the notes have no years, a column or star too far away (like Winter of this year, once it's past) is greyed out.
 
-**On the calendar** at the top shows which projects are on the Planner: click **×** on one to take it off, and **+ Add project** to put it back. With a portfolio there is one Planner for all your projects: it's first in the drawer, and the Planner tab on any project page takes you there.
+**On the calendar** at the top shows which projects are on the Planner: click **×** on one to take it off, and **+ Add project** to put it back. There is one Planner for all your projects: it's first in the drawer, and the Planner tab on any project page takes you there.
 
 ### Good to know
 
@@ -139,30 +138,34 @@ To see the views as of another day, use `--today`, for example `python planner.p
 
 ---
 
-## Portfolio
+## Projects
 
-A **portfolio** is a folder with one sub-folder per project. Each project keeps its files side by side, so they stay plain text you can open anywhere and sync with any folder-sync tool:
+Your projects live in the **`Projects`** folder next to `planner.py`, one sub-folder per project. `python planner.py --serve` finds it by itself (and makes it if it's missing). Each project keeps its files side by side, so they stay plain text you can open anywhere and sync with any folder-sync tool:
 
 ```
-Kafeen/
-  HDC/
+Projects/
+  Example/              a sample project to look around in; delete it whenever you like
     backlog.kf          the project's planning notes
     quicknote.kf        a quick note for this project
     habits.kf           repeating tasks (habits)
     notes/              notes pages (.kf, .txt or .md), in sections (sub-folders) if you like
     archive/2026.kf     finished tasks, by year
-  MDM/ ...
+  HDC/ ...
   .trash/               anything you delete goes here, never gone for good
 ```
 
-Turn an existing notes file into a portfolio with:
+**+ New project** in the drawer makes the folder with all of these ready: an empty `backlog.kf`, `quicknote.kf` and `habits.kf`, and the `notes/` and `archive/` folders. A folder you add yourself becomes a project too, and any of its files that are missing are made the first time you save them.
+
+Git ignores `Projects/` except for `Example`, so your own projects stay out of the repository.
+
+Turn an existing notes file into a project with:
 
 ```
-python planner.py --import notes.txt ~/Kafeen           # one project, named after the file
-python planner.py --import notes.txt ~/Kafeen --split   # one project per @ line
+python planner.py --import notes.txt           # one project, named after the file
+python planner.py --import notes.txt --split   # one project per @ line
 ```
 
-Your lines are copied exactly; nothing in `notes.txt` changes. Start the planner as usual (`python planner.py --serve`) and **click the KAFEEN logo**: the drawer offers **Create a portfolio** (a new folder in your home folder, called Kafeen unless you change it) or **Open a folder…** to use one you have. The page remembers it and opens it again next time; **Switch portfolio…** and **Close portfolio** are at the bottom of the drawer. You can also start with a folder, `python planner.py --serve ~/Kafeen` (and `python planner.py --serve example` serves a sample portfolio). In the terminal, `python planner.py ~/Kafeen` (or `… ~/Kafeen week`) shows the views over every project, the week with each day's habits.
+Your lines are copied exactly; nothing in `notes.txt` changes. In the terminal, `python planner.py ./Projects` (or `… ./Projects week`) shows the views over every project, the week with each day's habits. Write the `./`: a bare `Projects` means the Projects view.
 
 In the page, **click the KAFEEN logo** to open the project drawer:
 
@@ -185,7 +188,8 @@ The header shows where you are (`HDC › Notes › Kickoff call`); click it to o
 | `planner.py` | The viewer and the small local server: one file, standard library only |
 | `web/index.html`, `web/app.css`, `web/app.js` | The web page (editor, three modes, dark mode), served by `planner.py --serve` |
 | `example.kf` | Sample notes that use every rule |
-| `example/` | A sample portfolio: `example.kf` split into projects, with a quick note and notes pages |
+| `Projects/` | Your projects; `Projects/Example` is a sample project |
+| `example/` | `example.kf` split into projects, with a quick note and notes pages: a reference for the tests |
 | `test_planner.py` | Automated tests: run `python -m unittest` |
 | `changelog.txt` | What changed in each version |
 | `README.md` | This guide |

@@ -10,18 +10,19 @@ USAGE
   python planner.py                    paste your notes, then press
                                        Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
   python planner.py notes.txt          read notes from a file instead
-  python planner.py ~/Kafeen week      a portfolio folder: the views over every project (week: with habits)
+  python planner.py ./Projects week    a projects folder: the views over every project (week: with habits)
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming | week
   --today Oct10                        pretend today is another date (for testing)
-  --import notes.txt FOLDER [--split]  make a portfolio project from notes.txt (--split: one project per @ line)
-  --serve FOLDER                       serve a portfolio: one sub-folder per project (backlog.kf, quicknote.kf,
-                                       habits.kf, notes/, archive/YYYY.kf). Click the logo for the projects:
-                                       All projects (every backlog together) and each project's pages
-  --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
-                                       files from the page: each is a tab, saved automatically and reopened next time
-                                       The page: tabs Projects / Timeline / People / Upcoming / Week and a
-                                       Quick note; click a task's box, title or Who / Effort / Date / + cells
+  --import notes.txt [FOLDER] [--split]  make a project from notes.txt in Projects/, or in FOLDER
+                                       (--split: one project per @ line)
+  --serve [--port 8765]                open the web page on the Projects folder next to planner.py (made if it's
+                                       missing): one sub-folder per project (backlog.kf, quicknote.kf, habits.kf,
+                                       notes/, archive/YYYY.kf). Click the logo for the projects: All projects
+                                       (every backlog together) and each project's pages
+  --serve notes.txt [--port 8765]      the web page on that one file instead; Save writes back to it
+                                       The page: tabs Projects / Timeline / People / Upcoming / Week;
+                                       click a task's box, title or Who / Effort / Date / + cells
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
                                        Date fields) to add tasks one after another, fold any level in Projects,
                                        and plan tasks for days in Week
@@ -1771,13 +1772,14 @@ def write_notes(path, text, version, force=False):
     return file_version(data)
 
 
-# ---------- the portfolio (--serve FOLDER) ----------
+# ---------- the portfolio (--serve: the Projects folder next to planner.py) ----------
 #
-# A portfolio is a folder; each sub-folder is a project:
+# A portfolio is a folder (PROJECTS); each sub-folder is a project:
 #   HDC/backlog.kf  quicknote.kf  habits.kf  notes/[Section/]Page.kf|.txt|.md  archive/2026.kf
 # Paths in the API are relative to the portfolio, with "/" between parts. Hidden
 # names (starting with ".") are never listed or opened; .trash/ holds what was deleted.
 
+PROJECTS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "Projects")
 PROJECT_FILES = {"backlog": "backlog.kf", "quicknote": "quicknote.kf", "habits": "habits.kf"}
 NOTES_DIR, ARCHIVE_DIR, TRASH_DIR = "notes", "archive", ".trash"
 RE_ARCHIVE = re.compile(r"\d{4}\.kf")
@@ -1876,12 +1878,16 @@ def portfolio_tree(root):
 
 
 def new_project(root, name):
-    """Make the folder for a new project; -> its path."""
+    """Make a new project: its folder, its files (empty) and its notes/ and archive/ folders; -> its path."""
     name = _clean_name(name)
     full = portfolio_path(root, name)
     if os.path.lexists(full):
         raise PortfolioError(f"there is already a project called {name}")
     os.mkdir(full)
+    for folder in (NOTES_DIR, ARCHIVE_DIR):
+        os.mkdir(os.path.join(full, folder))
+    for filename in PROJECT_FILES.values():
+        write_notes(os.path.join(full, filename), "", None)
     return name
 
 
@@ -2084,7 +2090,7 @@ def apply_edit(text, req):
 def make_server(port, notes_path=None, browse_root=None, portfolio=None):
     """The local server (127.0.0.1 only). Port 0 picks a free port.
 
-    With `portfolio` (a folder), GET /api/portfolio lists its projects, POST /api/portfolio
+    With `portfolio` (a folder; `--serve` passes PROJECTS), GET /api/portfolio lists its projects, POST /api/portfolio
     makes, renames and deletes (moves to .trash) projects, sections and pages, and
     /api/file reads and saves any file in it by its path relative to the folder.
 
@@ -2107,11 +2113,6 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
     folio = os.path.realpath(portfolio) if portfolio else None
     root = os.path.realpath(browse_root or os.path.expanduser("~"))
     opened = []                                     # files opened from the page (resolved paths), most recent last
-
-    def use_folio(path):
-        """Serve the portfolio folder `path` from now on (None: none)."""
-        nonlocal folio
-        folio = path
 
     def inside(p):
         """`p` resolved, if it is `root` or under it; else None."""
@@ -2147,9 +2148,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             elif path == "/api/portfolio":
                 if not self._trusted():
                     return
-                if folio is None:                     # `can`: the page may open or make one (no command-line file)
-                    return self._json(200, {"name": None, "can": notes_path is None})
-                self._json(200, dict(portfolio_tree(folio), root=folio))
+                self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
@@ -2201,7 +2200,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 if self.path == "/api/parse":
                     if req.get("all"):
                         if folio is None:
-                            return self._json(409, {"error": "no portfolio folder was given (planner.py --serve FOLDER)"})
+                            return self._json(409, {"error": "no projects folder is being served (planner.py --serve)"})
                         return self._json(200, portfolio_data(folio, period, monday))
                     return self._json(200, page_data(text, name, period, monday, bool(req.get("habits"))))
                 if "path" in req:
@@ -2239,7 +2238,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             written first, so a crash leaves a copy rather than losing anything. -> {text, version, data, archive,
             moved, tree, undo: [{path, before, version}] (the source, then the archive)}."""
             if folio is None:
-                return self._json(409, {"error": "the archive needs a portfolio folder (planner.py --serve FOLDER)"})
+                return self._json(409, {"error": "the archive needs the projects folder (planner.py --serve)"})
             path, year = req.get("path"), req.get("archive_year")
             if portfolio_kind(path) in (None, "project", "section", "archive") or not path.endswith(".kf"):
                 return self._json(409, {"error": "tasks can be archived from a project's .kf pages"})
@@ -2285,41 +2284,10 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
 
         def _portfolio(self, req):
             """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,
-            section?}; rename {path, name}; trash {path}. -> {path, tree}.
-            use {path, create?}: serve that folder (under the browse root) as the portfolio from now on, making it
-            first with `create` (its parent must exist) -> the tree with `root`; leave: serve none. Not with a
-            command-line file."""
+            section?}; rename {path, name}; trash {path}. -> {path, tree}."""
             op = req.get("op")
-            if op in ("use", "leave"):
-                if notes_path is not None:
-                    return self._json(409, {"error": "a notes file was given on the command line"})
-                if op == "leave":
-                    use_folio(None)
-                    return self._json(200, {"left": True})
-                raw = req.get("path").strip() if isinstance(req.get("path"), str) else ""
-                if raw == "~" or raw.startswith("~/"):        # ~ is the browse root (the home folder)
-                    raw = os.path.join(root, raw[2:])
-                p = raw and inside(raw)
-                if not p or p == root and req.get("create"):
-                    return self._json(403, {"error": "a portfolio must be a folder in your home folder"})
-                if req.get("create"):
-                    try:
-                        _clean_name(os.path.basename(p))
-                        if os.path.lexists(p):
-                            return self._json(409, {"error": f"{os.path.basename(p)} already exists: open it instead"})
-                        if not os.path.isdir(os.path.dirname(p)):
-                            return self._json(403, {"error": "its folder doesn't exist"})
-                        os.mkdir(p)
-                    except PortfolioError as e:
-                        return self._json(409, {"error": str(e)})
-                    except OSError as e:
-                        return self._json(500, {"error": f"can't make it: {e.strerror or e}"})
-                if not os.path.isdir(p):
-                    return self._json(404, {"error": f"{p} isn't a folder (any more)"})
-                use_folio(p)
-                return self._json(200, dict(portfolio_tree(p), root=p))
             if folio is None:
-                return self._json(409, {"error": "no portfolio is open: open or make one from the drawer"})
+                return self._json(409, {"error": "no projects folder is being served (planner.py --serve)"})
             try:
                 if op == "project":
                     path = new_project(folio, req.get("name"))
@@ -2379,8 +2347,9 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                              "picked": notes_path is None})
 
         def _browse(self, folder):
-            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}. (Also while a
-            portfolio is open, to choose another; only opening files is refused then.)"""
+            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
+            if folio is not None:
+                return self._json(409, {"error": "the projects folder is open: use its projects"})
             if notes_path is not None:
                 return self._json(409, {"error": "a notes file was given on the command line"})
             start = os.path.dirname(opened[-1]) if opened else (os.getcwd() if inside(os.getcwd()) else root)
@@ -2409,7 +2378,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             """Open the notes file at req["path"] (under the browse root) and return it; opening an
             open file again is fine. With "create", make it first (empty; refused if it exists)."""
             if folio is not None:
-                return self._json(409, {"error": "a portfolio folder is open: use its projects"})
+                return self._json(409, {"error": "the projects folder is open: use its projects"})
             if notes_path is not None:
                 return self._json(409, {"error": "a notes file was given on the command line"})
             p = isinstance(req.get("path"), str) and inside(req["path"])
@@ -2467,7 +2436,7 @@ def serve(port, notes_path=None, portfolio=None):
     url = f"http://localhost:{port}"
     print(f"Planner running at {url}  (Ctrl-C to stop)")
     if portfolio:
-        print(f"Portfolio {portfolio}")
+        print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -2506,9 +2475,9 @@ def main(argv):
         if split:
             args.remove("--split")
         args.remove("--import")
-        if len(args) != 2 or not os.path.isfile(args[0]):
-            sys.exit("planner.py: use --import notes.txt PORTFOLIO_FOLDER [--split]")
-        folder = args[1]
+        if len(args) not in (1, 2) or not os.path.isfile(args[0]):
+            sys.exit("planner.py: use --import notes.txt [FOLDER] [--split]")
+        folder = args[1] if len(args) == 2 else PROJECTS
         if not os.path.isdir(folder) and not os.path.isdir(os.path.dirname(os.path.abspath(folder))):
             sys.exit(f"planner.py: can't make the portfolio {folder!r}: its parent folder doesn't exist")
         try:
@@ -2527,16 +2496,21 @@ def main(argv):
             sys.exit(f"planner.py: bad --port value {port!r}")
         if len(args) > 1 or any(a.lower() in VIEWS for a in args):
             sys.exit("planner.py: --serve takes at most one notes file (and no view names)")
-        notes = os.path.realpath(args[0]) if args else None    # follow a symlink to the real file
-        if notes and os.path.isdir(notes):                     # a folder: the portfolio
-            return serve(int(port), portfolio=notes)
-        if notes:
-            if not os.path.isdir(os.path.dirname(notes)):
-                sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
+        if not args:                                           # the Projects folder next to planner.py
             try:
-                read_notes(notes)
-            except (OSError, UnicodeDecodeError) as e:
-                sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
+                os.makedirs(PROJECTS, exist_ok=True)
+            except OSError as e:
+                sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
+            return serve(int(port), portfolio=PROJECTS)
+        notes = os.path.realpath(args[0])                      # follow a symlink to the real file
+        if os.path.isdir(notes):
+            sys.exit(f"planner.py: --serve takes no folder: your projects live in {PROJECTS}")
+        if not os.path.isdir(os.path.dirname(notes)):
+            sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
+        try:
+            read_notes(notes)
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
         return serve(int(port), notes)
     for a in args:
         if a.lower() in VIEWS:

@@ -3,6 +3,8 @@ Tests for planner.py. Standard library only:  python -m unittest -v
 
 Every test pins TODAY (default Oct 12 2026) because dates are written without years.
 """
+import contextlib
+import io
 import json
 import os
 import stat
@@ -11,6 +13,7 @@ import tempfile
 import sys
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1190,7 +1193,7 @@ class TestServer(Base):
 
     def test_no_portfolio(self):
         with urllib.request.urlopen(self.url + "/api/portfolio") as r:
-            self.assertEqual(json.loads(r.read()), {"name": None, "can": self.notes is None})
+            self.assertEqual(json.loads(r.read()), {"name": None})
         self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "X"})[0], 409)
         self.assertEqual(self.post("/api/parse", {"all": True})[0], 409)
 
@@ -1307,28 +1310,6 @@ class TestServerPickedFile(Base):
 
     def get(self, path):
         return self.send(urllib.request.Request(self.url + path))
-
-    def test_open_or_make_a_portfolio_from_the_page(self):
-        os.makedirs(os.path.join(self.root, "folio", "HDC"))
-        code, d = self.post("/api/portfolio", {"op": "use", "path": os.path.join(self.root, "folio")})
-        self.assertEqual((code, d["name"], d["root"], [p["name"] for p in d["projects"]]),
-                         (200, "folio", os.path.join(self.root, "folio"), ["HDC"]))
-        self.assertEqual(self.get("/api/portfolio")[1]["root"], os.path.join(self.root, "folio"))
-        self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "MDM"})[0], 200)
-        self.assertTrue(os.path.isdir(os.path.join(self.root, "folio", "MDM")))
-        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "notes.md")})[0], 409)   # a portfolio is open
-        self.assertEqual(self.post("/api/portfolio", {"op": "leave"})[1], {"left": True})
-        self.assertEqual(self.get("/api/portfolio")[1], {"name": None, "can": True})
-        code, d = self.post("/api/portfolio", {"op": "use", "path": "~/Kafeen", "create": True})   # ~: the browse root
-        self.assertEqual((code, d["projects"], d["root"]), (200, [], os.path.join(self.root, "Kafeen")))
-        self.assertTrue(os.path.isdir(os.path.join(self.root, "Kafeen")))
-        for body, code in [({"op": "use", "path": os.path.join(self.root, "Kafeen"), "create": True}, 409),   # exists
-                           ({"op": "use", "path": os.path.dirname(self.root)}, 403),                         # outside home
-                           ({"op": "use", "path": os.path.join(self.root, "nope")}, 404),
-                           ({"op": "use", "path": os.path.join(self.root, "a", "b"), "create": True}, 403),   # no parent
-                           ({"op": "use", "path": os.path.join(self.root, "notes.md")}, 404)]:              # a file
-            with self.subTest(body=body):
-                self.assertEqual(self.post("/api/portfolio", body)[0], code)
 
     def test_browse_lists_folders_and_notes_files(self):
         code, d = self.get("/api/browse?dir=" + urllib.parse.quote(self.root))
@@ -1470,7 +1451,8 @@ class TestCLI(unittest.TestCase):
             (("--serve", "--port", "abc"), "bad --port value"),
             (("--serve", "--port", "70000"), "bad --port value"),
             (("--serve", EXAMPLE, "timeline"), "at most one notes file"),
-            (("--import", EXAMPLE), "use --import"),
+            (("--import", EXAMPLE, "a", "b"), "use --import"),
+            (("--serve", HERE), "--serve takes no folder"),
             (("--import", "no-such-file.txt", "somewhere"), "use --import"),
             (("--import", EXAMPLE, os.path.join(HERE, "no-such-dir", "folio")), "parent folder doesn't exist"),
             (("--serve", os.path.join(HERE, "no-such-dir", "x.txt")), "not a file in an existing folder"),
@@ -1518,6 +1500,29 @@ class TestCLI(unittest.TestCase):
             self.assertIn("@A · Stream   0/1 done", out)                  # a sub-group, under its project's name
             self.assertIn("Sat/Sun 17-18\n    [ ] @A  walk  (habit, Sat)\n    [ ] @A  walk  (habit, Sun)", out)
             self.assertIn("No projects or tasks found.", self.run_cli(os.path.join(d, "A")))   # a project folder isn't a portfolio
+
+    def test_projects_folder_named_as_a_path_is_not_the_projects_view(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "Projects", "A"))
+            with open(os.path.join(d, "Projects", "A", "backlog.kf"), "w", encoding="utf-8") as f:
+                f.write("- own\n")
+            out = self.run_cli(os.path.join(d, "Projects"), "projects", "--today", "2026-11-06")
+        self.assertIn("@A   0/1 done", out)
+
+    def test_serve_uses_the_projects_folder(self):
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")), \
+                unittest.mock.patch.object(planner, "serve") as serve:
+            planner.main(["planner.py", "--serve", "--port", "9001"])          # made if it's missing
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS)
+            self.assertTrue(os.path.isdir(planner.PROJECTS))
+
+    def test_import_defaults_to_the_projects_folder(self):
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                planner.main(["planner.py", "--import", EXAMPLE])
+            self.assertEqual(planner.read_notes(os.path.join(planner.PROJECTS, "example", "backlog.kf"))[0], read_example())
 
     def test_import(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1760,7 +1765,12 @@ class TestPortfolio(Base):
     def test_new_project_section_page(self):
         self.assertEqual(planner.new_project(self.root, " HDC "), "HDC")
         self.assertTrue(os.path.isdir(os.path.join(self.root, "HDC")))
-        self.assertEqual(os.listdir(os.path.join(self.root, "HDC")), [])     # files are made on first save
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, "HDC"))),
+                         ["archive", "backlog.kf", "habits.kf", "notes", "quicknote.kf"])   # placeholders, ready to use
+        for name in ("backlog.kf", "habits.kf", "quicknote.kf"):
+            self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC", name))[0], "")
+        info = planner.portfolio_tree(self.root)["projects"][0]
+        self.assertEqual((info["made"], info["notes"], info["archive"]), (["backlog", "quicknote", "habits"], [], []))
         with self.assertRaises(planner.PortfolioError):
             planner.new_project(self.root, "HDC")
         for bad in ("", "  ", ".x", "a/b", "a\\b", "a:b", "a\nb", None):
@@ -1819,6 +1829,29 @@ class TestPortfolio(Base):
         with self.assertRaises(planner.PortfolioError):
             planner.import_notes(text, self.root, "work", split=True)
 
+    def test_new_project_takes_tasks_from_all_projects(self):
+        planner.new_project(self.root, "HDC")
+        projects, habits, versions, own = planner.portfolio_projects(self.root)
+        self.assertEqual((projects, habits), ([], []))
+        self.assertEqual([t["line"] for t in own], [0])
+        self.assertIsNotNone(versions["HDC/backlog.kf"])                     # the placeholder is a real file
+        path = os.path.join(self.root, "HDC", "backlog.kf")
+        planner.write_notes(path, planner.add_task("", 0, "first", "HDC"), versions["HDC/backlog.kf"])
+        self.assertEqual(planner.read_notes(path)[0], "- first\n")
+
+    @unittest.skipUnless(os.path.isdir(os.path.join(planner.PROJECTS, "Example")), "the sample project was deleted")
+    def test_example_project(self):
+        info = planner.portfolio_tree(planner.PROJECTS)["projects"]
+        info = next(p for p in info if p["name"] == "Example")
+        self.assertEqual(info["made"], ["backlog", "quicknote", "habits"])
+        self.assertEqual([n["name"] for n in info["notes"]], ["Client", "Kickoff call"])
+        self.assertEqual([a["year"] for a in info["archive"]], [2025])
+        backlog = planner.read_notes(os.path.join(planner.PROJECTS, "Example", "backlog.kf"))[0]
+        self.assertEqual([p.name for p in planner.parse(backlog, "Example")], ["Example", "Website"])
+        habits = planner.read_notes(os.path.join(planner.PROJECTS, "Example", "habits.kf"))[0]
+        tasks = [t for p in planner.parse(habits, "Example") for t in p.all_tasks()]
+        self.assertTrue(tasks and all(t.reminders and planner.repeats(t.reminders[0][0]) for t in tasks))
+
     def test_example_portfolio_is_the_split_example(self):
         made = planner.import_notes(read_example(), self.root, "example", split=True)
         for project, text in made.items():
@@ -1830,7 +1863,7 @@ class TestPortfolio(Base):
 
 
 class TestServerPortfolio(Base):
-    """--serve FOLDER: the portfolio's projects, pages and files, by paths relative to it."""
+    """--serve: the Projects folder's projects, pages and files, by paths relative to it."""
     write = TestPortfolio.write
 
     def setUp(self):
@@ -2026,12 +2059,10 @@ class TestServerPortfolio(Base):
         self.assertEqual(self.post("/api/archive", {"path": "HDC/backlog.kf", "version": self.file("HDC/backlog.kf")[1]["version"],
                                                     "archive_year": 2026, "habit_log": True})[0], 409)
 
-    def test_switch_portfolio_only_inside_home(self):
-        self.assertEqual(self.post("/api/portfolio", {"op": "use", "path": self.root})[0], 403)   # (a temp folder)
-        self.assertEqual(self.get("/api/portfolio")[1]["root"], self.root)
-
-    def test_file_browser_only_lists(self):
-        self.assertEqual(self.get("/api/browse")[0], 200)                     # listing folders: fine (to switch portfolios)
+    def test_no_other_folder_or_file_can_be_opened(self):
+        for op in ("use", "leave"):
+            self.assertEqual(self.post("/api/portfolio", {"op": op, "path": self.root})[0], 400)
+        self.assertEqual(self.get("/api/browse")[0], 409)
         self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "secret.txt")})[0], 409)
 
 
