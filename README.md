@@ -81,6 +81,7 @@ Pick how to view it:
 | `- task` | Open |
 | `~- task` | In progress |
 | `!- task` | Done |
+| `(!)- task` | Notable: circled in purple (put `(!)` in front of any of the three, like `(!)!- task`) |
 | `-- note` | A note on the task directly above. Never a task. |
 
 ### Details (anywhere after the task text, in any order)
@@ -162,7 +163,9 @@ In the page, **click the KAFEEN logo** to open the project drawer:
 - Under each project: its **Quick note**, **Backlog**, **Notes** (pages, grouped in sections if you like, like OneNote), **Habits** and **Archive**. Click one to open it. `.kf` pages open in Planner mode, `.md` in Markdown and `.txt` in Text. Everything saves itself about a second after each change.
 - **⋯** on a project, section or page has New page, New section, Rename and Delete. **+ New project** is at the bottom, and **Find a project** at the top.
 
-The header shows where you are (`HDC › Notes › Kickoff call`); click it to open the drawer. The page you were on opens again next time. Archive, habits and the new Planner come in the next releases.
+The header shows where you are (`HDC › Notes › Kickoff call`); click it to open the drawer. The page you were on opens again next time.
+
+**Circle, archive, delete.** Every task row ends in a faint **⋯**. Click it to **Circle in purple** (marks a notable task with a purple box; it writes `(!)` in front of the task), **Archive to 2026** (or last year), or **Delete** (the task goes with its subtasks and notes; it asks first if there are subtasks). Archiving moves the task and its subtasks, word for word, into the project's `archive/2026.kf`, under the same `@` group, and the year appears under **Archive** in the drawer. To clear out a project, point at its heading and click **Archive done**: every finished task (done, with all its subtasks done) moves to the archive; a finished subtask of a task that's still open stays where it is. **Undo** in the message at the bottom puts everything back. An archive page shows that year's dates (no years are written in the notes, so `Mar10` in `2025.kf` means March 10, 2025). Habits and the new Planner come in the next releases.
 
 ---
 

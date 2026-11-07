@@ -29,6 +29,7 @@ NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
   @HDC                          project: runs until the next @ or heading
   - task  ~- task  !- task      open / in progress / done
+  (!)- task                     notable: circled in purple (before any status mark)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
@@ -51,6 +52,7 @@ MONTHS = {m: i for i, m in enumerate(MONTH_NAMES, 1)}
 MON = "(?:" + "|".join(MONTH_NAMES) + ")"
 WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])}
 
+RE_TASK = re.compile(r"^(\(!\))?([!~]?)-\s*(.*)$")              # a task line's content: (!) notable, ! done, ~ doing
 RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
 RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
@@ -181,6 +183,7 @@ class Task:
         self.assignees, self.reminders, self.notes, self.children = [], [], [], []
         self.start = self.end = self.loose = None
         self.parent = self.project = None
+        self.notable = False
         self.title = self._parse(text)
 
     def _parse(self, text):
@@ -331,12 +334,13 @@ def parse(text, name=None):
             target.notes.append(line[2:].strip())
             continue
 
-        m = re.match(r"^([!~]?)-\s*(.*)$", line)
+        m = RE_TASK.match(line)
         if m:
-            status = {"!": "done", "~": "doing", "": "open"}[m.group(1)]
-            t = Task(m.group(2), status, level, n)
-            t.col = len(ws) + m.start(2)
-            t.text = m.group(2)              # the task's text after the dash, as written (for the `text` edit)
+            status = {"!": "done", "~": "doing", "": "open"}[m.group(2)]
+            t = Task(m.group(3), status, level, n)
+            t.notable = bool(m.group(1))     # (!) before the mark: circled in purple
+            t.col = len(ws) + m.start(3)
+            t.text = m.group(3)              # the task's text after the dash, as written (for the `text` edit)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -695,7 +699,7 @@ def task_data(t, keep=None):
         return None
     sp = t.span()
     d = {
-        "title": t.title, "text": t.text, "status": t.status, "line": t.line, "path": t.project and t.project.path,
+        "title": t.title, "text": t.text, "status": t.status, "notable": t.notable, "line": t.line, "path": t.project and t.project.path,
         "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "effort": t.effort, "points": t.points,
         "plan": iso(t.plan), "plan_label": fd(t.plan) if t.plan else None,
@@ -863,10 +867,134 @@ def set_status(text, line, status, title=None):
     raw = lines[line - 1]
     ws = raw[:len(raw) - len(raw.lstrip())]
     body = raw[len(ws):]
+    notable = "(!)" if body.startswith("(!)") else ""
+    body = body[len(notable):]
     if body[0] in "!~":
         body = body[1:]
-    lines[line - 1] = ws + STATUS_MARK[status] + body
+    lines[line - 1] = ws + notable + STATUS_MARK[status] + body
     return "".join(lines)
+
+
+def set_notable(text, line, value, title=None):
+    """Circle the task in purple (`value` "on": `(!)` before its status mark) or not ("" or "off").
+    Only those three characters change."""
+    if value not in ("on", "off", ""):
+        raise EditError(f"notable is on or off, not {value!r}")
+    lines, t = _task_at(text, line, title)
+    on = value == "on"
+    if t.notable == on:
+        return text
+    raw = lines[line - 1]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    body = raw[len(ws):]
+    lines[line - 1] = ws + ("(!)" + body if on else body[3:])
+    out = "".join(lines)
+    n = _find(out, line)
+    if n is None or n.notable != on or n.title != t.title or n.status != t.status or n.level != t.level:
+        raise EditError("the line wouldn't read back as that task, so edit it by hand")
+    return out
+
+
+def _subtree_end(lines, line, level):
+    """The last non-blank line (1-based) of the task on `line` and its subtree: its subtasks and
+    notes, up to the next task at its level or above, an @ line or a heading."""
+    last = line
+    for i in range(line, len(lines)):
+        r = lines[i]
+        c = r.strip()
+        if not c:
+            continue
+        rws = r[:len(r) - len(r.lstrip())]
+        lvl = rws.count("\t") + rws.count(" ") // 4
+        if c.startswith("@") or (not c.startswith("--") and RE_TASK.match(c) and lvl <= level) \
+                or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
+            break
+        last = i + 1
+    return last
+
+
+def _cut(text, line, title=None):
+    """-> (text without the task on `line` and its subtree, the removed lines, the task). Checked:
+    exactly that task and its subtasks are gone, and every other task reads back the same."""
+    lines, t = _task_at(text, line, title)
+    last = _subtree_end(lines, line, t.level)
+    block = lines[line - 1:last]
+    out = "".join(lines[:line - 1] + lines[last:])
+    gone = {x.line for x in t.walk()}
+    before = [(x.title, x.status) for p in parse(text) for x in p.all_tasks() if x.line not in gone]
+    after = [(x.title, x.status) for p in parse(out) for x in p.all_tasks()]
+    if before != after or {x.line for x in t.walk()} != {line + i for i, r in enumerate(block) if RE_TASK.match(r.strip())
+                                                         and not r.strip().startswith("--")}:
+        raise EditError("that task's lines aren't where expected, so change it by hand")
+    return out, block, t
+
+
+def delete_task(text, line, value="", title=None):
+    """Remove the task on `line` with its subtasks and notes (whole lines; nothing else changes)."""
+    return _cut(text, line, title)[0]
+
+
+def _dedent(block):
+    """A task's lines with the task's own indentation taken off (so it sits at the top level)."""
+    raw = block[0]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    out = [r[len(ws):] if r.startswith(ws) else (r.lstrip(" \t") if r.strip() else r) for r in block]
+    while out and not out[-1].strip():
+        out.pop()
+    if out and not out[-1].endswith(("\n", "\r")):
+        out[-1] += "\n"
+    return out
+
+
+def take_task(text, line, title=None):
+    """For the archive: -> (text without the task and its subtree, its lines at the top level,
+    its @ group's name or None for the file's own project)."""
+    out, block, t = _cut(text, line, title)
+    lines = text.splitlines(keepends=True)
+    group = t.project.name if lines[t.project.line - 1].strip().startswith("@") else None
+    return out, _dedent(block), group
+
+
+def take_done(text, project_line=None):
+    """For "Archive done": every finished top-level task (done, with all its subtasks done) in the project on
+    `project_line` (or anywhere); a done subtask of an unfinished task stays with it.
+    -> (the rest of the text, [(group, lines)] in order)."""
+    picks = [t for p in parse(text) if project_line in (None, p.line) for t in p.tasks
+             if all(x.status == "done" for x in t.walk())]
+    if not picks:
+        raise EditError("there are no finished tasks to archive")
+    moved = []
+    for t in sorted(picks, key=lambda x: -x.line):           # from the bottom up, so the lines above stay put
+        text, block, group = take_task(text, t.line, t.title)
+        moved.append((group, block))
+    return text, moved[::-1]
+
+
+def put_in_archive(text, group, block):
+    """`text` (an archive file) with `block` added at the end of its `@group` (made at the end if new),
+    or of its own tasks (before the first @) when `group` is None. Existing lines don't change, except
+    that a last line with no line ending gets one."""
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+    if group is None:
+        at = next((i for i, r in enumerate(lines) if r.strip().startswith("@")), len(lines))
+    else:
+        head = next((i for i, r in enumerate(lines) if r.strip()[1:].strip() == group and r.strip().startswith("@")), None)
+        if head is None:
+            sep = ["\n"] if any(r.strip() for r in lines) else []
+            return "".join(lines + sep + ["@" + group + "\n"] + block)
+        at = next((i for i in range(head + 1, len(lines)) if lines[i].strip().startswith("@")
+                   or (lines[i][:1] not in " \t" and lines[i].strip() and not lines[i].strip().startswith("--")
+                       and not RE_TASK.match(lines[i].strip()))), len(lines))
+    while at > 0 and not lines[at - 1].strip() and (group is None or at - 1 > head):
+        at -= 1                                     # before the blank lines that end the group
+    return "".join(lines[:at] + block + lines[at:])
+
+
+def archive_today(year):
+    """The TODAY an archive file of `year` is read with, so its dates (no years written) fall in that year."""
+    return date(year, 1, 1) + timedelta(days=PAST_DAYS)
 
 
 def set_date(text, line, when, title=None):
@@ -1075,18 +1203,7 @@ def add_subtask(text, line, task_text, title=None):
     ws = raw[:len(raw) - len(raw.lstrip())]
     indent = ws + ("    " if ws and "\t" not in ws else "\t")
     ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
-    last = line                                 # last non-blank line of the task's subtree
-    for i in range(line, len(lines)):
-        r = lines[i]
-        c = r.strip()
-        if not c:
-            continue
-        rws = r[:len(r) - len(r.lstrip())]
-        lvl = rws.count("\t") + rws.count(" ") // 4
-        if c.startswith("@") or (not c.startswith("--") and re.match(r"^[!~]?-", c) and lvl <= t.level) \
-                or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
-            break
-        last = i + 1
+    last = _subtree_end(lines, line, t.level)   # last non-blank line of the task's subtree
     if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
         lines[last - 1] += ending
         new_line = indent + "- " + task_text
@@ -1141,7 +1258,7 @@ def add_task(text, line, task_text, title=None):
             continue
         rws = r[:len(r) - len(r.lstrip())]
         lvl = rws.count("\t") + rws.count(" ") // 4
-        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
+        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
             break
         last = i + 1
     if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
@@ -1180,7 +1297,7 @@ def add_with_fields(op, text, line, fields, title=None):
     return out
 
 
-EDITS = {"text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
+EDITS = {"notable": set_notable, "delete": delete_task, "text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
 
@@ -1334,7 +1451,8 @@ def project_info(root, name):
         elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
             notes.append(_page(rel, e.name))
     archive = sorted(({"year": int(e.name[:4]), "path": f"{name}/{ARCHIVE_DIR}/{e.name}"}
-                      for e in _listing(os.path.join(d, ARCHIVE_DIR)) if e.is_file() and RE_ARCHIVE.fullmatch(e.name)),
+                      for e in _listing(os.path.join(d, ARCHIVE_DIR))
+                      if e.is_file() and RE_ARCHIVE.fullmatch(e.name) and e.stat().st_size),
                      key=lambda a: -a["year"])
     return {"name": name, "path": name,
             "files": {k: f"{name}/{f}" for k, f in PROJECT_FILES.items()},
@@ -1466,7 +1584,7 @@ def import_notes(text, root, name, split=False):
             if c.startswith("@"):
                 target = c[1:].strip().replace("/", "-").replace("\\", "-").replace(":", "-").lstrip(".") or name
                 continue
-            if not c.startswith("--") and not re.match(r"^[!~]?-", c) and ws.count("\t") + ws.count(" ") // 4 == 0:
+            if not c.startswith("--") and not RE_TASK.match(c) and ws.count("\t") + ws.count(" ") // 4 == 0:
                 heading, target, put = raw, name, set()
                 continue
             if heading is not None and target not in put:
@@ -1623,7 +1741,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close", "/api/portfolio"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close", "/api/portfolio", "/api/archive"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -1643,6 +1761,12 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
+                if req.get("year") is not None:              # an archive page: its dates fall in its year
+                    if type(req["year"]) is not int or not 1900 <= req["year"] <= 2999:
+                        raise ValueError("year must be a year, like 2026")
+                    TODAY = archive_today(req["year"])
+                if self.path == "/api/archive":
+                    return self._archive(req, period_from(req.get("period")), week_monday(req.get("week")))
                 text = req.get("text", "")
                 period = period_from(req.get("period"))
                 monday = week_monday(req.get("week"))
@@ -1680,6 +1804,51 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                                         "version": read_notes(p)[1]})
             data = portfolio_data(folio, period, monday) if folio and req.get("all") else page_data(text, name, period, monday)
             self._json(200, {"text": text, "before": before, "version": version, "data": data})
+
+        def _archive(self, req, period, monday):
+            """POST /api/archive {path, version, year, line + title | done (+ project_line), all}: move a task and its
+            subtasks (or every finished task) from a project's .kf file into its archive/YEAR.kf. The archive is
+            written first, so a crash leaves a copy rather than losing anything. -> {text, version, data, archive,
+            moved, tree, undo: [{path, before, version}] (the source, then the archive)}."""
+            if folio is None:
+                return self._json(409, {"error": "the archive needs a portfolio folder (planner.py --serve FOLDER)"})
+            path, year = req.get("path"), req.get("archive_year")
+            if portfolio_kind(path) in (None, "project", "section", "archive") or not path.endswith(".kf"):
+                return self._json(409, {"error": "tasks can be archived from a project's .kf pages"})
+            if type(year) is not int or not 1900 <= year <= 2999:
+                return self._json(400, {"error": "bad request: archive_year must be a year, like 2026"})
+            src = self._target(path)
+            if src is None:
+                return self._not_open(path)
+            text, current = read_notes(src)
+            if current != req.get("version"):
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
+            if req.get("done"):
+                rest, moved = take_done(text, req.get("project_line"))
+            else:
+                rest, block, group = take_task(text, req["line"], req.get("title"))
+                moved = [(group, block)]
+            arel = f"{project_name(path)}/{ARCHIVE_DIR}/{year}.kf"
+            apath = portfolio_path(folio, arel)
+            atext, aver = read_notes(apath)
+            new = atext
+            for group, block in moved:
+                new = put_in_archive(new, group, block)
+            os.makedirs(os.path.dirname(apath), exist_ok=True)
+            aver2 = write_notes(apath, new, aver)          # the archive first: a crash leaves a copy, never a loss
+            try:
+                version = write_notes(src, rest, current)
+            except FileConflict:
+                write_notes(apath, atext, aver2)           # the source changed meanwhile: take the copy back out
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
+                                        "version": read_notes(src)[1]})
+            name = project_name(path)
+            data = portfolio_data(folio, period, monday) if req.get("all") else page_data(rest, name, period, monday)
+            self._json(200, {"text": rest, "version": version, "data": data, "archive": arel,
+                             "moved": sum(1 for _, b in moved for r in b if RE_TASK.match(r.strip()) and not r.strip().startswith("--")),
+                             "tree": portfolio_tree(folio),
+                             "undo": [{"path": path, "before": text, "version": version},
+                                      {"path": arel, "before": atext, "version": aver2}]})
 
         def _portfolio(self, req):
             """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,

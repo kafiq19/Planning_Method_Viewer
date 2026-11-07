@@ -497,7 +497,7 @@ async function render(relayout) {
   }
   const seq = ++state.seq;
   try {
-    const when = { today: $("today").value.trim() || null, period: state.period, week: state.week };
+    const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, week: state.week, year: archiveYear() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }) });
     const data = await r.json();
@@ -539,7 +539,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   let ok = false;
   clearTimeout(timer);
   if (btn) btn.disabled = true;
-  const when = { today: $("today").value.trim() || null, period: state.period, week: state.week };
+  const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, week: state.week, year: archiveYear() };
   try {
     if (state.all) {                                     // All projects: the server edits the task's backlog on disk
       const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -631,7 +631,7 @@ function pickCell(cell, label, choices, current, apply, tab) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task, .wcard, .wline");   // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline, .ph");   // drop down from the cell, right edge on the cell's right edge
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
@@ -729,9 +729,15 @@ function openAdd(btn, project, presetWho, keep) {
 async function undo() {
   const u = state.msg && state.msg.undo;
   state.msg = null;
-  if (u && u.path) {                                     // All projects: put the file back, unless it changed since
-    const [r, d] = await fileApi({ path: u.path, text: u.before, version: u.version });
-    if (!r.ok) state.msg = { text: "Can't undo: " + (d.conflict ? "that project changed since" : d.error || r.statusText), bad: true };
+  if (u && (u.path || u.files)) {                        // files on disk (All projects, the archive): each back, unless it changed since
+    for (const x of u.files || [{ path: u.path, before: u.before, version: u.version }]) {
+      const mine = state.file && !state.all && state.file.path === x.path;
+      if (mine && unsaved()) { state.msg = { text: "Can't undo: this page has changed since", bad: true }; break; }
+      const [r, d] = await fileApi({ path: x.path, text: x.before, version: x.version });
+      if (!r.ok) { state.msg = { text: "Can't undo: " + (d.conflict ? baseName(x.path) + " changed since" : d.error || r.statusText), bad: true }; break; }
+      if (mine) setFile(x.before, d.version);
+    }
+    if (u.files) { await refreshFolio(); drawDrawer(); }
     return render(false);
   }
   if (u && editor.value === u.after) { replaceText(u.before); render(false); }
@@ -927,6 +933,7 @@ function plannerView() {
   fClear.disabled = !n;
   showPeriod(state.data.period);
   showWeek(state.data.week, state.tab === "week");
+  if (archiveYear()) pctl.classList.add("hidden");   // an archive page is one year; no period
   contentBox.classList.toggle("wide", state.tab === "week");
   const tabs = [];
   for (const [id, label] of TABS) {
@@ -936,7 +943,8 @@ function plannerView() {
   }
   tabsBox.replaceChildren(...tabs);
   const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
-  if ($("today").value.trim()) bits.push("As of " + d.today_label);
+  if (archiveYear()) bits.push(`The archive for ${archiveYear()}: finished tasks, as they were moved here`);
+  else if ($("today").value.trim()) bits.push("As of " + d.today_label);
   if (state.tab === "week") bits.push("Drag a task onto a day, or use its Plan cell" + (per ? " · the period doesn't apply here" : ""));
   else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
@@ -972,7 +980,7 @@ async function tabTo(row, kind, dir, applied) {
 }
 
 function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
-  const row = h("div", "task s-" + t.status);
+  const row = h("div", "task s-" + t.status + (t.notable ? " notable" : ""));
   row.style.setProperty("--d", depth);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
   row.dataset.line = t.line;
@@ -1056,11 +1064,74 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     row.classList.add("wrow");
     const plan = cellButton("plan r", "Plan for a day", t.plan ? `Planned for ${t.plan_label} (another week). Click to plan it this week`
       : "Plan for a day this week", [t.plan ? span("t", t.plan_label) : span("add", "Plan")], cell => planPick(cell, t, week));
-    row.append(lead, who, size, dateCell, plan);
+    row.append(lead, who, size, dateCell, plan, moreCell(t));
     return row;
   }
-  row.append(lead, who, size, dateCell, sub);
+  row.append(lead, who, size, dateCell, sub, moreCell(t));
   return row;
+}
+
+/* ⋯ at the end of a task row: circle it in purple (notable), archive it (in a portfolio), or delete it */
+function canArchive() {                          // a portfolio project's .kf page (not an archive), or All projects
+  if (!state.folio) return false;
+  if (state.all) return true;
+  const p = state.file && state.file.path;
+  return !!p && p.endsWith(".kf") && p.split("/")[1] !== "archive";
+}
+function archiveYears() {                        // this year and last year (the server's today)
+  const y = +String(state.data.today).slice(0, 4);
+  return [y, y - 1];
+}
+function moreCell(t) {
+  const kids = countTasks(t.children || []);
+  return cellButton("more mid", "More", "Circle in purple, archive or delete", [span("add", "⋯")], cell => {
+    const choices = [{ value: "notable", text: t.notable ? "Remove the purple circle" : "Circle in purple" }];
+    if (canArchive()) for (const y of archiveYears()) choices.push({ value: "archive:" + y, text: "Archive to " + y });
+    choices.push({ value: "delete", text: kids ? `Delete, with ${tasksN(kids).replace("task", "subtask")}` : "Delete" });
+    pickCell(cell, "Task", choices, null, v => {
+      if (v === "notable") editTask(t, "notable", t.notable ? "" : "on", null, t.notable ? `Removed the purple circle from "${t.title}".` : `Circled "${t.title}" in purple.`);
+      else if (v === "delete") {
+        if (kids && !confirm(`Delete "${t.title}" and its ${tasksN(kids).replace("task", "subtask")}?`)) return;
+        editTask(t, "delete", "", null, `Deleted "${t.title}"` + (kids ? ` and its ${tasksN(kids).replace("task", "subtask")}.` : "."));
+      } else if (v && v.startsWith("archive:")) archiveOp({ line: t.line, title: t.title }, t, +v.slice(8));
+    });
+  });
+}
+
+/* Archive: the server moves the task (or every finished task) into the project's archive/YEAR.kf, writing the archive first.
+   On a page, its unsaved edits are saved first and the text box then shows the file as the server left it.
+   Undo puts both files back (each only if it hasn't changed since). */
+async function archiveOp(body, target, year) {
+  let path, version;
+  if (state.all) { path = target.path; version = state.data.versions[path]; }
+  else {
+    const f = state.file;
+    clearTimeout(autoTimer);
+    while (f.saving) await new Promise(ok => setTimeout(ok, 50));
+    if (unsaved() && !f.blocked) await save();
+    if (unsaved() || f.blocked) { state.msg = { text: "Not archived: this page has changes that aren't saved yet.", bad: true }; return showToast(); }
+    path = f.path; version = f.version;
+  }
+  const seq = ++state.seq;
+  let res;
+  try {
+    const r = await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, name: folioName(),
+        today: $("today").value.trim() || null, period: state.period, week: state.week }) });
+    res = await r.json();
+    if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
+  } catch (err) {
+    state.msg = { text: "Not archived: " + err.message, bad: true };
+    if (state.file && !state.all) { const [r2, d2] = await fetchFile(state.file); if (r2.ok && !unsaved()) setFile(d2.text, d2.version); }
+    return render(false);
+  }
+  state.folio = res.tree; drawDrawer();
+  if (!state.all && state.file && state.file.path === path) setFile(res.text, res.version);
+  if (seq !== state.seq) return;
+  state.data = res.data;
+  const what = body.done ? tasksN(res.moved).replace(/^1 task$/, "1 finished task") : `"${body.title}"` + (res.moved > 1 ? ` and its ${tasksN(res.moved - 1).replace("task", "subtask")}` : "");
+  state.msg = { text: `Archived ${what} to ${year}.`, undo: { files: res.undo } };
+  plannerView();
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
 const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
@@ -1093,7 +1164,7 @@ function treeNode(t, depth = 0, key = "") {      // a task and its subtree; a ta
 }
 function colHead(title, when) {                  // a section heading that also labels the right-hand columns
   return h("div", "sechead", h("h2", "", title, when && span("when", when)),
-    span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
+    span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""), span("c", ""));
 }
 
 /* folds, remembered per browser: in Projects, sections ("collapsedSections"), projects ("collapsed") and tasks with
@@ -1140,6 +1211,7 @@ function vProjects(d) {
       const label = p.folder && p.folder !== p.name ? [span("at", p.folder + " · @"), p.name] : [span("at", "@"), p.name];
       const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + (p.folder ? p.folder + "\n" : "") + p.name, "project", label,
         span("count", p.done + "/" + p.total + " done" + effort));
+      if (canArchive() && p.done && !d.filtered) head.append(archiveDoneButton(p));
       out.append(head);
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
@@ -1149,6 +1221,16 @@ function vProjects(d) {
   }
   if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
   return out;
+}
+function archiveDoneButton(p) {                  // a project heading's "Archive done": every finished task (and its subtasks)
+  const b = h("button", "ghost archdone", "Archive done");
+  b.title = "Move this project's finished tasks (done, with all their subtasks done) to the archive";
+  b.onclick = e => {
+    e.stopPropagation();
+    pickCell(b, "Archive finished tasks to", archiveYears().map(y => ({ value: y, text: "Archive done to " + y })), null,
+      y => archiveOp({ done: true, project_line: p.line || null }, p, y));
+  };
+  return b;
 }
 function welcome() {                             // first run: no notes yet
   if (state.folio) return folioWelcome();
@@ -1177,6 +1259,7 @@ function vTimeline(d) {
       const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
       const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
+      if (t.notable) nm.classList.add("notable");
       const tr = h("tr", t.status === "done" ? "done" : "", nm);
       tr.dataset.line = t.line;
       t.bar.forEach((on, i) => {
@@ -1261,7 +1344,7 @@ function dropZone(el, onDrop) {
 }
 function weekItem(cls, t, w, extra) {           // a planned task: status, title (+ meta); a click opens the day list, drag moves it
   const body = h("span", "wbody", span("wt", t.title), ...extra);
-  const el = h("div", cls + " s-" + t.status, statusBox(t), body);
+  const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : ""), statusBox(t), body);
   el.dataset.line = t.line;
   el.title = "@" + t.project + "  " + t.title + "  (line " + t.line + ")";
   el.onclick = e => {
@@ -1393,6 +1476,10 @@ const ALL_ICON = "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 const MODE_OF = { kf: "planner", md: "markdown", markdown: "markdown", txt: "plain" };   // a page opens in its file type's mode
 const extOf = p => ((/\.([^./]+)$/.exec(p) || [])[1] || "").toLowerCase();
 const folioName = () => state.folio && state.file ? state.file.path.split("/")[0] : null;   // tasks before any @ belong to it
+const archiveYear = () => {                       // an archive page's year: its dates are read in that year
+  const m = state.folio && !state.all && state.file && /^[^/]+\/archive\/(\d{4})\.kf$/.exec(state.file.path);
+  return m ? +m[1] : null;
+};
 const projLabel = p => (p.folder && p.folder !== p.name ? p.folder + " · " : "") + "@" + p.name;
 
 const drawer = h("aside", "drawer"), scrim = h("div", "scrim"), dNav = h("nav", "dnav"), dQ = h("input");

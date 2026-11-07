@@ -5,6 +5,25 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.2  2026-11-06  Portfolio, part 3: circle, archive, delete
+-------------------------------------------------
+- New: purple circling. Mark a notable task with (!) in front of it,
+  like  (!)- send to board  or  (!)!- signed the deal ; it gets a purple
+  box in every view, the archive included.
+- New: a faint ⋯ at the end of every task row: Circle in purple,
+  Archive to 2026 (or last year), and Delete (with its subtasks; it asks
+  first if there are any). All with Undo.
+- New: the archive. Archiving moves a task and its subtasks, word for
+  word, into the project's archive/2026.kf under the same @ group (the
+  archive is written first, so nothing can be lost). Point at a project's
+  heading and click Archive done to move every finished task (done, with
+  all its subtasks done). The years show under Archive in the drawer, and
+  an archive page reads its dates in its own year.
+- Code: RE_TASK (one task pattern, with (!)); set_notable, delete_task,
+  _subtree_end, _cut, take_task, take_done, put_in_archive, archive_today;
+  POST /api/archive; `year` on /api/parse and /api/edit. In the page:
+  moreCell, archiveOp, archiveDoneButton, undo of several files.
+
 2.0.1  2026-11-06  Portfolio, part 2: the project drawer
 -------------------------------------------------
 - New: in a portfolio (--serve FOLDER), click the KAFEEN logo to open

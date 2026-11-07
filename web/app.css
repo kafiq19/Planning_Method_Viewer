@@ -143,7 +143,7 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .content > div { max-width: 900px; margin: 0 auto; }
 .when { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
 .count { color: var(--muted); font-weight: normal; font-size: calc(13px * var(--fz)); }
-.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) 22px; align-items: center; column-gap: 6px; }
+.sechead, .task { display: grid; grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) 22px 22px; align-items: center; column-gap: 6px; }
 .sechead { margin: 20px 0 0; padding: 0 8px 3px; border-bottom: 1px solid var(--line); }
 .sechead:first-child { margin-top: 4px; }
 .sechead h2 { margin: 0; font-size: calc(12px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
@@ -274,7 +274,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 .wsum { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--line); text-align: right; color: var(--muted); font-size: calc(12px * var(--fz)); }
 .wempty { color: var(--muted); font-size: calc(12.5px * var(--fz)); }
 .wback { padding-bottom: 8px; }
-.sechead.wrow, .task.wrow { grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) calc(70px * var(--fz)); }
+.sechead.wrow, .task.wrow { grid-template-columns: minmax(0, 1fr) calc(76px * var(--fz)) calc(44px * var(--fz)) calc(172px * var(--fz)) calc(70px * var(--fz)) 22px; }
 .cell.plan .add { font-size: calc(12px * var(--fz)); }
 .cell.plan .t { color: var(--muted); }
 @container (max-width: 900px) { .wtop { grid-template-columns: minmax(0, 1fr); } }
@@ -292,7 +292,7 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
   .task .lead { flex: 1 0 100%; }
   .task::before { content: ""; order: 1; width: calc(var(--d, 0) * 28px + 24px); }   /* line details up under the title */
   .task .cell { order: 2; }
-  .task .cell:has(> .add:only-child):not(.sub):not(.plan) { display: none; }         /* empty cells take no room */
+  .task .cell:has(> .add:only-child):not(.sub):not(.plan):not(.more) { display: none; }         /* empty cells take no room */
   .task .cell.sub, .task .cell.plan { order: 3; margin-left: auto; }
   .task .cell.plan .add { visibility: visible; }                                     /* the only way to plan without dragging */
 }
@@ -374,3 +374,18 @@ body.drawer-open .scrim { display: block; }
 .dask input { flex: 1; min-width: 0; font-size: 13px; padding: 4px 8px; }
 .dfoot { padding: 8px 12px 12px; border-top: 1px solid var(--line); }
 .dfoot > button { width: 100%; }
+
+/* ---------- the ⋯ column, the purple circle (notable), Archive done ---------- */
+.cell.more .add { font-size: calc(15px * var(--fz)); letter-spacing: -.05em; }
+:root { --notable: #7c3aed; }
+:root[data-theme="dark"] { --notable: #a78bfa; }
+.task.notable, .wcard.notable, td.name.notable .lead { box-shadow: inset 0 0 0 1.5px var(--notable); }
+td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
+.wcard.notable { border-color: var(--notable); }
+.ph { position: relative; }
+.ph .archdone { margin-left: 8px; padding: 0 8px; font-size: calc(12px * var(--fz)); font-weight: 400; visibility: hidden; }
+.ph:hover .archdone, .ph .archdone:focus-visible { visibility: visible; }
+@media (hover: none) { .ph .archdone { visibility: visible; } }
+@container (max-width: 480px) {
+  .task .cell.more { order: 3; }
+}

@@ -104,7 +104,7 @@ class TestParse(Base):
         lines = read_example().splitlines()
         for p in planner.parse(read_example()):
             for t in p.all_tasks():
-                self.assertRegex(lines[t.line - 1].strip(), r"^[!~]?-(?!-)")
+                self.assertRegex(lines[t.line - 1].strip(), r"^(\(!\))?[!~]?-(?!-)")
                 self.assertIn(t.title.split()[0], lines[t.line - 1])
 
     def test_parse_does_not_modify_input(self):
@@ -548,7 +548,7 @@ class TestSetStatus(Base):
         t = self.find(planner.parse(text), "send to board")
         new = planner.set_status(text, t.line, "done", t.title)
         self.assertEqual(self.changed_lines(text, new),
-                         [(t.line, "\t- send to board (s) Oct24 >Oct14 *Oct23\n", "\t!- send to board (s) Oct24 >Oct14 *Oct23\n")])
+                         [(t.line, "\t(!)- send to board (s) Oct24 >Oct14 *Oct23\n", "\t(!)!- send to board (s) Oct24 >Oct14 *Oct23\n")])
 
     def test_all_transitions(self):
         for old, new, want in [("- a", "doing", "~- a"), ("~- a", "done", "!- a"), ("!- a", "open", "- a"),
@@ -696,7 +696,7 @@ class TestAddAssignees(EditBase):
         text = read_example()
         t = self.find(planner.parse(text), "send to board")
         out = planner.add_assignees(text, t.line, "RT", t.title)
-        self.assert_one_line_changed(text, out, t.line, "\t- send to board (RT) (s) Oct24 >Oct14 *Oct23\n")
+        self.assert_one_line_changed(text, out, t.line, "\t(!)- send to board (RT) (s) Oct24 >Oct14 *Oct23\n")
 
     def test_new_group_before_reminder_or_at_end(self):
         self.assertEqual(planner.add_assignees("- a *daily\n", 1, "KA"), "- a (KA) *daily\n")
@@ -1180,7 +1180,7 @@ class TestServer(Base):
         self.assertEqual(self.post("/api/parse", {"text": "", "week": {"year": 2026}})[0], 400)
 
     def test_edit_bad_op_or_value_is_409(self):
-        for extra in ({"op": "delete", "value": ""}, {"op": "date", "value": 5}):
+        for extra in ({"op": "explode", "value": ""}, {"op": "date", "value": 5}):
             code, _ = self.post("/api/edit", dict({"text": "- a", "line": 1}, **extra))
             self.assertEqual(code, 409)
 
@@ -1401,6 +1401,92 @@ class TestCLI(unittest.TestCase):
                 self.assertEqual(f.read(), read_example())
 
 
+# ---------- notable, delete, archive ----------
+
+class TestNotable(EditBase):
+    def test_prefix(self):
+        ps = planner.parse("@P\n(!)- a Oct20\n(!)~- b\n(!)!- c\n- d\n\t(!)- e\n")
+        got = [(t.title, t.status, t.notable, t.level) for t in ps[0].all_tasks()]
+        self.assertEqual(got, [("a", "open", True, 0), ("b", "doing", True, 0), ("c", "done", True, 0),
+                               ("d", "open", False, 0), ("e", "open", True, 1)])
+        self.assertEqual(ps[0].tasks[0].end, date(2026, 10, 20))
+        self.assertTrue(planner.to_data(ps)["projects"][0]["projects"][0]["tasks"][0]["notable"])
+
+    def test_set_notable(self):
+        text = "@P\n\t~- a (KA)\r\n"
+        on = planner.set_notable(text, 2, "on", "a")
+        self.assertEqual(on, "@P\n\t(!)~- a (KA)\r\n")
+        self.assertEqual(planner.set_notable(on, 2, "", "a"), text)
+        self.assertEqual(planner.set_notable(text, 2, "off", "a"), text)
+        for bad in ("yes", "1"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_notable(text, 2, bad, "a")
+
+    def test_status_keeps_the_circle(self):
+        self.assertEqual(planner.set_status("(!)- a\n", 1, "done"), "(!)!- a\n")
+        self.assertEqual(planner.set_status("(!)!- a\n", 1, "open"), "(!)- a\n")
+        self.assertEqual(planner.set_text("(!)- a\n", 1, "b (KA)"), "(!)- b (KA)\n")
+
+    def test_subtasks_and_tasks_under_a_circled_task(self):
+        self.assertEqual(planner.add_subtask("@P\n(!)- a\n- b\n", 2, "x"), "@P\n(!)- a\n\t- x\n- b\n")
+        self.assertEqual(planner.add_task("@P\n(!)- a\n\nNext\n", 1, "x", "P"), "@P\n(!)- a\n- x\n\nNext\n")
+
+
+class TestDelete(EditBase):
+    def test_removes_the_task_its_subtasks_and_notes(self):
+        text = "@P\n- a\n\t-- note\n\t- a1\n\t\t- a2\n\n\t- a3\n- b\n"
+        self.assertEqual(planner.delete_task(text, 2, "", "a"), "@P\n- b\n")
+        self.assertEqual(planner.delete_task(text, 4, "", "a1"), "@P\n- a\n\t-- note\n\n\t- a3\n- b\n")
+        self.assertEqual(planner.delete_task(text, 8, "", "b"), "@P\n- a\n\t-- note\n\t- a1\n\t\t- a2\n\n\t- a3\n")
+
+    def test_keeps_blank_lines_and_what_follows(self):
+        self.assertEqual(planner.delete_task("@P\r\n- a\r\n\r\n@Q\r\n- b", 2), "@P\r\n\r\n@Q\r\n- b")
+        self.assertEqual(planner.delete_task("@P\n- a\n- b", 3), "@P\n- a\n")
+        self.assertEqual(planner.delete_task("Fall\n- a\nWinter\n- b\n", 2), "Fall\nWinter\n- b\n")
+
+    def test_stale_is_refused(self):
+        with self.assertRaises(planner.EditError):
+            planner.delete_task("@P\n- a\n", 2, "", "b")
+        with self.assertRaises(planner.EditError):
+            planner.delete_task("@P\n- a\n", 1, "")
+
+
+class TestArchive(EditBase):
+    TEXT = "Fall\n- own (KA)\n@A\n- a Oct20\n\t!- a1\n\t\t-- n\n\t- a2\n\n!- b\n\t!- b1\n@B\n(!)!- c\n- d\n\t!- d1\n"
+
+    def test_take_task(self):
+        rest, block, group = planner.take_task(self.TEXT, 5, "a1")
+        self.assertEqual(block, ["!- a1\n", "\t-- n\n"])
+        self.assertEqual(group, "A")
+        self.assertEqual(rest, self.TEXT.replace("\t!- a1\n\t\t-- n\n", ""))
+        self.assertIsNone(planner.take_task(self.TEXT, 2, "own")[2])
+
+    def test_take_done_takes_finished_tasks_only(self):
+        rest, moved = planner.take_done(self.TEXT)
+        self.assertEqual(moved, [("A", ["!- b\n", "\t!- b1\n"]), ("B", ["(!)!- c\n"])])   # a1, d1: their parents aren't done
+        self.assertEqual(rest, "Fall\n- own (KA)\n@A\n- a Oct20\n\t!- a1\n\t\t-- n\n\t- a2\n\n@B\n- d\n\t!- d1\n")
+        rest, moved = planner.take_done(self.TEXT, 11)                  # only @B
+        self.assertEqual([g for g, _ in moved], ["B"])
+        with self.assertRaises(planner.EditError):
+            planner.take_done("- a\n")
+
+    def test_put_in_archive(self):
+        self.assertEqual(planner.put_in_archive("", "A", ["- x\n"]), "@A\n- x\n")
+        self.assertEqual(planner.put_in_archive("", None, ["- x\n"]), "- x\n")
+        old = "- own\n\n@A\n- a\n\n@B\n- b"
+        self.assertEqual(planner.put_in_archive(old, "A", ["- x\n"]), "- own\n\n@A\n- a\n- x\n\n@B\n- b\n")
+        self.assertEqual(planner.put_in_archive(old, "B", ["- x\n"]), "- own\n\n@A\n- a\n\n@B\n- b\n- x\n")
+        self.assertEqual(planner.put_in_archive(old, None, ["- x\n"]), "- own\n- x\n\n@A\n- a\n\n@B\n- b\n")
+        self.assertEqual(planner.put_in_archive(old, "C", ["- x\n"]), "- own\n\n@A\n- a\n\n@B\n- b\n\n@C\n- x\n")
+
+    def test_archive_dates_fall_in_their_year(self):
+        planner.TODAY = planner.archive_today(2025)
+        t = planner.parse("- a Dec15--Jan10\n- b Jan03\n- c ~Q4\n")[0].tasks
+        self.assertEqual([(x.start, x.end) for x in t], [(date(2025, 12, 15), date(2026, 1, 10)),
+                                                         (date(2025, 1, 3), date(2025, 1, 3)),
+                                                         (date(2025, 10, 1), date(2025, 12, 31))])
+
+
 # ---------- the portfolio ----------
 
 class TestPortfolio(Base):
@@ -1450,8 +1536,9 @@ class TestPortfolio(Base):
         self.write("HDC/notes/Client/Req.kf")
         self.write("HDC/notes/Client/photo.png")
         self.write("HDC/notes/.hidden.kf")
-        self.write("HDC/archive/2025.kf")
-        self.write("HDC/archive/2026.kf")
+        self.write("HDC/archive/2025.kf", "- a")
+        self.write("HDC/archive/2026.kf", "- b")
+        self.write("HDC/archive/2024.kf")                              # empty: not listed
         self.write("HDC/archive/old.kf")
         os.mkdir(os.path.join(self.root, "MDM"))
         os.mkdir(os.path.join(self.root, ".trash"))
@@ -1668,6 +1755,51 @@ class TestServerPortfolio(Base):
         d = planner.portfolio_data(self.root)
         self.assertEqual([(s["title"], [p["name"] for p in s["projects"]]) for s in d["projects"]],
                          [("Fall", ["A", "B"]), ("Winter", ["B"]), (None, ["Stream"])])
+
+    def archive(self, **extra):
+        d = self.file("HDC/backlog.kf")[1]
+        return self.post("/api/archive", dict({"path": "HDC/backlog.kf", "version": d["version"], "archive_year": 2026}, **extra))
+
+    def test_archive_a_task(self):
+        self.write("HDC/backlog.kf", "- own\n@Stream\n!- a Oct20\n\t!- a1\n- b\n")
+        code, d = self.archive(line=3, title="a")
+        self.assertEqual(code, 200)
+        self.assertEqual(d["text"], "- own\n@Stream\n- b\n")
+        self.assertEqual((d["archive"], d["moved"]), ("HDC/archive/2026.kf", 2))
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/backlog.kf")), (d["text"], d["version"]))
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/archive/2026.kf"))[0], "@Stream\n!- a Oct20\n\t!- a1\n")
+        self.assertEqual(d["tree"]["projects"][0]["archive"], [{"year": 2026, "path": "HDC/archive/2026.kf"}])
+        self.assertEqual([u["path"] for u in d["undo"]], ["HDC/backlog.kf", "HDC/archive/2026.kf"])
+        self.assertEqual(d["undo"][1]["before"], "")
+        for u in d["undo"]:                                             # Undo: both files back as they were
+            self.assertEqual(self.post("/api/file", {"path": u["path"], "text": u["before"], "version": u["version"]})[0], 200)
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/backlog.kf"))[0], "- own\n@Stream\n!- a Oct20\n\t!- a1\n- b\n")
+        code, d = self.archive(line=1, title="own", archive_year=2025)   # the project's own task: no @ in the archive
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/archive/2025.kf"))[0], "- own\n")
+
+    def test_archive_done_and_all_projects(self):
+        self.write("HDC/backlog.kf", "!- x\n@Stream\n!- a\n- b\n")
+        d = self.post("/api/parse", {"all": True})[1]
+        code, out = self.post("/api/archive", {"path": "HDC/backlog.kf", "version": d["versions"]["HDC/backlog.kf"], "archive_year": 2026,
+                                               "done": True, "project_line": 2, "all": True})
+        self.assertEqual((code, out["text"], out["moved"]), (200, "!- x\n@Stream\n- b\n", 1))
+        self.assertEqual(out["data"]["versions"]["HDC/backlog.kf"], out["version"])
+
+    def test_archive_refusals(self):
+        self.write("HDC/backlog.kf", "- a\n")
+        self.assertEqual(self.archive(line=1, title="a", version="old")[0], 409)          # stale
+        self.assertEqual(self.archive(line=1, title="b")[0], 409)                         # not that task
+        self.assertEqual(self.archive(done=True)[0], 409)                                 # nothing finished
+        self.assertEqual(self.archive(line=1, title="a", archive_year="2026")[0], 400)
+        self.assertEqual(self.archive(line=1, title="a", path="HDC/notes/Kickoff.md")[0], 409)
+        self.assertEqual(self.archive(line=1, title="a", path="HDC/archive/2026.kf")[0], 409)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "HDC/archive")))
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/backlog.kf"))[0], "- a\n")
+
+    def test_archive_page_reads_in_its_year(self):
+        code, d = self.post("/api/parse", {"text": "- a Jan03\n", "name": "HDC", "year": 2025})
+        self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["span"]["start"], "2025-01-03")
+        self.assertEqual(self.post("/api/parse", {"text": "", "year": "2025"})[0], 400)
 
     def test_file_browser_is_off(self):
         self.assertEqual(self.get("/api/browse")[0], 409)
