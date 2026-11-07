@@ -19,7 +19,8 @@ from datetime import date
 import planner
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXAMPLE = os.path.join(HERE, "example.txt")
+EXAMPLE = os.path.join(HERE, "example.kf")         # the reference notes (example.txt is free for your own)
+PORTFOLIO = os.path.join(HERE, "example")           # the reference portfolio (--import example.kf example --split)
 
 
 def read_example():
@@ -1088,7 +1089,19 @@ class TestServer(Base):
 
     def test_page(self):
         with urllib.request.urlopen(self.url + "/") as r:
-            self.assertIn(b"/api/edit", r.read())
+            page = r.read()
+        self.assertIn(b'src="app.js"', page)
+        self.assertIn(b'href="app.css"', page)
+        for path, ctype, inside in (("/app.js", "text/javascript", b"/api/edit"), ("/app.css", "text/css", b"--fz")):
+            with urllib.request.urlopen(self.url + path) as r:
+                self.assertTrue(r.headers["Content-Type"].startswith(ctype))
+                self.assertEqual(r.headers["Cache-Control"], "no-cache")
+                self.assertIn(inside, r.read())
+
+    def test_no_portfolio(self):
+        with urllib.request.urlopen(self.url + "/api/portfolio") as r:
+            self.assertEqual(json.loads(r.read()), {"name": None})
+        self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "X"})[0], 409)
 
     def test_example(self):
         with urllib.request.urlopen(self.url + "/api/example") as r:
@@ -1338,7 +1351,9 @@ class TestCLI(unittest.TestCase):
             (("--serve", "--port", "abc"), "bad --port value"),
             (("--serve", "--port", "70000"), "bad --port value"),
             (("--serve", EXAMPLE, "timeline"), "at most one notes file"),
-            (("--serve", HERE), "not a file in an existing folder"),
+            (("--import", EXAMPLE), "use --import"),
+            (("--import", "no-such-file.txt", "somewhere"), "use --import"),
+            (("--import", EXAMPLE, os.path.join(HERE, "no-such-dir", "folio")), "parent folder doesn't exist"),
             (("--serve", os.path.join(HERE, "no-such-dir", "x.txt")), "not a file in an existing folder"),
         ]
         for args, msg in cases:
@@ -1367,6 +1382,250 @@ class TestCLI(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertIn("No projects or tasks found.", self.run_cli(stdin="\n"))
+
+    def test_import(self):
+        with tempfile.TemporaryDirectory() as d:
+            folio = os.path.join(d, "folio")
+            self.assertIn("HDC, MDM, OPS", self.run_cli("--import", EXAMPLE, folio, "--split"))
+            self.assertIn("already has a backlog", self.run_cli("--import", EXAMPLE, folio, "--split", code=1))
+            self.assertIn("example", self.run_cli("--import", EXAMPLE, folio))
+            with open(os.path.join(folio, "example", "backlog.kf"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), read_example())
+
+
+# ---------- the portfolio ----------
+
+class TestPortfolio(Base):
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+
+    def tearDown(self):
+        self.dir.cleanup()
+        super().tearDown()
+
+    def write(self, rel, text=""):
+        full = os.path.join(self.root, *rel.split("/"))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_parse_names_the_implicit_project(self):
+        ps = planner.parse("- a\n@Stream\n- b", "HDC")
+        self.assertEqual([p.name for p in ps], ["HDC", "Stream"])
+        self.assertEqual(planner.parse("- a")[0].name, "(no project)")
+
+    def test_kinds(self):
+        for rel, kind in [("HDC", "project"), ("HDC/backlog.kf", "backlog"), ("HDC/quicknote.kf", "quicknote"),
+                          ("HDC/habits.kf", "habits"), ("HDC/notes/Client", "section"), ("HDC/notes/a.md", "page"),
+                          ("HDC/notes/Client/b.kf", "page"), ("HDC/notes/c.txt", "page"), ("HDC/archive/2026.kf", "archive"),
+                          ("HDC/archive/26.kf", None), ("HDC/other.kf", None), ("HDC/notes/a/b/c.kf", None),
+                          ("HDC/notes/x.png", "section"), ("HDC/notes/Client/x.png", None), (".trash", None), ("HDC/.git", None), ("HDC/../x", None),
+                          ("", None), ("HDC//backlog.kf", None), (None, None), (5, None)]:
+            with self.subTest(rel=rel):
+                self.assertEqual(planner.portfolio_kind(rel), kind)
+
+    def test_paths_stay_inside(self):
+        self.assertEqual(planner.portfolio_path(self.root, "HDC/backlog.kf"), os.path.join(self.root, "HDC", "backlog.kf"))
+        for rel in ("../x", "HDC/../../x", "/etc", "HDC\\..\\x", ".trash/HDC", "a\0b"):
+            with self.subTest(rel=rel), self.assertRaises(planner.PortfolioError):
+                planner.portfolio_path(self.root, rel)
+        with tempfile.TemporaryDirectory() as out:
+            os.symlink(out, os.path.join(self.root, "Link"))
+            with self.assertRaises(planner.PortfolioError):
+                planner.portfolio_path(self.root, "Link/backlog.kf")
+
+    def test_tree(self):
+        self.write("HDC/backlog.kf", "- a")
+        self.write("HDC/notes/Kickoff.md")
+        self.write("HDC/notes/Client/Req.kf")
+        self.write("HDC/notes/Client/photo.png")
+        self.write("HDC/notes/.hidden.kf")
+        self.write("HDC/archive/2025.kf")
+        self.write("HDC/archive/2026.kf")
+        self.write("HDC/archive/old.kf")
+        os.mkdir(os.path.join(self.root, "MDM"))
+        os.mkdir(os.path.join(self.root, ".trash"))
+        self.write("loose.kf")
+        tree = planner.portfolio_tree(self.root)
+        self.assertEqual(tree["name"], os.path.basename(self.root))
+        self.assertEqual([p["name"] for p in tree["projects"]], ["HDC", "MDM"])
+        hdc = tree["projects"][0]
+        self.assertEqual(hdc["files"], {"backlog": "HDC/backlog.kf", "quicknote": "HDC/quicknote.kf", "habits": "HDC/habits.kf"})
+        self.assertEqual(hdc["made"], ["backlog"])
+        self.assertEqual(hdc["notes"], [
+            {"kind": "section", "name": "Client", "path": "HDC/notes/Client",
+             "pages": [{"kind": "page", "name": "Req", "file": "Req.kf", "type": "kf", "path": "HDC/notes/Client/Req.kf"}]},
+            {"kind": "page", "name": "Kickoff", "file": "Kickoff.md", "type": "md", "path": "HDC/notes/Kickoff.md"}])
+        self.assertEqual(hdc["archive"], [{"year": 2026, "path": "HDC/archive/2026.kf"}, {"year": 2025, "path": "HDC/archive/2025.kf"}])
+        self.assertEqual(tree["projects"][1]["notes"], [])
+
+    def test_new_project_section_page(self):
+        self.assertEqual(planner.new_project(self.root, " HDC "), "HDC")
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "HDC")))
+        self.assertEqual(os.listdir(os.path.join(self.root, "HDC")), [])     # files are made on first save
+        with self.assertRaises(planner.PortfolioError):
+            planner.new_project(self.root, "HDC")
+        for bad in ("", "  ", ".x", "a/b", "a\\b", "a:b", "a\nb", None):
+            with self.subTest(name=bad), self.assertRaises(planner.PortfolioError):
+                planner.new_project(self.root, bad)
+        self.assertEqual(planner.new_page(self.root, "HDC", "Kickoff"), "HDC/notes/Kickoff.kf")
+        self.assertEqual(planner.new_page(self.root, "HDC", "Call.md"), "HDC/notes/Call.md")
+        self.assertEqual(planner.new_section(self.root, "HDC", "Client"), "HDC/notes/Client")
+        self.assertEqual(planner.new_page(self.root, "HDC", "Req", "Client"), "HDC/notes/Client/Req.kf")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/notes/Client/Req.kf"))[0], "")
+        for args in (("HDC", "Kickoff"), ("HDC", "x", "Nope"), ("Nope", "x")):
+            with self.subTest(args=args), self.assertRaises(planner.PortfolioError):
+                planner.new_page(self.root, *args)
+        for args in (("HDC", "Client"), ("HDC", "x.md"), ("Nope", "x")):
+            with self.subTest(args=args), self.assertRaises(planner.PortfolioError):
+                planner.new_section(self.root, *args)
+
+    def test_rename(self):
+        self.write("HDC/notes/Kickoff.md", "x")
+        self.write("HDC/notes/Other.md", "y")
+        self.assertEqual(planner.rename_item(self.root, "HDC/notes/Kickoff.md", "First call"), "HDC/notes/First call.md")
+        self.assertEqual(planner.rename_item(self.root, "HDC/notes/First call.md", "First call.kf"), "HDC/notes/First call.kf")
+        self.assertEqual(planner.rename_item(self.root, "HDC", "Harbour"), "Harbour")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "Harbour/notes/First call.kf"))[0], "x")
+        for rel, name in (("Harbour/notes/Other.md", "First call.kf"), ("Harbour/backlog.kf", "x"), ("Nope", "x"),
+                          ("Harbour/notes/Other.md", "../x")):
+            with self.subTest(rel=rel, name=name), self.assertRaises(planner.PortfolioError):
+                planner.rename_item(self.root, rel, name)
+
+    def test_trash_keeps_everything(self):
+        self.write("HDC/notes/Kickoff.md", "one")
+        self.assertEqual(planner.trash_item(self.root, "HDC/notes/Kickoff.md"), ".trash/HDC/notes/Kickoff.md")
+        self.write("HDC/notes/Kickoff.md", "two")
+        self.assertEqual(planner.trash_item(self.root, "HDC/notes/Kickoff.md"), ".trash/HDC/notes/Kickoff (2).md")
+        self.assertEqual(planner.trash_item(self.root, "HDC"), ".trash/HDC (2)")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, ".trash/HDC/notes/Kickoff (2).md"))[0], "two")
+        self.assertEqual(planner.portfolio_tree(self.root)["projects"], [])
+        for rel in ("HDC", "MDM/backlog.kf", ".trash/HDC"):
+            with self.subTest(rel=rel), self.assertRaises(planner.PortfolioError):
+                planner.trash_item(self.root, rel)
+
+    def test_import_one_project_unchanged(self):
+        text = "Fall\r\n@A\r\n- a\r\n"
+        self.assertEqual(planner.import_notes(text, self.root, "work"), {"work": text})
+        with open(os.path.join(self.root, "work", "backlog.kf"), "rb") as f:
+            self.assertEqual(f.read(), text.encode())
+
+    def test_import_split(self):
+        text = "- loose\nFall  Sep01--Dec19\n\n@A\n-- about A\n- a1\n\t- a2 Oct20\n@B\n- b1\nWinter\n@A\n- a3\n"
+        out = planner.import_notes(text, self.root, "work", split=True)
+        self.assertEqual(out, {"work": "- loose\n", "A": "Fall  Sep01--Dec19\n-- about A\n- a1\n\t- a2 Oct20\n\nWinter\n- a3\n",
+                               "B": "Fall  Sep01--Dec19\n- b1\n"})
+        a = planner.parse(out["A"], "A")
+        self.assertEqual([t.title for p in a for t in p.all_tasks()], ["a1", "a2", "a3"])
+        self.assertEqual(a[0].notes, ["about A"])
+        with self.assertRaises(planner.PortfolioError):
+            planner.import_notes(text, self.root, "work", split=True)
+
+    def test_example_portfolio_is_the_split_example(self):
+        made = planner.import_notes(read_example(), self.root, "example", split=True)
+        for project, text in made.items():
+            with self.subTest(project=project):
+                self.assertEqual(planner.read_notes(os.path.join(PORTFOLIO, project, "backlog.kf"))[0], text)
+        whole = [t.title for p in planner.parse(read_example()) for t in p.all_tasks()]
+        split = [t.title for name, text in made.items() for p in planner.parse(text, name) for t in p.all_tasks()]
+        self.assertEqual(sorted(split), sorted(whole))
+
+
+class TestServerPortfolio(Base):
+    """--serve FOLDER: the portfolio's projects, pages and files, by paths relative to it."""
+    write = TestPortfolio.write
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.write("HDC/backlog.kf", "@Stream\n- a Oct20\n- b\n")
+        self.write("HDC/notes/Kickoff.md", "# hi")
+        self.write("secret.txt", "no")
+        self.server = planner.make_server(0, None, portfolio=self.root)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+        super().tearDown()
+
+    post, send = TestServer.post, TestServer.send
+
+    def get(self, path):
+        return self.send(urllib.request.Request(self.url + path))
+
+    def file(self, rel):
+        return self.get("/api/file?path=" + urllib.parse.quote(rel))
+
+    def test_tree(self):
+        code, d = self.get("/api/portfolio")
+        self.assertEqual(code, 200)
+        self.assertEqual([p["name"] for p in d["projects"]], ["HDC"])
+        req = urllib.request.Request(self.url + "/api/portfolio", headers={"Origin": "https://evil.example"})
+        self.assertEqual(self.send(req)[0], 403)
+
+    def test_ops(self):
+        code, d = self.post("/api/portfolio", {"op": "project", "name": "MDM"})
+        self.assertEqual((code, d["path"], [p["name"] for p in d["tree"]["projects"]]), (200, "MDM", ["HDC", "MDM"]))
+        self.assertEqual(self.post("/api/portfolio", {"op": "section", "project": "MDM", "name": "Hiring"})[1]["path"], "MDM/notes/Hiring")
+        self.assertEqual(self.post("/api/portfolio", {"op": "page", "project": "MDM", "name": "Plan", "section": "Hiring"})[1]["path"],
+                         "MDM/notes/Hiring/Plan.kf")
+        self.assertEqual(self.post("/api/portfolio", {"op": "rename", "path": "MDM", "name": "Hiring"})[1]["path"], "Hiring")
+        code, d = self.post("/api/portfolio", {"op": "trash", "path": "Hiring"})
+        self.assertEqual((code, d["path"], [p["name"] for p in d["tree"]["projects"]]), (200, ".trash/Hiring", ["HDC"]))
+        self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "HDC"})[0], 409)
+        self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "../x"})[0], 409)
+        self.assertEqual(self.post("/api/portfolio", {"op": "explode"})[0], 400)
+
+    def test_read_and_write_files(self):
+        code, d = self.file("HDC/notes/Kickoff.md")
+        self.assertEqual((code, d["name"], d["path"], d["text"]), (200, "Kickoff.md", "HDC/notes/Kickoff.md", "# hi"))
+        code, d = self.file("HDC/quicknote.kf")                         # not made yet
+        self.assertEqual((code, d["text"], d["version"]), (200, "", None))
+        code, d = self.post("/api/file", {"path": "HDC/quicknote.kf", "text": "- call Lisa", "version": None})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.file("HDC/quicknote.kf")[1]["version"], d["version"])
+        self.assertEqual(self.post("/api/file", {"path": "HDC/quicknote.kf", "text": "x", "version": None})[0], 409)
+        code, d = self.post("/api/file", {"path": "HDC/archive/2026.kf", "text": "- done", "version": None})
+        self.assertEqual(code, 200)                                     # archive/ is made on the first save
+        self.assertEqual(self.file("HDC/archive/2025.kf")[1]["text"], "")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "HDC", "notes", "x")))
+        for rel in ("secret.txt", "../x.txt", "HDC", "Nope/backlog.kf", "HDC/notes/Missing/a.kf", "HDC/notes/a.png"):
+            with self.subTest(rel=rel):
+                self.assertEqual(self.file(rel)[0], 409)
+                self.assertEqual(self.post("/api/file", {"path": rel, "text": "x", "version": None})[0], 409)
+
+    def test_edit_a_file_by_path(self):
+        code, d = self.file("HDC/backlog.kf")
+        req = {"path": "HDC/backlog.kf", "version": d["version"], "line": 2, "title": "a", "op": "status", "value": "done"}
+        code, out = self.post("/api/edit", dict(req, today="2026-10-12"))
+        self.assertEqual(code, 200)
+        self.assertEqual(out["text"], "@Stream\n!- a Oct20\n- b\n")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC", "backlog.kf")), (out["text"], out["version"]))
+        self.assertEqual(out["data"]["projects"][0]["projects"][0]["name"], "Stream")
+        code, out = self.post("/api/edit", req)                         # the old version: refused, nothing written
+        self.assertEqual((code, out["conflict"]), (409, True))
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC", "backlog.kf"))[0], "@Stream\n!- a Oct20\n- b\n")
+        code, out = self.post("/api/edit", dict(req, version=out["version"], title="wrong"))
+        self.assertEqual(code, 409)
+        self.assertEqual(self.post("/api/edit", dict(req, path="secret.txt"))[0], 409)
+
+    def test_edit_names_the_backlog_project(self):
+        self.write("HDC/backlog.kf", "- a\n")
+        d = self.file("HDC/backlog.kf")[1]
+        code, out = self.post("/api/edit", {"path": "HDC/backlog.kf", "version": d["version"], "line": 1, "title": "a",
+                                            "op": "status", "value": "doing"})
+        self.assertEqual(code, 200)
+        self.assertEqual(out["data"]["projects"][0]["projects"][0]["name"], "HDC")
+
+    def test_file_browser_is_off(self):
+        self.assertEqual(self.get("/api/browse")[0], 409)
+        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "secret.txt")})[0], 409)
 
 
 if __name__ == "__main__":

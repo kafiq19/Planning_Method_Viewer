@@ -4,6 +4,8 @@ planner.py (KAFEEN Planner) - turn plain-text planning notes into five views:
 projects, timeline, people, what's coming up, and the week.
 Standard library only (Python 3.8+).
 
+Notes files end in .kf (the KAFEEN format; .txt works the same).
+
 USAGE
   python planner.py                    paste your notes, then press
                                        Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
@@ -11,6 +13,9 @@ USAGE
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming | week
   --today Oct10                        pretend today is another date (for testing)
+  --import notes.txt FOLDER [--split]  make a portfolio project from notes.txt (--split: one project per @ line)
+  --serve FOLDER                       serve a portfolio: one sub-folder per project (backlog.kf, quicknote.kf,
+                                       habits.kf, notes/, archive/YYYY.kf); see AGENTS.md
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
                                        files from the page: each is a tab, saved automatically and reopened next time
                                        The page: tabs Projects / Timeline / People / Upcoming / Week and a
@@ -294,13 +299,15 @@ class Project:
             yield from t.walk()
 
 
-def parse(text):
+def parse(text, name=None):
+    """-> list[Project]. Tasks before any @ line go into a project called `name`
+    (a portfolio project's own name for its backlog), or "(no project)"."""
     projects, section, project, stack = [], None, None, []
 
     def ensure_project():
         nonlocal project
         if project is None:
-            project = Project("(no project)", section, n)
+            project = Project(name or "(no project)", section, n)
             projects.append(project)
         return project
 
@@ -1163,6 +1170,8 @@ EDITS = {"text": set_text, "plan": set_plan, "status": set_status, "date": set_d
 
 # ---------- the notes file (--serve notes.txt) ----------
 
+NOTE_SUFFIXES = (".kf", ".txt", ".md", ".markdown")   # files the page can open (.kf: the kafeen format)
+
 class FileConflict(Exception):
     """The file on disk is not the version the page last loaded or saved."""
 
@@ -1221,6 +1230,249 @@ def write_notes(path, text, version, force=False):
     return file_version(data)
 
 
+# ---------- the portfolio (--serve FOLDER) ----------
+#
+# A portfolio is a folder; each sub-folder is a project:
+#   HDC/backlog.kf  quicknote.kf  habits.kf  notes/[Section/]Page.kf|.txt|.md  archive/2026.kf
+# Paths in the API are relative to the portfolio, with "/" between parts. Hidden
+# names (starting with ".") are never listed or opened; .trash/ holds what was deleted.
+
+PROJECT_FILES = {"backlog": "backlog.kf", "quicknote": "quicknote.kf", "habits": "habits.kf"}
+NOTES_DIR, ARCHIVE_DIR, TRASH_DIR = "notes", "archive", ".trash"
+RE_ARCHIVE = re.compile(r"\d{4}\.kf")
+
+
+class PortfolioError(ValueError):
+    """A portfolio request that can't be done (bad name or path, already exists, ...)."""
+
+
+def _clean_name(name):
+    """A project, section or page name as given, stripped; PortfolioError if it can't be a file name."""
+    name = name.strip() if isinstance(name, str) else ""
+    if (not name or name.startswith(".") or len(name) > 120 or any(c in name for c in '/\\:')
+            or any(ord(c) < 32 for c in name)):
+        raise PortfolioError("a name can't be empty, start with a dot, or contain / \\ or :")
+    return name
+
+
+def portfolio_kind(rel):
+    """What the portfolio path `rel` names: project, backlog / quicknote / habits, section, page,
+    archive; or None. Only by its shape; the file may not exist."""
+    parts = rel.split("/") if isinstance(rel, str) else []
+    if not parts or any(not x or x.startswith(".") for x in parts):
+        return None
+    n = len(parts)
+    if n == 1:
+        return "project"
+    if n == 2:
+        return next((k for k, f in PROJECT_FILES.items() if f == parts[1]), None)
+    if n == 3 and parts[1] == ARCHIVE_DIR:
+        return "archive" if RE_ARCHIVE.fullmatch(parts[2]) else None
+    if parts[1] != NOTES_DIR or n > 4:
+        return None
+    if parts[-1].lower().endswith(NOTE_SUFFIXES):
+        return "page"
+    return "section" if n == 3 else None
+
+
+def portfolio_path(root, rel):
+    """The real path of `rel` inside the portfolio `root`; PortfolioError if it isn't one
+    of the portfolio's kinds or would lead outside (.., symlinks)."""
+    if isinstance(rel, str) and ("\\" in rel or "\0" in rel):
+        rel = None
+    if portfolio_kind(rel) is None:
+        raise PortfolioError(f"{rel!r} isn't a project, page or notes file in this portfolio")
+    root = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(root, *rel.split("/")))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        raise PortfolioError(f"{rel!r} is outside the portfolio")
+    return full
+
+
+def _listing(folder):
+    """Visible entries of `folder` (none if it doesn't exist), sorted by name, folders first."""
+    try:
+        found = [e for e in os.scandir(folder) if not e.name.startswith(".")]
+    except OSError:
+        return []
+    return sorted(found, key=lambda e: (not e.is_dir(), e.name.casefold()))
+
+
+def _page(rel, filename):
+    stem, ext = os.path.splitext(filename)
+    return {"kind": "page", "name": stem, "file": filename, "type": ext[1:].lower(), "path": rel}
+
+
+def project_info(root, name):
+    """One project: {name, path, files: {backlog, quicknote, habits} (paths; `made` says which
+    exist), notes: [sections {kind, name, path, pages} and pages {kind, name, file, type, path}],
+    archive: [{year, path}] newest first}."""
+    d = os.path.join(root, name)
+    notes = []
+    for e in _listing(os.path.join(d, NOTES_DIR)):
+        rel = f"{name}/{NOTES_DIR}/{e.name}"
+        if e.is_dir():
+            pages = [_page(f"{rel}/{f.name}", f.name) for f in _listing(e.path)
+                     if f.is_file() and f.name.lower().endswith(NOTE_SUFFIXES)]
+            notes.append({"kind": "section", "name": e.name, "path": rel, "pages": pages})
+        elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
+            notes.append(_page(rel, e.name))
+    archive = sorted(({"year": int(e.name[:4]), "path": f"{name}/{ARCHIVE_DIR}/{e.name}"}
+                      for e in _listing(os.path.join(d, ARCHIVE_DIR)) if e.is_file() and RE_ARCHIVE.fullmatch(e.name)),
+                     key=lambda a: -a["year"])
+    return {"name": name, "path": name,
+            "files": {k: f"{name}/{f}" for k, f in PROJECT_FILES.items()},
+            "made": [k for k, f in PROJECT_FILES.items() if os.path.isfile(os.path.join(d, f))],
+            "notes": notes, "archive": archive}
+
+
+def portfolio_tree(root):
+    """{name, projects: [project_info]} for the portfolio folder `root`."""
+    root = os.path.realpath(root)
+    return {"name": os.path.basename(root),
+            "projects": [project_info(root, e.name) for e in _listing(root) if e.is_dir()]}
+
+
+def new_project(root, name):
+    """Make the folder for a new project; -> its path."""
+    name = _clean_name(name)
+    full = portfolio_path(root, name)
+    if os.path.lexists(full):
+        raise PortfolioError(f"there is already a project called {name}")
+    os.mkdir(full)
+    return name
+
+
+def _project_dir(root, project):
+    full = portfolio_path(root, project if isinstance(project, str) else None)
+    if not os.path.isdir(full):
+        raise PortfolioError(f"there is no project called {project}")
+    return full
+
+
+def new_section(root, project, name):
+    """Make a notes section (a folder in notes/); -> its path."""
+    _project_dir(root, project)
+    name = _clean_name(name)
+    rel = f"{project}/{NOTES_DIR}/{name}"
+    if name.lower().endswith(NOTE_SUFFIXES):
+        raise PortfolioError("a section name can't end like a file (.kf, .txt, .md)")
+    full = portfolio_path(root, rel)
+    if os.path.lexists(full):
+        raise PortfolioError(f"{name} already exists")
+    os.makedirs(full)
+    return rel
+
+
+def new_page(root, project, name, section=None):
+    """Make an empty notes page; `.kf` is added to a name without .kf, .txt or .md; -> its path."""
+    _project_dir(root, project)
+    name = _clean_name(name)
+    if not name.lower().endswith(NOTE_SUFFIXES):
+        name += ".kf"
+    folder = f"{project}/{NOTES_DIR}" + (f"/{_clean_name(section)}" if section else "")
+    rel = f"{folder}/{name}"
+    full = portfolio_path(root, rel)
+    if section and not os.path.isdir(os.path.dirname(full)):
+        raise PortfolioError(f"there is no section called {section}")
+    if os.path.lexists(full):
+        raise PortfolioError(f"{name} already exists")
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    write_notes(full, "", None)
+    return rel
+
+
+def rename_item(root, rel, name):
+    """Rename a project, section or page (a page keeps its ending unless the new name has one);
+    -> the new path."""
+    kind = portfolio_kind(rel)
+    if kind not in ("project", "section", "page"):
+        raise PortfolioError("only projects, sections and pages can be renamed")
+    full = portfolio_path(root, rel)
+    if not os.path.lexists(full):
+        raise PortfolioError(f"{rel} isn't there any more")
+    name = _clean_name(name)
+    if kind == "page" and not name.lower().endswith(NOTE_SUFFIXES):
+        name += os.path.splitext(rel)[1]
+    new = rel.rsplit("/", 1)[0] + "/" + name if "/" in rel else name
+    if portfolio_kind(new) != kind:
+        raise PortfolioError(f"{name} can't be the name of a {kind}")
+    target = portfolio_path(root, new)
+    if os.path.lexists(target) and not os.path.samefile(full, target):   # (same file: a change of case)
+        raise PortfolioError(f"{name} already exists")
+    os.rename(full, target)
+    return new
+
+
+def trash_item(root, rel):
+    """Move a project, section or page into the portfolio's .trash/ (same path inside it,
+    with " (2)" and so on if that is taken); -> the path in .trash."""
+    if portfolio_kind(rel) not in ("project", "section", "page"):
+        raise PortfolioError("only projects, sections and pages can be deleted")
+    full = portfolio_path(root, rel)
+    if not os.path.lexists(full):
+        raise PortfolioError(f"{rel} isn't there any more")
+    stem, ext = os.path.splitext(rel) if os.path.isfile(full) else (rel, "")
+    dest, n = f"{TRASH_DIR}/{rel}", 1
+    while os.path.lexists(os.path.join(os.path.realpath(root), *dest.split("/"))):
+        n += 1
+        dest = f"{TRASH_DIR}/{stem} ({n}){ext}"
+    target = os.path.join(os.path.realpath(root), *dest.split("/"))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.rename(full, target)
+    return dest
+
+
+def project_name(rel):
+    """The project a portfolio path belongs to (its first part)."""
+    return rel.split("/", 1)[0] if isinstance(rel, str) else None
+
+
+def import_notes(text, root, name, split=False):
+    """Make projects in the portfolio `root` from one notes file's `text`; -> {project: backlog text}.
+
+    Without `split`: one project called `name`, its backlog the text unchanged (its @ lines become
+    sub-groups). With `split`: each @ group becomes a project of that name (its lines unchanged,
+    without the @ line), with the section heading above it copied first; tasks outside any @ go to
+    `name`. Refused if a backlog it would write already has text.
+    """
+    if not split:
+        out = {name: text}
+    else:
+        out, heading, target, put = {}, None, name, set()
+        for raw in text.splitlines(keepends=True):
+            c = raw.strip()
+            ws = raw[:len(raw) - len(raw.lstrip())]
+            if not c:
+                if out.get(target):
+                    out[target] += raw
+                continue
+            if c.startswith("@"):
+                target = c[1:].strip().replace("/", "-").replace("\\", "-").replace(":", "-").lstrip(".") or name
+                continue
+            if not c.startswith("--") and not re.match(r"^[!~]?-", c) and ws.count("\t") + ws.count(" ") // 4 == 0:
+                heading, target, put = raw, name, set()
+                continue
+            if heading is not None and target not in put:
+                body = out.get(target, "")
+                if body and not body.endswith(("\n\n", "\r\n\r\n")):
+                    body += "\n"
+                out[target] = body + (heading if heading.endswith(("\n", "\r")) else heading + "\n")
+                put.add(target)
+            out[target] = out.get(target, "") + raw
+        out = {k: v.rstrip("\r\n") + ("\r\n" if "\r\n" in v else "\n") for k, v in out.items() if v.strip()}
+    for project in out:
+        _clean_name(project)
+        backlog = os.path.join(root, project, PROJECT_FILES["backlog"])
+        if read_notes(backlog)[0].strip():
+            raise PortfolioError(f"{project} already has a backlog with text in it")
+    for project, body in out.items():
+        os.makedirs(os.path.join(root, project), exist_ok=True)
+        backlog = os.path.join(root, project, PROJECT_FILES["backlog"])
+        write_notes(backlog, body, read_notes(backlog)[1])
+    return out
+
+
 # ---------- web page ----------
 
 def set_today(val):
@@ -1230,11 +1482,24 @@ def set_today(val):
     TODAY = date(date.today().year, MONTHS[m.group(1)], int(m.group(2))) if m else date.fromisoformat(val)
 
 
-NOTE_SUFFIXES = (".txt", ".md", ".markdown")
+def apply_edit(text, req):
+    """The text after the edit `req` asks for ({op, line, title, value}); EditError if refused."""
+    op = EDITS.get(req["op"])
+    if op is None:
+        raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
+    if isinstance(req["value"], dict) and req["op"] in ("task", "subtask"):
+        return add_with_fields(req["op"], text, req["line"], req["value"], req.get("title"))
+    if not isinstance(req["value"], str):
+        raise EditError("value must be text")
+    return op(text, req["line"], req["value"], req.get("title"))
 
 
-def make_server(port, notes_path=None, browse_root=None):
+def make_server(port, notes_path=None, browse_root=None, portfolio=None):
     """The local server (127.0.0.1 only). Port 0 picks a free port.
+
+    With `portfolio` (a folder), GET /api/portfolio lists its projects, POST /api/portfolio
+    makes, renames and deletes (moves to .trash) projects, sections and pages, and
+    /api/file reads and saves any file in it by its path relative to the folder.
 
     With `notes_path`, GET/POST /api/file read and save that one file. Without
     it, the page can list folders under `browse_root` (default: the home folder)
@@ -1249,7 +1514,10 @@ def make_server(port, notes_path=None, browse_root=None):
     from urllib.parse import parse_qs, urlsplit
 
     default_today = TODAY
-    page = Path(__file__).resolve().parent / "web" / "index.html"
+    web = Path(__file__).resolve().parent / "web"
+    statics = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
+               "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8")}
+    folio = os.path.realpath(portfolio) if portfolio else None
     root = os.path.realpath(browse_root or os.path.expanduser("~"))
     opened = []                                     # files opened from the page (resolved paths), most recent last
 
@@ -1262,6 +1530,7 @@ def make_server(port, notes_path=None, browse_root=None):
         def _send(self, code, body, ctype):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-cache")      # a new version of the page is picked up at once
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1280,8 +1549,15 @@ def make_server(port, notes_path=None, browse_root=None):
 
         def do_GET(self):
             path = self.path.split("?")[0]
-            if path in ("/", "/index.html"):
-                self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            if path in statics:
+                name, ctype = statics[path]
+                self._send(200, (web / name).read_bytes(), ctype)
+            elif path == "/api/portfolio":
+                if not self._trusted():
+                    return
+                if folio is None:
+                    return self._json(200, {"name": None})
+                self._json(200, portfolio_tree(folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
@@ -1293,12 +1569,12 @@ def make_server(port, notes_path=None, browse_root=None):
             elif path == "/api/example":            # the sample notes, for the page's "Load the example"
                 if not self._trusted():
                     return
-                self._json(200, {"text": (Path(__file__).resolve().parent / "example.txt").read_text(encoding="utf-8")})
+                self._json(200, {"text": (Path(__file__).resolve().parent / "example.kf").read_text(encoding="utf-8")})
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close", "/api/portfolio"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -1313,6 +1589,8 @@ def make_server(port, notes_path=None, browse_root=None):
                     return self._open(req)
                 if self.path == "/api/close":
                     return self._close(req)
+                if self.path == "/api/portfolio":
+                    return self._portfolio(req)
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
@@ -1321,23 +1599,72 @@ def make_server(port, notes_path=None, browse_root=None):
                 monday = week_monday(req.get("week"))
                 if self.path == "/api/parse":
                     return self._json(200, to_data(parse(text), period, monday))
-                op = EDITS.get(req["op"])
-                if op is None:
-                    raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
-                if isinstance(req["value"], dict) and req["op"] in ("task", "subtask"):
-                    text = add_with_fields(req["op"], text, req["line"], req["value"], req.get("title"))
-                elif not isinstance(req["value"], str):
-                    raise EditError("value must be text")
-                else:
-                    text = op(text, req["line"], req["value"], req.get("title"))
+                if "path" in req:
+                    return self._edit_file(req, period, monday)
+                text = apply_edit(text, req)
                 self._json(200, {"text": text, "data": to_data(parse(text), period, monday)})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
 
+        def _edit_file(self, req, period, monday):
+            """/api/edit with `path` and `version`: the edit is made on the file itself. Refused (409
+            conflict) if the file isn't at `version` any more. -> {text, version, data}."""
+            p = self._target(req["path"])
+            if p is None:
+                return self._not_open(req["path"])
+            text, current = read_notes(p)
+            if current != req.get("version"):
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
+            name = project_name(req["path"]) if folio and portfolio_kind(req["path"]) == "backlog" else None
+            text = apply_edit(text, req)
+            try:
+                version = write_notes(p, text, current)
+            except FileConflict:
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
+                                        "version": read_notes(p)[1]})
+            self._json(200, {"text": text, "version": version, "data": to_data(parse(text, name), period, monday)})
+
+        def _portfolio(self, req):
+            """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,
+            section?}; rename {path, name}; trash {path}. -> {path, tree}."""
+            if folio is None:
+                return self._json(409, {"error": "no portfolio folder was given (planner.py --serve FOLDER)"})
+            op = req.get("op")
+            try:
+                if op == "project":
+                    path = new_project(folio, req.get("name"))
+                elif op == "section":
+                    path = new_section(folio, req.get("project"), req.get("name"))
+                elif op == "page":
+                    path = new_page(folio, req.get("project"), req.get("name"), req.get("section"))
+                elif op == "rename":
+                    path = rename_item(folio, req.get("path"), req.get("name"))
+                elif op == "trash":
+                    path = trash_item(folio, req.get("path"))
+                else:
+                    return self._json(400, {"error": f"bad request: unknown op {op!r} (project, section, page, rename, trash)"})
+            except PortfolioError as e:
+                return self._json(409, {"error": str(e)})
+            except OSError as e:
+                return self._json(500, {"error": f"can't do that: {e.strerror or e}"})
+            self._json(200, {"path": path, "tree": portfolio_tree(folio)})
+
         def _target(self, path):
-            """The file a request means: the command-line file, or `path` if it is open; else None."""
+            """The file a request means: the command-line file, `path` if it is open, or in a
+            portfolio the file at `path` (relative to it) if its folder exists; else None."""
+            if folio is not None:
+                if portfolio_kind(path) in (None, "project", "section"):
+                    return None
+                try:
+                    p = portfolio_path(folio, path)
+                except PortfolioError:
+                    return None
+                folder = os.path.dirname(p)
+                if portfolio_kind(path) == "archive":     # archive/ is made on the first save
+                    folder = os.path.dirname(folder)
+                return p if os.path.isdir(folder) else None
             if notes_path is not None:
                 return notes_path if path in (None, notes_path) else None
             p = isinstance(path, str) and os.path.realpath(path)
@@ -1348,8 +1675,9 @@ def make_server(port, notes_path=None, browse_root=None):
             self._json(409, {"error": f"{os.path.basename(str(path))} isn't open", "notOpen": True})
 
         def _file(self, path=None):
-            """{name, path, text, version, picked} for the command-line file or an open file;
-            {name: null} without a path and without a command-line file."""
+            """{name, path, text, version, picked} for the command-line file, an open file or a
+            portfolio file (text "" and version null if not made yet); {name: null} without a path
+            and without a command-line file."""
             if path is None and notes_path is None:
                 return self._json(200, {"name": None})
             p = self._target(path)
@@ -1359,11 +1687,13 @@ def make_server(port, notes_path=None, browse_root=None):
                 text, version = read_notes(p)
             except (OSError, UnicodeDecodeError) as e:
                 return self._json(500, {"error": f"can't read {p}: {e}"})
-            self._json(200, {"name": os.path.basename(p), "path": p, "text": text, "version": version,
+            self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version,
                              "picked": notes_path is None})
 
         def _browse(self, folder):
             """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
+            if folio is not None:
+                return self._json(409, {"error": "a portfolio folder is open: use its projects"})
             if notes_path is not None:
                 return self._json(409, {"error": "a notes file was given on the command line"})
             start = os.path.dirname(opened[-1]) if opened else (os.getcwd() if inside(os.getcwd()) else root)
@@ -1391,11 +1721,13 @@ def make_server(port, notes_path=None, browse_root=None):
         def _open(self, req):
             """Open the notes file at req["path"] (under the browse root) and return it; opening an
             open file again is fine. With "create", make it first (empty; refused if it exists)."""
+            if folio is not None:
+                return self._json(409, {"error": "a portfolio folder is open: use its projects"})
             if notes_path is not None:
                 return self._json(409, {"error": "a notes file was given on the command line"})
             p = isinstance(req.get("path"), str) and inside(req["path"])
             if not p or not p.lower().endswith(NOTE_SUFFIXES) or not os.path.isdir(os.path.dirname(p)):
-                return self._json(403, {"error": "you can open .txt and .md files in your home folder"})
+                return self._json(403, {"error": "you can open .kf, .txt and .md files in your home folder"})
             if req.get("create"):
                 if os.path.lexists(p):
                     return self._json(409, {"error": f"{os.path.basename(p)} already exists"})
@@ -1424,6 +1756,8 @@ def make_server(port, notes_path=None, browse_root=None):
             if not isinstance(req.get("text"), str):
                 return self._json(400, {"error": "bad request: text must be a string"})
             try:
+                if folio is not None:
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
                 version = write_notes(p, req["text"], req.get("version"), bool(req.get("force")))
             except FileConflict as e:
                 _, current = read_notes(p)
@@ -1438,13 +1772,15 @@ def make_server(port, notes_path=None, browse_root=None):
     return HTTPServer(("127.0.0.1", port), Handler)
 
 
-def serve(port, notes_path=None):
+def serve(port, notes_path=None, portfolio=None):
     import threading
     import webbrowser
 
-    server = make_server(port, notes_path)
+    server = make_server(port, notes_path, portfolio=portfolio)
     url = f"http://localhost:{port}"
     print(f"Planner running at {url}  (Ctrl-C to stop)")
+    if portfolio:
+        print(f"Portfolio {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -1478,6 +1814,25 @@ def main(argv):
             set_today(today)
         except ValueError:
             sys.exit(f"planner.py: bad --today value {today!r} (use Oct12 or 2026-10-12)")
+    if "--import" in args:
+        split = "--split" in args
+        if split:
+            args.remove("--split")
+        args.remove("--import")
+        if len(args) != 2 or not os.path.isfile(args[0]):
+            sys.exit("planner.py: use --import notes.txt PORTFOLIO_FOLDER [--split]")
+        folder = args[1]
+        if not os.path.isdir(folder) and not os.path.isdir(os.path.dirname(os.path.abspath(folder))):
+            sys.exit(f"planner.py: can't make the portfolio {folder!r}: its parent folder doesn't exist")
+        try:
+            with open(args[0], encoding="utf-8", newline="") as f:
+                text = f.read()
+            os.makedirs(folder, exist_ok=True)
+            made = import_notes(text, folder, os.path.splitext(os.path.basename(args[0]))[0], split)
+        except (OSError, UnicodeDecodeError, PortfolioError) as e:
+            sys.exit(f"planner.py: can't import {args[0]!r}: {e}")
+        print(f"Imported into {folder}: " + ", ".join(made))
+        return
     if "--serve" in args:
         args.remove("--serve")
         port = take_option(args, "--port") or "8765"
@@ -1486,8 +1841,10 @@ def main(argv):
         if len(args) > 1 or any(a.lower() in VIEWS for a in args):
             sys.exit("planner.py: --serve takes at most one notes file (and no view names)")
         notes = os.path.realpath(args[0]) if args else None    # follow a symlink to the real file
+        if notes and os.path.isdir(notes):                     # a folder: the portfolio
+            return serve(int(port), portfolio=notes)
         if notes:
-            if os.path.isdir(notes) or not os.path.isdir(os.path.dirname(notes)):
+            if not os.path.isdir(os.path.dirname(notes)):
                 sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
             try:
                 read_notes(notes)

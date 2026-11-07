@@ -29,12 +29,13 @@ python planner.py notes.txt           # or read your notes from a file
 python planner.py notes.txt timeline  # show just one view
 python planner.py --serve             # open the web page (see below)
 python planner.py --serve notes.txt   # ...and edit notes.txt directly
+python planner.py --serve ~/Kafeen    # serve a portfolio folder (see Portfolio below)
 ```
 
 To try it on the included sample:
 
 ```
-python planner.py example.txt
+python planner.py example.kf
 ```
 
 ---
@@ -47,7 +48,7 @@ python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
 ```
 
-Paste your notes, or press **Load the example** to try it, or use **Open file** in the **⋯** menu (or **+** after the tabs) to pick a `.txt` or `.md` file from your home folder. A file opened this way **saves itself** about a second after each change, and shows up as a **tab** in the header. Open as many as you like (one per project, say) with the **+** after the tabs, click a tab to switch, and **×** to close it (the file itself stays on disk). Next time you start the planner, the same files open again, on the tab you were using, like Notepad. To start a new planning file, press **New file…** at the bottom of the file browser and give it a name. The header shows "Saving…" then "Saved"; a red dot on a tab means its latest changes couldn't be saved yet (they're kept, and come back when you return to the tab). If a file was changed somewhere else in the meantime, nothing is overwritten and you choose which version to keep. Your tabs are remembered in this browser. The first tab is always **Quick note**, a place to jot ideas down without a file. It's kept in your browser (the header says "Kept in this browser"), so it survives reloads, crashes and restarts, and it can't be closed by accident. **Save** while it's showing downloads it as a file.
+Paste your notes, or press **Load the example** to try it, or use **Open file** in the **⋯** menu (or **+** after the tabs) to pick a `.kf`, `.txt` or `.md` file from your home folder (`.kf` is the KAFEEN planner format; the notes inside are the same as in a `.txt`). A file opened this way **saves itself** about a second after each change, and shows up as a **tab** in the header. Open as many as you like (one per project, say) with the **+** after the tabs, click a tab to switch, and **×** to close it (the file itself stays on disk). Next time you start the planner, the same files open again, on the tab you were using, like Notepad. To start a new planning file, press **New file…** at the bottom of the file browser and give it a name. The header shows "Saving…" then "Saved"; a red dot on a tab means its latest changes couldn't be saved yet (they're kept, and come back when you return to the tab). If a file was changed somewhere else in the meantime, nothing is overwritten and you choose which version to keep. Your tabs are remembered in this browser. The first tab is always **Quick note**, a place to jot ideas down without a file. It's kept in your browser (the header says "Kept in this browser"), so it survives reloads, crashes and restarts, and it can't be closed by accident. **Save** while it's showing downloads it as a file.
 
 If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows "Saved", or a **• Unsaved · Save** button when you have changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
 
@@ -130,13 +131,41 @@ To see the views as of another day, use `--today`, for example `python planner.p
 
 ---
 
+## Portfolio (in progress)
+
+A **portfolio** is a folder with one sub-folder per project. Each project keeps its files side by side, so they stay plain text you can open anywhere and sync with any folder-sync tool:
+
+```
+Kafeen/
+  HDC/
+    backlog.kf          the project's planning notes
+    quicknote.kf        a quick note for this project
+    habits.kf           repeating tasks (coming soon)
+    notes/              notes pages (.kf, .txt or .md), in sections (sub-folders) if you like
+    archive/2026.kf     finished tasks, by year (coming soon)
+  MDM/ ...
+  .trash/               anything you delete goes here, never gone for good
+```
+
+Turn an existing notes file into a portfolio with:
+
+```
+python planner.py --import notes.txt ~/Kafeen           # one project, named after the file
+python planner.py --import notes.txt ~/Kafeen --split   # one project per @ line
+```
+
+Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio. **This release adds the storage only:** the page's project drawer, archive, habits and the new Planner come in the next releases.
+
+---
+
 ## Files
 
 | File | What it is |
 |---|---|
 | `planner.py` | The viewer and the small local server: one file, standard library only |
-| `web/index.html` | The web page (editor, three modes, dark mode), served by `planner.py --serve` |
-| `example.txt` | Sample notes that use every rule |
+| `web/index.html`, `web/app.css`, `web/app.js` | The web page (editor, three modes, dark mode), served by `planner.py --serve` |
+| `example.kf` | Sample notes that use every rule |
+| `example/` | A sample portfolio: `example.kf` split into projects, with a quick note and notes pages |
 | `test_planner.py` | Automated tests: run `python -m unittest` |
 | `changelog.txt` | What changed in each version |
 | `README.md` | This guide |

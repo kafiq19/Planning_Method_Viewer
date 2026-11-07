@@ -1,0 +1,1355 @@
+"use strict";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
+};
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [], ready: false };
+
+/* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
+function h(tag, cls, ...kids) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  for (const k of kids) if (k != null && k !== false) n.append(k);
+  return n;
+}
+const span = (cls, text) => h("span", cls, text);
+
+/* ---------- pop-up menus: one open at a time; a click outside or Esc closes them ---------- */
+const pops = [];
+function popup(btn, menu) {
+  const set = open => { menu.classList.toggle("hidden", !open); btn.setAttribute("aria-expanded", String(open)); };
+  btn.addEventListener("click", e => { e.stopPropagation(); const open = menu.classList.contains("hidden"); closePops(); set(open); });
+  pops.push(set);
+}
+function closePops() { for (const set of pops) set(false); }
+document.addEventListener("click", e => { if (!e.target.closest(".menu")) closePops(); });
+popup($("more"), $("moreMenu"));
+
+/* ---------- theme (follows the system until it is chosen in the menu) ---------- */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("theme").firstChild.textContent = t === "dark" ? "Light mode " : "Dark mode ";
+  $("themeNote").textContent = store.get("theme", null) ? "" : "follows system";
+}
+applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+$("theme").onclick = () => {
+  const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  store.set("theme", t); applyTheme(t); closePops();
+};
+
+/* ---------- text size and font (⋯ menu), remembered in this browser ---------- */
+const SIZES = [["Small", .9, 12], ["Default", 1, 14], ["Large", 1.15, 16], ["Larger", 1.3, 18]];   // name, scale, size of its "A"
+const FONTS = [                                                                // installed fonts only: no downloads
+  ["System", '-apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Rounded", 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT", "Varela Round", -apple-system, "Segoe UI", system-ui, sans-serif'],
+  ["Serif", 'Charter, "Bitstream Charter", "Iowan Old Style", Georgia, Cambria, serif'],
+  ["Legible", '"Atkinson Hyperlegible", Verdana, "DejaVu Sans", Tahoma, sans-serif'],
+  ["Condensed", '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, system-ui, sans-serif'],
+  ["Monospace", 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'],
+];
+function applyText() {
+  const size = SIZES.find(z => z[0] === store.get("textSize", "Default")) || SIZES[1];
+  const font = FONTS.find(f => f[0] === store.get("font", "System")) || FONTS[0];
+  document.documentElement.style.setProperty("--fz", size[1]);
+  document.documentElement.style.setProperty("--vfont", font[1]);
+  for (const b of $("textSize").children) { const on = b.dataset.size === size[0]; b.classList.toggle("on", on); b.setAttribute("aria-checked", String(on)); }
+  $("font").value = font[0];
+}
+for (const [name, , px] of SIZES) {
+  const b = document.createElement("button");
+  b.textContent = "A"; b.style.fontSize = px + "px"; b.dataset.size = name;
+  b.title = name; b.setAttribute("aria-label", name); b.setAttribute("role", "radio");
+  b.onclick = e => { e.stopPropagation(); store.set("textSize", name); applyText(); };
+  $("textSize").append(b);
+}
+for (const [name, stack] of FONTS) {
+  const o = document.createElement("option");
+  o.value = o.textContent = name; o.style.fontFamily = stack;
+  $("font").append(o);
+}
+$("font").onchange = () => { store.set("font", $("font").value); applyText(); };
+applyText();
+
+/* ---------- editor, files ---------- */
+const editor = $("editor");
+editor.value = store.get("text", "");
+editor.addEventListener("input", () => { remember(); state.msg = null; showFile(); schedule(); });
+editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
+  if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
+  e.preventDefault();
+  const { selectionStart: a, selectionEnd: b, value: v } = editor;
+  if (a === b || !v.slice(a, b).includes("\n")) {
+    editor.setRangeText("\t", a, b, "end");
+  } else {                                           // multi-line: indent / outdent every line
+    const start = v.lastIndexOf("\n", a - 1) + 1;
+    const block = v.slice(start, b).split("\n").map(l => e.shiftKey ? l.replace(/^(\t| {1,4})/, "") : "\t" + l).join("\n");
+    editor.setRangeText(block, start, b, "select");
+  }
+  editor.dispatchEvent(new Event("input"));
+});
+
+function loadText(text, name) {
+  if (!state.file && editor.value.trim() && editor.value !== text
+      && !confirm(`Replace your quick note with ${name || "this text"}?`)) return;
+  editor.value = text; remember();
+  if (name) state.fileName = name;
+  schedule();
+}
+function download() {
+  const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
+  a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ---------- open files, read and written by the local server through /api/file. Two kinds:
+   - given on the command line (python planner.py --serve notes.txt): one file, saved when you press Save.
+   - opened from the page (Open file…, or + after the tabs): any number, shown as tabs in the header, each saved
+     automatically about a second after each change. The tabs are remembered in this browser ("openFiles",
+     "activeFile") and opened again on the next visit, like Notepad.
+   The text box shows one file at a time: switching tabs saves the current file first and loads the other from disk.
+   Edits that couldn't be saved yet are kept per file ("draft:<path>": {version, text}) and come back with the tab.
+   The server checks the version before every write, so a change made elsewhere is never overwritten silently. ---------- */
+const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
+const unsaved = () => state.file && editor.value !== state.file.saved;
+const AUTOSAVE_MS = 1000;
+let autoTimer;
+const baseName = p => p.split(/[\\/]/).pop();
+const draftKey = p => "draft:" + p;
+function readDraft(p) { try { return JSON.parse(store.get(draftKey(p), "null")); } catch (e) { return null; } }
+function remember() {                                       // keep the text box's text: untitled text, or a file's unsaved edits
+  const f = state.file;
+  if (!f) return store.set("text", editor.value);
+  if (editor.value === f.saved) store.del(draftKey(f.path));
+  else store.set(draftKey(f.path), JSON.stringify({ version: f.version || "", text: editor.value }));
+}
+function saveTabs() {
+  store.set("openFiles", JSON.stringify(state.tabs));
+  store.set("activeFile", state.file && state.file.picked ? state.file.path : "");
+}
+
+function showFile(problem) {                                // header: tabs (or the file chip) · Saved, or the Save pill
+  const st = $("fileStatus"), f = state.file, chip = $("fileChip");
+  st.classList.toggle("bad", !!problem);
+  $("fileName").textContent = f ? f.name : "Untitled";
+  chip.classList.toggle("none", !f);
+  chip.disabled = !!f;                                      // a command-line file can't be switched from the page
+  chip.title = f ? f.path : "Not saved to a file. Click to open one.";
+  $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
+  showTabs();
+  if (problem) return st.replaceChildren(...problem);
+  if (!f) return st.replaceChildren(state.ready ? "Kept in this browser" : "");
+  st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
+  if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
+}
+
+function tabLabel(p) {                                      // the file name, plus its folder when two open files share a name
+  const n = baseName(p);
+  return state.tabs.filter(q => baseName(q) === n).length > 1 ? n + " · " + baseName(p.slice(0, -n.length - 1)) : n;
+}
+const PENCIL = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z";
+function showTabs() {                                       // [Quick note] [file ×] [file ×] +   (a command-line file: just its chip)
+  const cli = !!state.file && !state.file.picked, box = $("tabs");
+  box.classList.toggle("hidden", !state.ready || cli);
+  $("fileChip").classList.toggle("hidden", !cli);
+  if (!state.ready || cli) return box.replaceChildren();
+  const qn = h("button", "n", icon(PENCIL, 13), "Quick note");
+  qn.setAttribute("role", "tab"); qn.setAttribute("aria-selected", String(!state.file));
+  qn.title = "A note for quick ideas, kept in this browser (not in a file). It is always here and can't be closed.";
+  qn.onclick = () => { if (state.file) showQuickNote(); };
+  const quick = h("span", "ftab quick" + (state.file ? "" : " on"), qn);
+  const kids = state.tabs.map(p => {
+    const active = !!state.file && state.file.path === p;
+    const warn = active ? state.file.blocked : !!readDraft(p);
+    const name = h("button", "n", tabLabel(p));
+    name.setAttribute("role", "tab"); name.setAttribute("aria-selected", String(active));
+    name.title = p + (active ? "\nChanges save automatically." : "") + (warn ? "\nHas changes that aren't saved yet." : "");
+    name.onclick = () => { if (!active) switchTo(p); };
+    const x = h("button", "x", "×");
+    x.title = "Close " + baseName(p); x.setAttribute("aria-label", x.title);
+    x.onclick = e => { e.stopPropagation(); closeTab(p); };
+    return h("span", "ftab" + (active ? " on" : "") + (warn ? " warn" : ""), name, x);
+  });
+  const add = h("button", "ftadd ghost", "+");
+  add.title = "Open another file"; add.setAttribute("aria-label", add.title);
+  add.onclick = () => openPicker();
+  box.replaceChildren(quick, ...kids, add);
+}
+
+function setFile(text, version) {                           // the page now matches the file on disk
+  state.file.saved = nl(text); state.file.version = version; state.file.blocked = false;
+  if (editor.value !== state.file.saved) { replaceText(state.file.saved); schedule(); }
+  remember();
+  showFile();
+}
+
+async function fileApi(body, path = "/api/file") {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) } : {});
+  let d;
+  try { d = await r.json(); } catch (e) { d = { error: r.status === 404 ? "OLD_SERVER" : r.statusText || "no answer from the server" }; }
+  return [r, d];
+}
+// The file as it is on disk now. A file opened from the page is (re)opened, so this also works after a server restart.
+const fetchFile = f => f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
+
+function useFile(d) {                                       // show this file (from /api/file or /api/open) in the text box
+  state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text), picked: !!d.picked };
+  state.fileName = d.name; state.switched = true; state.msg = null;
+  $("openWrap").classList.toggle("hidden", !d.picked);
+  if (d.picked && !state.tabs.includes(d.path)) state.tabs.push(d.path);
+  const draft = readDraft(d.path), keep = !!draft && draft.text !== state.file.saved;
+  editor.value = keep ? draft.text : state.file.saved;
+  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
+  if (!keep) store.del(draftKey(d.path));
+  const stale = keep && draft.version !== (d.version || "");   // edits made on an older version: let the user choose
+  if (stale) state.file.blocked = true;
+  saveTabs();
+  showFile();
+  if (stale) conflict();
+  render(false);
+}
+
+async function leaveFile() {                                // before showing another file: save this one (if that fails, its draft stays)
+  const f = state.file;
+  if (!f || !f.picked) return;
+  clearTimeout(autoTimer);
+  while (f.saving) await new Promise(ok => setTimeout(ok, 50));
+  if (unsaved() && !f.blocked) await save();
+  remember();
+}
+
+async function switchTo(path, create) {                     // show an open file, or open one (create: make it first)
+  await leaveFile();
+  try {
+    const [r, d] = await fileApi(create ? { path, create: true } : { path }, "/api/open");
+    if (!r.ok) {
+      if (r.status === 404 && state.tabs.includes(path)) { state.tabs = state.tabs.filter(p => p !== path); saveTabs(); }
+      throw new Error(d.error === "OLD_SERVER" ? "restart the server (python3 planner.py --serve)" : d.error || r.statusText);
+    }
+    useFile(d);
+  } catch (e) {
+    if (!state.file) showQuickNote();
+    showFile(["Can't open " + baseName(path) + ": " + e.message]);
+  }
+}
+const openPath = path => switchTo(path);
+
+async function showQuickNote() {                           // the Quick note tab: text kept in this browser (key "text"), no file
+  await leaveFile();
+  state.file = null; state.fileName = "quick-note.txt"; state.switched = true; state.msg = null; clearTimeout(autoTimer);
+  editor.value = store.get("text", "");
+  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
+  $("openWrap").classList.remove("hidden");
+  saveTabs(); showFile(); render(false);
+}
+
+async function closeTab(p) {                                // stop showing and saving this file (the file itself stays)
+  const active = !!state.file && state.file.path === p;
+  if (active) await leaveFile();
+  if (readDraft(p) && !confirm(baseName(p) + " has changes that couldn't be saved. Close it anyway and lose them?")) return;
+  store.del(draftKey(p));
+  const i = state.tabs.indexOf(p);
+  if (i >= 0) state.tabs.splice(i, 1);
+  fileApi({ path: p }, "/api/close").catch(() => {});
+  if (!active) { saveTabs(); return showFile(); }
+  state.file = null;
+  const next = state.tabs[Math.min(i, state.tabs.length - 1)];
+  if (next) return switchTo(next);
+  showQuickNote();
+}
+
+async function startFileMode() {
+  let r, d;
+  try { [r, d] = await fileApi(); } catch (e) { state.ready = true; return showFile(); }   // page opened without the server
+  state.ready = true;
+  if (!r.ok) return showFile();
+  if (d.name) return useFile(d);                            // a file given on the command line: just that one
+  let paths;
+  try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
+  if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
+  store.del("lastPath");
+  const gone = [];
+  for (const p of paths) {                                  // open last time's files again
+    let ok = false;
+    try { ok = (await fileApi({ path: p }, "/api/open"))[0].ok; } catch (e) {}
+    if (ok) state.tabs.push(p); else gone.push(baseName(p));
+  }
+  const active = store.get("activeFile", null);              // "" = the Quick note was showing
+  const first = active === "" ? null : state.tabs.includes(active) ? active : state.tabs[0];
+  if (first) await switchTo(first); else await showQuickNote();
+  if (gone.length) {
+    state.msg = { text: `Couldn't reopen ${gone.join(", ")}: moved, renamed or deleted.`, bad: true, anyMode: true };
+    showToast();
+  }
+}
+
+/* ---------- Open file…: a small browser of your home folder (the server lists it; only .kf / .txt / .md files) ---------- */
+const DOC = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5";
+const FOLDER = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z";
+const picker = h("dialog", "picker"), pickPath = h("div", "ppath"), pickList = h("div", "plist");
+const pickCancel = h("button", "ghost", "Cancel");
+const pickFoot = h("div", "pfoot");
+let pickDir = null;                                        // the folder the file browser shows
+picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList, pickFoot);
+function footer() {                                        // "Files … save automatically." and New file… (once a folder is shown)
+  const nb = h("button", "", "New file…");
+  nb.title = "Make a new, empty notes file in this folder";
+  nb.onclick = newFileForm;
+  pickFoot.replaceChildren(span("", "Files you open here save automatically."), ...(pickDir ? [nb] : []));
+}
+function newFileForm() {
+  const input = h("input"), ok = h("button", "", "Create"), form = h("form", "pnew", input, ok);
+  input.type = "text"; input.placeholder = "name, like  q4-plan.kf"; input.setAttribute("aria-label", "New file name");
+  form.onsubmit = e => {
+    e.preventDefault();
+    let n = input.value.trim();
+    if (!n) return;
+    if (/[\\/]/.test(n) || n.startsWith(".")) { input.setCustomValidity("Just a file name, without folders"); return input.reportValidity(); }
+    if (!/\.(kf|txt|md|markdown)$/i.test(n)) n += ".kf";
+    picker.close();
+    switchTo(pickDir.replace(/[\\/]$/, "") + (pickDir.includes("\\") && !pickDir.includes("/") ? "\\" : "/") + n, true);
+  };
+  input.oninput = () => input.setCustomValidity("");
+  pickFoot.replaceChildren(form);
+  input.focus();
+}
+pickCancel.onclick = () => picker.close();
+picker.onclick = e => { if (e.target === picker) picker.close(); };     // a click on the backdrop closes it
+document.body.append(picker);
+function pickProblem(text) {                               // the list can't be shown: say why, offer loading a file's text
+  const load = h("button", "", "Load a file's text instead");
+  load.title = "Copies the text into the page; it won't be saved back to the file";
+  load.onclick = () => { picker.close(); $("file").click(); };
+  pickPath.textContent = ""; pickDir = null; footer();
+  pickList.replaceChildren(h("div", "pmsg", text, h("div", "", load)));
+}
+async function browse(dir) {
+  let r, d;
+  try { [r, d] = await fileApi(null, "/api/browse" + (dir ? "?dir=" + encodeURIComponent(dir) : "")); }
+  catch (e) { return pickProblem("Can't reach the planner server. Start it with  python3 planner.py --serve  and reload this page."); }
+  if (!r.ok) return pickProblem(d.error === "OLD_SERVER"
+    ? "This server was started before the file browser existed. Stop it (Ctrl-C) and run  python3 planner.py --serve  again, then reload this page."
+    : d.error || r.statusText);
+  const shown = d.dir.startsWith(d.home) ? "~" + d.dir.slice(d.home.length) : d.dir;
+  pickPath.textContent = shown || "~"; pickPath.title = d.dir;
+  pickDir = d.dir; footer();
+  const row = (iconPath, label, cls, go) => { const b = h("button", "pitem " + cls, icon(iconPath, 16), span("", label)); b.onclick = go; return b; };
+  const rows = [];
+  if (d.parent) rows.push(row("M15 18l-6-6 6-6", "Up", "up", () => browse(d.parent)));
+  for (const e of d.entries) rows.push(e.kind === "dir" ? row(FOLDER, e.name, "dir", () => browse(e.path))
+    : row(DOC, e.name, "file", () => { picker.close(); openPath(e.path); }));
+  if (!d.entries.length) rows.push(h("div", "empty", "No folders or .kf / .txt / .md files here."));
+  pickList.replaceChildren(...rows);
+  pickList.scrollTop = 0;
+}
+function openPicker() {
+  closePops();
+  if (state.file && !state.file.picked) return;             // command-line file: one file only
+  pickList.replaceChildren(); pickDir = null; footer();
+  if (!picker.open) picker.showModal();
+  browse(null);
+}
+$("openWrap").onclick = () => openPicker();
+$("fileChip").onclick = () => openPicker();
+$("file").onchange = async e => {                           // fallback without the server: load the text only
+  const f = e.target.files[0];
+  if (f) loadText(await f.text(), f.name);
+  e.target.value = "";
+};
+async function save(force) {
+  if (!state.file) return download();
+  const f = state.file;
+  if (f.saving) { f.again = true; return; }                 // one write at a time; the newest text goes next
+  clearTimeout(autoTimer);
+  const text = editor.value;
+  f.saving = true;
+  showFile(["Saving…"]);
+  try {
+    const body = { path: f.path, text, version: f.version, force: !!force };
+    let [r, d] = await fileApi(body);
+    if (r.status === 409 && d.notOpen && f.picked) {        // the server was restarted: open the file again, then save
+      const [r2, d2] = await fileApi({ path: f.path }, "/api/open");
+      if (!r2.ok) throw new Error(d2.error || r2.statusText);
+      [r, d] = await fileApi(body);
+    }
+    if (r.status === 409 && d.conflict) return conflict();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    f.version = d.version; f.saved = text; f.blocked = false;
+    if (state.file === f) remember();
+    showFile();
+  } catch (e) {
+    f.blocked = true;                                       // not retried automatically; Save (Ctrl/⌘-S) tries again
+    showFile(["Not saved: " + e.message]);
+  } finally {
+    f.saving = false;
+    if (f.again) { f.again = false; if (state.file === f && unsaved() && !f.blocked) save(); }
+  }
+}
+
+function conflict() {                                       // the file changed on disk under us: never overwrite silently
+  state.file.blocked = true;
+  const b = (label, fn) => { const x = h("button", "", label); x.onclick = fn; return x; };
+  showFile([state.file.name + " changed on disk.",
+    b("Load disk version", async () => {
+      if (unsaved() && !confirm("Replace your unsaved changes with the version on disk?")) return;
+      const [r, d] = await fetchFile(state.file);
+      if (r.ok) setFile(d.text, d.version);
+    }),
+    b("Keep mine and overwrite", () => save(true))]);
+}
+
+window.addEventListener("focus", async () => {              // pick up edits made in another editor
+  if (!state.file || state.file.saving) return;
+  const f = state.file;
+  let r, d;
+  try { [r, d] = await fetchFile(f); } catch (e) { return; }
+  if (!r.ok || state.file !== f || f.saving || d.version === f.version) return;
+  if (unsaved()) conflict(); else setFile(d.text, d.version);
+});
+window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  if (e.key === "Escape") closePops();
+});
+$("save").onclick = () => save();
+$("saveItem").onclick = () => { closePops(); save(); };
+for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
+  e.preventDefault();
+  document.body.classList.toggle("drop", ev === "dragover" && !state.file);
+  if (state.file) return;                                   // a file is open: its text comes from that file
+  if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
+});
+$("today").value = store.get("today", "");
+$("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
+$("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
+for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
+$("defEffort").value = store.get("defEffort", "");
+$("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
+$("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };
+
+/* ---------- modes ---------- */
+function setMode(m) {
+  state.mode = m; store.set("mode", m);
+  render(true);
+}
+$("modes").onclick = e => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); };
+$("split").checked = store.get("split", "0") === "1";
+$("split").onchange = () => { store.set("split", $("split").checked ? "1" : "0"); layout(); };
+
+function layout() {
+  const plain = state.mode === "plain", split = $("split").checked;
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
+  $("editorPane").classList.toggle("hidden", !plain && !split);
+  $("editorPane").classList.toggle("solo", plain);
+  $("viewPane").classList.toggle("hidden", plain);
+  $("splitWrap").classList.toggle("hidden", plain);
+  $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
+  $("viewPane").classList.toggle("jump", split && state.mode === "planner");
+  if (state.mode !== "planner" && !(state.msg && state.msg.anyMode)) toast.classList.add("hidden");   // edit messages belong to Planner mode
+}
+
+/* Edit alongside: clicking a task (not one of its buttons) selects its line in the text box and scrolls it into view */
+$("viewPane").addEventListener("click", e => {
+  const row = e.target.closest("[data-line]");
+  if (!row || !$("viewPane").classList.contains("jump") || e.target.closest("button, input, select, a, .editbox, .pickbox")) return;
+  if (String(getSelection())) return;                   // the user is selecting text in the view, not jumping
+  goToLine(+row.dataset.line);
+});
+function goToLine(n) {
+  const v = editor.value, lines = v.split("\n");
+  if (!(n >= 1 && n <= lines.length)) return;
+  const start = lines.slice(0, n - 1).reduce((a, l) => a + l.length + 1, 0), end = start + lines[n - 1].length;
+  const m = document.createElement("div"), cs = getComputedStyle(editor);   // measure where the line sits, wrapping included
+  m.className = "measure";
+  for (const k of ["font", "letterSpacing", "tabSize", "padding", "border", "boxSizing"]) m.style[k] = cs[k];
+  m.style.width = editor.clientWidth + "px";
+  m.textContent = v.slice(0, start) + "\u200b";
+  document.body.append(m);
+  const y = m.scrollHeight - parseFloat(cs.paddingBottom) - parseFloat(cs.lineHeight);
+  m.remove();
+  editor.focus({ preventScroll: true });
+  editor.setSelectionRange(start, end);
+  editor.scrollTop = Math.max(0, y - editor.clientHeight / 3);       // the line a third of the way down
+}
+
+let timer;
+function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 200); }
+
+async function render(relayout) {
+  if (relayout) layout();
+  const view = $("viewPane");
+  if (state.mode === "plain") return;
+  if (state.mode === "markdown") {
+    view.replaceChildren(h("div", "md"));
+    view.firstChild.innerHTML = markdown(editor.value);    // markdown() escapes all input first
+    return;
+  }
+  const seq = ++state.seq;
+  try {
+    const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period, week: state.week }) });
+    const data = await r.json();
+    if (seq !== state.seq) return;
+    if (!r.ok) {
+      if (state.period) { setPeriod(null); return; }        // e.g. a stored period the server rejects: fall back to all dates
+      throw new Error(data.error || r.statusText);
+    }
+    state.data = data;
+    plannerView();
+  } catch (err) {
+    if (seq !== state.seq) return;
+    view.replaceChildren(h("div", "err", "Could not parse: " + err.message +
+      ". Planner mode needs the server: run  python planner.py --serve"));
+  }
+}
+
+/* ---------- planner views ---------- */
+const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "People"], ["upcoming", "Upcoming"], ["week", "Week"]];
+
+/* ---------- status clicks: the server rewrites only the task's status mark ---------- */
+const NEXT = { open: "doing", doing: "done", done: "open" };
+const STATUS_NAME = { open: "open", doing: "in progress", done: "done" };
+
+function replaceText(text) {           // swap in the new text, keeping the cursor and scroll where they were
+  const old = editor.value;
+  let a = 0, b = 0;
+  while (a < old.length && a < text.length && old[a] === text[a]) a++;
+  while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
+  const top = editor.scrollTop;
+  editor.setRangeText(text.slice(a, text.length - b), a, old.length - b, "preserve");
+  editor.scrollTop = top;
+  remember();
+  showFile();
+}
+
+async function editTask(t, op, value, btn, done) {   // -> true if the text changed (callers can await it to go on)
+  const before = editor.value, seq = ++state.seq;
+  let ok = false;
+  clearTimeout(timer);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null,
+        period: state.period, week: state.week }) });
+    const res = await r.json();
+    if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
+    if (!r.ok) throw new Error(res.error || r.statusText);
+    replaceText(res.text);
+    state.data = res.data;
+    state.msg = { text: done, undo: { before, after: res.text } };
+    ok = true;
+  } catch (err) {
+    state.msg = { text: "Not changed: " + err.message, bad: true };
+    if (seq === state.seq) { await render(false); return false; }
+  }
+  if (seq === state.seq) plannerView();
+  return ok;
+}
+const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
+
+/* a one-line input over a cell; Enter applies, Esc or leaving cancels; with `tab`, Tab / Shift-Tab apply and move on */
+function editCell(cell, placeholder, initial, apply, wide, fill, tab) {   // fill: from the cell's left edge to the row's right edge
+  const input = h("input"), box = h("span", "editbox" + (wide ? " wide" : "") + (fill ? " fill" : ""), input);
+  input.type = "text"; input.placeholder = placeholder; input.value = initial || "";
+  input.setAttribute("aria-label", placeholder);
+  const close = () => { if (box.isConnected) box.remove(); };
+  input.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); const v = input.value; input.onblur = null; close(); apply(v); }
+    else if (e.key === "Escape") { close(); cell.focus(); }
+    else if (e.key === "Tab" && tab) { e.preventDefault(); const v = input.value; input.onblur = null; close(); tab(e.shiftKey ? -1 : 1, v); }
+  };
+  input.onblur = close;
+  input.onclick = e => e.stopPropagation();
+  const row = cell.closest(".task");               // float over the cell's line, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.top - r.top) + "px"; box.style.height = c.height + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  input.style.maxWidth = Math.max(80, r.width) + "px";
+  if (fill) { box.style.left = Math.max(0, c.left - r.left) + "px"; box.style.right = "8px"; }
+  row.append(box);
+  if (!fill && box.getBoundingClientRect().left < r.left) {  // a narrow pane: it would stick out on the left, so keep it inside the row
+    box.style.right = "auto"; box.style.left = "0";
+  }
+  input.focus(); input.select();
+}
+/* a single-choice list under a cell (the Effort cell): arrows or a letter move, Enter or a click picks, Esc or leaving
+   cancels; with `tab`, Tab / Shift-Tab keep the choice (the one moved to, else the current one) and move on */
+function pickCell(cell, label, choices, current, apply, tab) {
+  const box = h("div", "pickbox");
+  box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label);
+  const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
+  const outside = e => { if (!box.contains(e.target)) close(); };
+  const items = choices.map(({ value, text, note, badge }) => {
+    const on = value === current;
+    const b = h("button", "mi", span("ck", on ? "✓" : ""), badge ? span("eff", text) : text, note ? span("k", note) : "");
+    b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(on));
+    b.onclick = e => { e.stopPropagation(); close(); apply(value); };
+    return b;
+  });
+  box.append(...items);
+  let moved = false;
+  box.onkeydown = e => {
+    e.stopPropagation();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); moved = true;
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key.length === 1 && /\w/.test(e.key)) {      // a letter: the next choice starting with it (s, m, l, x …)
+      const k = e.key.toLowerCase(), n = items.length;
+      for (let j = 1; j <= n; j++) {
+        const c = choices[(i + j) % n];
+        if (String(c.text).toLowerCase().startsWith(k)) { moved = true; items[(i + j) % n].focus(); break; }
+      }
+    } else if (e.key === "Tab" && tab) {
+      e.preventDefault(); close();
+      tab(e.shiftKey ? -1 : 1, moved && i >= 0 ? choices[i].value : current);
+    } else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); close(); cell.focus(); }
+  };
+  box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
+  box.onclick = e => e.stopPropagation();
+  const row = cell.closest(".task, .wcard, .wline");   // drop down from the cell, right edge on the cell's right edge
+  const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  box.style.top = (c.bottom - r.top + 2) + "px";
+  box.style.right = Math.max(0, r.right - c.right) + "px";
+  row.append(box);
+  if (box.getBoundingClientRect().left < r.left) { box.style.right = "auto"; box.style.left = "0"; }
+  document.addEventListener("pointerdown", outside, true);
+  (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
+}
+function cellButton(cls, label, tip, content, edit) {    // a Who / Effort / Date / + cell: shows its value, click edits it
+  const b = h("button", "cell " + cls, ...content);
+  b.title = tip; b.setAttribute("aria-label", label);
+  b.onclick = e => { e.stopPropagation(); edit(b); };
+  return b;
+}
+const ADD = () => span("add", "+");
+
+/* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
+   Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
+function addTaskRow(project, who = "") {           // who: People prefills that person's initials
+  const btn = h("button", "addtask", span("plus", "+"), "Add task");
+  btn.title = project ? "Add a task at the end of @" + project.name : "Add a task to a project";
+  btn.dataset.key = (project ? "p\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
+  const row = h("div", "addrow", btn);
+  btn.onclick = () => openAdd(btn, project, who);
+  return row;
+}
+/* + Add task: the title, then optional Who / Effort / Date fields (Tab moves between them), prefilled with the
+   defaults from ⋯. Enter adds it and opens the form again for the next one; Esc or clicking away ends. The fields
+   go to the server separately (op "task" with {title, who, effort, date}); the page never writes note syntax. */
+function openAdd(btn, project, presetWho, keep) {
+  const targets = state.data.targets;
+  if (!project && !targets.length) {
+    state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
+    return showToast();
+  }
+  const input = h("input");
+  input.type = "text"; input.placeholder = "new task"; input.setAttribute("aria-label", "New task");
+  const fWhoIn = h("input", "fwho"), fDate = h("input", "fdate");
+  fWhoIn.type = fDate.type = "text";
+  fWhoIn.placeholder = "Who"; fWhoIn.setAttribute("aria-label", "Who (initials)");
+  fDate.placeholder = "Date"; fDate.setAttribute("aria-label", "Date, like Oct24 or ~T1");
+  const fEff = h("select", "feff", h("option", "", "Effort"), ...EFFORTS.map(([v]) => h("option", "", v.toUpperCase())));
+  fEff.firstChild.value = ""; [...fEff.options].slice(1).forEach((o, i) => { o.value = EFFORTS[i][0]; });
+  fEff.setAttribute("aria-label", "Effort");
+  fWhoIn.value = keep ? keep.who : presetWho || store.get("defWho", "");
+  fEff.value = keep ? keep.effort : store.get("defEffort", "");
+  if (keep && keep.title) { input.value = keep.title; fDate.value = keep.date || ""; }
+  let sel = null;
+  if (!project) {
+    const count = {};
+    for (const t of targets) count[t.name] = (count[t.name] || 0) + 1;
+    sel = h("select", "", ...targets.map((t, i) => {
+      const o = h("option", "", "@" + t.name + (count[t.name] > 1 && t.section ? " (" + t.section + ")" : ""));
+      o.value = i;
+      return o;
+    }));
+    sel.setAttribute("aria-label", "Project");
+    const last = store.get("addTo", ""), at = i => targets[i].line + "\n" + targets[i].name;
+    const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
+    sel.value = pick;
+  }
+  const form = h("div", "addform", ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
+  let closed = false, pressing = false;
+  const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
+    if (closed) return;
+    closed = true;
+    form.replaceWith(btn);
+  };
+  form.addEventListener("pointerdown", () => { pressing = true; setTimeout(() => { pressing = false; }, 500); });
+  form.addEventListener("focusout", () => setTimeout(() => {   // leaving the form cancels (a click on its own picker doesn't)
+    if (!pressing && !form.contains(document.activeElement)) cancel();
+  }));
+  form.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Escape") { cancel(); btn.focus(); }
+    else if (e.key === "Enter" && e.target !== sel) {
+      e.preventDefault();
+      const v = input.value.trim(), p = project || targets[sel.value];
+      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim() };
+      cancel();
+      if (!v) return;
+      if (sel) store.set("addTo", p.line + "\n" + p.name);
+      const plain = !fields.who && !fields.effort && !fields.date;
+      const done = editTask({ line: p.line, title: p.name }, "task", plain ? v : fields, null, `Added "${v}" to @${p.name}.`);
+      done.then(ok => {                            // keep adding: the form again, empty, same Who / Effort; refused: as typed
+        const again = [...plannerBody.querySelectorAll(".addtask")].find(b => b.dataset.key === btn.dataset.key);
+        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields);
+      });
+    }
+  };
+  btn.replaceWith(form);
+  input.focus();
+}
+
+function undo() {
+  const u = state.msg && state.msg.undo;
+  state.msg = null;
+  if (u && editor.value === u.after) { replaceText(u.before); render(false); }
+  else plannerView();
+}
+
+const MARK = {                                  // open: ring; in progress: half-filled ring; done: filled with a check
+  open: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+  doing: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/>',
+  done: '<circle cx="9" cy="9" r="7.8" fill="currentColor"/><path d="M5.5 9.2l2.3 2.3 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+function statusBox(t) {
+  const b = h("button", "st");
+  b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${MARK[t.status]}</svg>`;   // fixed markup, no note text
+  b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.setAttribute("aria-label", b.title);
+  b.onclick = () => setStatus(t, NEXT[t.status], b);
+  return b;
+}
+
+/* ---------- filters (display only: they pick from the server's data, they never parse notes) ---------- */
+const FKEYS = { q: "fq", who: "fwho", proj: "fproj", done: "fdone" };
+const filt = { q: store.get("fq", ""), who: store.get("fwho", ""), proj: store.get("fproj", ""), done: store.get("fdone", "1") === "1" };
+const filterOn = () => !!(filt.q.trim() || filt.who || filt.proj || !filt.done);
+
+function filtered(d) {
+  if (!filterOn()) return d;
+  const q = filt.q.trim().toLowerCase();
+  const keep = (t, proj) => (!filt.proj || proj === filt.proj)
+    && (!filt.who || (filt.who === "(unassigned)" ? !t.assignees.length : t.assignees.includes(filt.who)))
+    && (!q || [t.title, ...t.notes, proj].join("\n").toLowerCase().includes(q));
+  const prune = (t, proj) => {                    // keep matching tasks, and their ancestors (dimmed) for context
+    const children = t.children.map(c => prune(c, proj)).filter(Boolean);
+    const self = !t.dim && keep(t, proj) && (filt.done || t.status !== "done");
+    return self || children.length ? { ...t, children, dim: !self } : null;
+  };
+  const flat = list => list.filter(t => keep(t, t.project));
+  const shown = t => filt.done || t.status !== "done";     // Projects and Timeline list done tasks unless "Show done tasks" is off
+  const u = d.upcoming;
+  return { ...d, filtered: true,
+    projects: d.projects.map(sec => ({ ...sec,
+      projects: sec.projects.map(p => ({ ...p, tasks: p.tasks.map(t => prune(t, p.name)).filter(Boolean) }))
+        .filter(p => p.tasks.length) })).filter(sec => sec.projects.length),
+    timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
+    people: d.people.filter(g => !filt.who || g.name === filt.who)
+      .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) },
+    week: { ...d.week, days: d.week.days.map(x => ({ ...x, tasks: flat(x.tasks).filter(shown) })),
+      projects: d.week.projects.map(g => ({ ...g, tasks: flat(g.tasks).filter(shown) })).filter(g => g.tasks.length),
+      backlog: d.week.backlog.map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length) } };
+}
+
+/* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
+try { state.period = JSON.parse(store.get("period", "null")); } catch (e) { state.period = null; }
+const icon = (d, size = 15) => {                // a small stroke icon (inline SVG, no library)
+  const n = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  n.setAttribute("width", size); n.setAttribute("height", size); n.setAttribute("viewBox", "0 0 24 24");
+  n.setAttribute("aria-hidden", "true");
+  n.innerHTML = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return n;
+};
+const pPrev = h("button", "", "‹"), pNext = h("button", "", "›"), pMid = h("button", "pmid"), pCaret = h("button", "pcaret", "▾");
+const pMenu = h("div", "menu hidden"), pctl = h("span", "pctl", pPrev, pMid, pNext, h("span", "pop", pCaret, pMenu));
+pCaret.setAttribute("aria-haspopup", "menu"); pCaret.setAttribute("aria-label", "All dates, by month or by season");
+pCaret.title = "Show all dates, one month or one season";
+popup(pCaret, pMenu);
+pMid.onclick = e => {                            // the date: back to this month / season; already there (or All dates): the menu
+  const per = state.data && state.data.period;
+  if (per && !per.current) return setPeriod(per.now);
+  e.stopPropagation(); pCaret.click();
+};
+function setPeriod(p) {
+  state.period = p ? { kind: p.kind, year: p.year, index: p.index } : null;
+  store.set("period", JSON.stringify(state.period));
+  render(false);
+}
+pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
+pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
+function showPeriod(per) {       // ‹ › name where they go (on hover); the date says what is showing and returns to now
+  const unit = per && (per.kind === "month" ? "month" : "season");
+  pctl.classList.toggle("on", !!per);
+  pctl.classList.toggle("away", !!per && !per.current);
+  pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
+  pMid.textContent = per ? per.short : "All dates";   // "Fall 2026"; the line above the list gives the months
+  pMid.title = !per ? "Show all dates, one month or one season"
+    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
+  const item = (label, note, on, pick, disabled) => {
+    const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
+    b.onclick = () => { closePops(); pick(); };
+    return b;
+  };
+  const kind = per ? per.kind : "";
+  pMenu.replaceChildren(
+    item("All dates", kind === "" ? "✓" : "", kind === "", () => kind && setPeriod(null)),
+    item("By month", kind === "month" ? "✓" : "", kind === "month", () => kind !== "month" && setPeriod({ kind: "month" })),
+    item("By season", kind === "season" ? "✓" : "Winter, Summer, Fall", kind === "season", () => kind !== "season" && setPeriod({ kind: "season" })),
+    ...(per ? [h("div", "sep"), item("This " + unit, per.current ? "you're here" : per.now.label, false, () => setPeriod(per.now), per.current)] : []));
+  if (!per) return;
+  for (const [b, dir, to] of [[pPrev, "Previous", per.prev], [pNext, "Next", per.next]]) {
+    b.title = `${dir} ${unit}: ${to.label}`; b.setAttribute("aria-label", b.title);
+  }
+}
+
+/* ---------- week: ‹ Oct 12-18 › on the Week tab (the server does the date math; not remembered: it opens on this week) ---------- */
+state.week = null;
+const wPrev = h("button", "", "‹"), wNext = h("button", "", "›"), wMid = h("button", "pmid");
+const wctl = h("span", "pctl on hidden", wPrev, wMid, wNext);
+const setWeek = w => { state.week = w ? { year: w.year, index: w.index } : null; render(false); };
+wPrev.onclick = () => setWeek(state.data.week.prev);
+wNext.onclick = () => setWeek(state.data.week.next);
+wMid.onclick = () => { if (!state.data.week.current) setWeek(null); };
+function showWeek(w, on) {
+  wctl.classList.toggle("hidden", !on); pctl.classList.toggle("hidden", on);
+  if (!on) return;
+  wctl.classList.toggle("away", !w.current);
+  wMid.textContent = w.label;
+  wMid.title = w.current ? "This week. Use ‹ › to step" : "Back to this week: " + w.now.label;
+  for (const [b, dir, to] of [[wPrev, "Previous", w.prev], [wNext, "Next", w.next]]) {
+    b.title = `${dir} week: ${to.label}`; b.setAttribute("aria-label", b.title);
+  }
+}
+
+/* ---------- tool row: tabs, then search, Filter (person, project, show done) and the period ---------- */
+const fQ = h("input"), fWho = h("select"), fProj = h("select"), fDone = h("input");
+const fClear = h("button", "ghost", "Clear filters"), fCount = span("badge", "");
+fQ.type = "search"; fQ.placeholder = "Search"; fQ.value = filt.q; fQ.setAttribute("aria-label", "Search tasks, notes and projects");
+fDone.type = "checkbox"; fDone.checked = filt.done;
+const fBtn = h("button", "", icon("M4 6h16M7 12h10M10 18h4"), " Filter ", fCount);
+fBtn.setAttribute("aria-haspopup", "dialog");
+fBtn.style.cssText = "display: inline-flex; align-items: center; gap: 4px";
+const fPanel = h("div", "menu panel hidden",
+  h("label", "field", "Person", fWho), h("label", "field", "Project", fProj),
+  h("label", "check", fDone, "Show done tasks"), h("div", "", fClear));
+fPanel.lastChild.style.cssText = "display: flex; justify-content: flex-end";
+popup(fBtn, fPanel);
+const tabsBox = h("span", "tabs"), tabsRow = h("div", "toolbar", tabsBox,
+  h("span", "tools", h("label", "search", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5"), fQ),
+    h("span", "pop", fBtn, fPanel), pctl, wctl));
+const contextLine = h("div", "context"), plannerBody = h("div"), contentBox = h("div", "content", contextLine, plannerBody);
+const toast = h("div", "toast hidden");
+toast.setAttribute("role", "status");
+document.body.append(toast);
+function setFilt(k, v) {
+  filt[k] = v; store.set(FKEYS[k], k === "done" ? (v ? "1" : "0") : v);
+  plannerView();
+}
+fQ.oninput = () => setFilt("q", fQ.value);
+fQ.onkeydown = e => { if (e.key === "Escape") { fQ.value = ""; setFilt("q", ""); } };
+fWho.onchange = () => setFilt("who", fWho.value);
+fProj.onchange = () => setFilt("proj", fProj.value);
+fDone.onchange = () => setFilt("done", fDone.checked);
+fClear.onclick = () => {
+  fWho.value = ""; fProj.value = ""; fDone.checked = true;
+  for (const [k, v] of [["who", ""], ["proj", ""]]) { filt[k] = v; store.set(FKEYS[k], v); }
+  setFilt("done", true);
+};
+function options(sel, names, current, all) {     // a chosen name stays listed even if it has no tasks right now
+  const list = [...new Set([...names, ...(current ? [current] : [])])];
+  const key = list.join("\n");
+  if (sel.dataset.opts !== key) {
+    sel.replaceChildren(h("option", "", all), ...list.map(n => h("option", "", n)));
+    sel.firstChild.value = "";
+    sel.dataset.opts = key;
+  }
+  sel.value = current;
+}
+
+function showToast() {                           // the last edit's message, with Undo while it still applies
+  const m = state.msg;
+  toast.classList.toggle("hidden", !m);
+  if (!m) return toast.replaceChildren();
+  toast.classList.toggle("bad", !!m.bad);
+  const close = h("button", "", "×"); close.setAttribute("aria-label", "Dismiss");
+  close.onclick = () => { state.msg = null; showToast(); };
+  const undoBtn = m.undo && h("button", "", "Undo");
+  if (undoBtn) undoBtn.onclick = undo;
+  toast.replaceChildren(...[span("", m.text), undoBtn, close].filter(Boolean));
+}
+
+function plannerView() {
+  if (state.switched) {                             // another file: drop a person or project filter it doesn't have
+    state.switched = false;
+    if (filt.who && filt.who !== "(unassigned)" && !state.data.people.some(g => g.name === filt.who)) { filt.who = ""; store.set(FKEYS.who, ""); }
+    if (filt.proj && !state.data.targets.some(t => t.name === filt.proj)) { filt.proj = ""; store.set(FKEYS.proj, ""); }
+  }
+  const view = $("viewPane"), d = filtered(state.data);
+  options(fWho, state.data.people.map(g => g.name), filt.who, "Everyone");
+  options(fProj, state.data.projects.flatMap(sec => sec.projects.map(p => p.name)), filt.proj, "All projects");
+  const n = [filt.who, filt.proj, !filt.done].filter(Boolean).length;
+  fCount.textContent = n ? String(n) : "";
+  fBtn.title = n ? `${n} filter${n > 1 ? "s" : ""} on` : "Filter by person or project, or hide done tasks";
+  fClear.disabled = !n;
+  showPeriod(state.data.period);
+  showWeek(state.data.week, state.tab === "week");
+  contentBox.classList.toggle("wide", state.tab === "week");
+  const tabs = [];
+  for (const [id, label] of TABS) {
+    const b = h("button", "tab" + (id === state.tab ? " on" : ""), label);
+    b.onclick = () => { state.tab = id; store.set("tab", id); plannerView(); };
+    tabs.push(b);
+  }
+  tabsBox.replaceChildren(...tabs);
+  const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
+  if ($("today").value.trim()) bits.push("As of " + d.today_label);
+  if (state.tab === "week") bits.push("Drag a task onto a day, or use its Plan cell" + (per ? " · the period doesn't apply here" : ""));
+  else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+    state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
+  contextLine.textContent = bits.join(" · ");
+  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, week: vWeek }[state.tab](d));
+  showToast();
+  if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
+}
+
+const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
+const guides = depth => Array.from({ length: depth }, () => span("g"));
+
+/* one task row: [guides][status][@project][title] | Who | Effort | Date | + ; the last four are click-to-edit cells */
+/* Tab between a row's editable parts: title → Who → Effort → Date → the next row's title (Shift-Tab goes back).
+   `applied` is the edit being saved (or nothing); the views are redrawn after it, so the row is found again by its line. */
+const TAB_ORDER = ["title", "who", "size", "date"];
+function findAgain(row) {                         // -> () => the same task's row after a redraw (by line, and which copy)
+  const rows = () => [...plannerBody.querySelectorAll(".task")];
+  const line = row.dataset.line, nth = rows().filter(r => r.dataset.line === line).indexOf(row);
+  return () => { const same = rows().filter(r => r.dataset.line === line); return same[nth] || same[0]; };
+}
+async function tabTo(row, kind, dir, applied) {
+  const again = findAgain(row);
+  const ok = await applied;
+  if (applied && ok === false) return;               // refused: stay put (the message says why)
+  const here = again();
+  if (!here) return;
+  const all = [...plannerBody.querySelectorAll(".task")];
+  let i = TAB_ORDER.indexOf(kind) + dir, to = here;
+  if (i >= TAB_ORDER.length) { to = all[all.indexOf(here) + 1]; i = 0; }
+  else if (i < 0) { to = all[all.indexOf(here) - 1]; i = TAB_ORDER.length - 1; }
+  if (to && to.open) to.open[TAB_ORDER[i]]();
+}
+
+function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
+  const row = h("div", "task s-" + t.status);
+  row.style.setProperty("--d", depth);
+  row.title = "line " + t.line;                         // hover shows where the task is in the text
+  row.dataset.line = t.line;
+  const lead = h("div", "lead", ...guides(depth), statusBox(t));
+  if (project) lead.append(span("proj", "@" + t.project));
+  const ttl = span("ttl", t.title);
+  lead.append(ttl);
+  const open = row.open = {};                           // each editable part's editor, so Tab can move between them
+  const tabber = kind => (dir, v) => tabTo(row, kind, dir, open[kind].apply(v));
+  open.title = () => {                                  // edit the task's text
+    if (typeof t.text !== "string") {                   // a server started before title editing existed sends no `text`
+      state.msg = { text: "To edit a task's text, restart the server (python3 planner.py --serve).", bad: true };
+      return showToast();
+    }
+    editCell(ttl, "task, like  draft (KA) (m) Oct24", t.text, open.title.apply, false, true, tabber("title"));
+  };
+  open.title.apply = v => {
+    v = v.trim();
+    if (!v || v === t.text) return;
+    return editTask(t, "text", v, null, `Changed "${t.title}".`);
+  };
+  ttl.onclick = e => {                                  // with Edit alongside the click jumps to the line instead
+    if ($("viewPane").classList.contains("jump") || String(getSelection())) return;
+    e.stopPropagation();
+    open.title();
+  };
+
+  const current = t.assignees.join(", ");
+  const who = cellButton("who r", "Change initials", current ? `${current}. Click to change (empty removes)` : "Assign: add initials",
+    [current ? span("t", current) : ADD()],
+    cell => editCell(cell, "initials: KA, RT (empty removes)", current, open.who.apply, false, false, tabber("who")));
+  open.who = () => who.click();
+  open.who.apply = v => {
+    const next = v.trim().split(/[\s,]+/).filter(Boolean).join(", ");
+    if (next === current) return;
+    return editTask(t, "who", v, null, next ? `Set "${t.title}" to ${next}.` : `Removed the initials from "${t.title}".`);
+  };
+
+  const eff = t.effort && span("eff", t.effort.toUpperCase());
+  const size = cellButton("size mid", "Set effort", t.effort ? `effort: ${pts(t.points)}. Click to change` : "Set effort: XS, S, M, L or XL",
+    [eff || ADD()],
+    cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
+      { value: "", text: "None" }], t.effort || "", open.size.apply, tabber("size")));
+  open.size = () => size.click();
+  open.size.apply = v => {
+    if (v === (t.effort || "")) return;
+    return editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`);
+  };
+
+  // Date: own dates, or (in People / Upcoming) the span, which may come from the parent or the subtasks (italic)
+  const sp = t.span, inherited = useSpan && !date && sp && sp.how !== "own";
+  const full = date ?? (useSpan ? sp && sp.label : t.when);
+  const shown = !date && t.loose && (!useSpan || (sp && sp.how === "own")) ? "~" + t.loose : full;
+  const rems = rem ? [rem] : t.reminders.map(r => "*" + r.spec);
+  const content = [];
+  if (rems.length) { const bell = icon(BELL, 12); content.push(bell); }
+  content.push(shown ? span("t", shown) : ADD());
+  if (t.overdue) content.push(span("sr", " (overdue)"));
+  const tip = [full && (inherited ? `${full} (from its ${sp.how === "parent" ? "parent" : "subtasks"})` : full),
+    t.overdue && "overdue", rems.length && "reminder " + rems.join(", "), "click to change"].filter(Boolean).join(" · ");
+  const dateCell = cellButton("date r" + (t.overdue ? " late" : "") + (inherited ? " inh" : ""), "Set date", tip, content,
+    cell => editCell(cell, "Oct24, Oct23--26, ~Q1, ~T1 (empty clears)", t.date_text, open.date.apply, false, false, tabber("date")));
+  open.date = () => dateCell.click();
+  open.date.apply = v => {
+    v = v.trim();
+    if (v === (t.date_text || "")) return;
+    return editTask(t, "date", v, null, v ? `Set "${t.title}" to ${v}.` : `Cleared the date of "${t.title}".`);
+  };
+
+  const sub = cellButton("sub mid", "Add a subtask", "Add subtasks (Enter adds one and opens the next; Esc ends)", [ADD()],
+    () => open.sub(""));
+  open.sub = (initial = "") => editCell(sub, "new subtask, like  draft (KA) Oct24 (Esc ends)", initial, v => {
+    v = v.trim();
+    if (!v) return;
+    const again = findAgain(row);
+    editTask(t, "subtask", v, null, `Added "${v}" under "${t.title}".`)
+      .then(ok => { const here = again(); if (here) here.open.sub(ok ? "" : v); });   // keep adding; refused: as typed
+  }, true);
+
+  if (week) {                                            // the Week backlog: a Plan cell instead of + (subtask)
+    row.classList.add("wrow");
+    const plan = cellButton("plan r", "Plan for a day", t.plan ? `Planned for ${t.plan_label} (another week). Click to plan it this week`
+      : "Plan for a day this week", [t.plan ? span("t", t.plan_label) : span("add", "Plan")], cell => planPick(cell, t, week));
+    row.append(lead, who, size, dateCell, plan);
+    return row;
+  }
+  row.append(lead, who, size, dateCell, sub);
+  return row;
+}
+const pts = n => n + (n === 1 ? " pt" : " pts");
+const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
+const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
+const tasksN = n => n + (n === 1 ? " task" : " tasks");
+
+function noteNode(text, depth) { return h("div", "note", ...guides(depth), span("pad"), text); }
+const countTasks = list => list.reduce((n, c) => n + 1 + countTasks(c.children), 0);
+function treeNode(t, depth = 0, key = "") {      // a task and its subtree; a task with subtasks folds (key: its path of titles)
+  const row = taskNode(t, { depth });
+  if (t.dim) { row.classList.add("dim"); row.title += " (shown because a subtask matches the filter)"; }
+  key += "\n" + t.title;
+  let shut = false;
+  if (t.children.length && !filterOn()) {          // while searching or filtering, everything is open
+    const set = foldSet("collapsedTasks"), n = countTasks(t.children);
+    shut = set.has(key);
+    const tog = h("button", "tog", icon(CHEVRON, 12));
+    tog.title = shut ? `Show ${tasksN(n).replace("task", "subtask")}` : "Hide the subtasks";
+    tog.setAttribute("aria-label", tog.title); tog.setAttribute("aria-expanded", String(!shut));
+    tog.onclick = e => {
+      e.stopPropagation();
+      set[set.has(key) ? "delete" : "add"](key);
+      store.set("collapsedTasks", JSON.stringify([...set]));
+      plannerView();
+    };
+    row.prepend(tog);
+    if (shut) { row.classList.add("shut"); row.querySelector(".lead").append(span("hidden-n", tasksN(n).replace("task", "subtask"))); }
+  }
+  return h("div", "", row, ...(shut ? [] : [...t.notes.map(n => noteNode(n, depth)), ...t.children.map(c => treeNode(c, depth + 1, key))]));
+}
+function colHead(title, when) {                  // a section heading that also labels the right-hand columns
+  return h("div", "sechead", h("h2", "", title, when && span("when", when)),
+    span("c r", "Who"), span("c mid", "Effort"), span("c r", "Date"), span("c", ""));
+}
+
+/* folds, remembered per browser: in Projects, sections ("collapsedSections"), projects ("collapsed") and tasks with
+   subtasks ("collapsedTasks", by section, project and the path of titles); in People, people ("collapsedPeople") */
+const folds = {};
+function foldSet(name) {
+  if (!folds[name]) try { folds[name] = new Set(JSON.parse(store.get(name, "[]"))); } catch (e) { folds[name] = new Set(); }
+  return folds[name];
+}
+const CHEVRON = "M9 6l6 6-6 6";
+/* a heading that folds its rows away: returns [heading, shut]. While searching or filtering, everything is open. */
+/* a fold button: returns [button, shut]. While searching or filtering, everything is open and the button is inactive. */
+function foldButton(name, key, what, label) {
+  const set = foldSet(name), open = filterOn(), shut = !open && set.has(key);
+  const fold = h("button", "fold", icon(CHEVRON, 14), ...label);
+  fold.setAttribute("aria-expanded", String(!shut));
+  fold.title = open ? `${what[0].toUpperCase() + what.slice(1)}s stay open while a search or filter is on`
+    : (shut ? "Show" : "Hide") + ` this ${what}'s tasks`;
+  fold.disabled = open;
+  fold.onclick = () => {
+    set[set.has(key) ? "delete" : "add"](key);
+    store.set(name, JSON.stringify([...set]));
+    plannerView();
+  };
+  return [fold, shut];
+}
+function foldHead(name, key, what, label, count) {   // a project or person heading that folds its rows away
+  const [fold, shut] = foldButton(name, key, what, label);
+  return [h("h3", "ph" + (shut ? " shut" : ""), fold, count), shut];
+}
+function vProjects(d) {
+  const out = h("div");
+  for (const sec of d.projects) {
+    const [sfold, sshut] = foldButton("collapsedSections", sec.title || "", "section", [sec.title || "Projects"]);
+    const head = colHead(sfold, sec.when);
+    out.append(head);
+    if (sshut) {                                   // folded: just the heading, with how many projects it holds
+      head.classList.add("shut");
+      head.firstChild.append(span("when", sec.projects.length + (sec.projects.length === 1 ? " project" : " projects")));
+      continue;
+    }
+    for (const p of sec.projects) {
+      const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
+      const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + p.name, "project", [span("at", "@"), p.name],
+        span("count", p.done + "/" + p.total + " done" + effort));
+      out.append(head);
+      if (shut) continue;
+      for (const n of p.notes) out.append(noteNode(n, 0));
+      for (const t of p.tasks) out.append(treeNode(t, 0, (sec.title || "") + "\n" + p.name));
+      out.append(addTaskRow(p));
+    }
+  }
+  if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
+  return out;
+}
+function welcome() {                             // first run: no notes yet
+  const out = h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
+    h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24 , or open a file from the ⋯ menu."));
+  if (!editor.value.trim() && !state.file) {
+    const b = h("button", "", "Load the example");
+    b.onclick = async () => {
+      try { const r = await fetch("/api/example"); const d = await r.json(); if (r.ok && !editor.value.trim()) loadText(d.text, "example.kf"); }
+      catch (e) {}
+    };
+    out.append(b);
+  }
+  return out;
+}
+
+function vTimeline(d) {
+  const tl = d.timeline, out = h("div");
+  if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
+  else {
+    const head = h("tr", "", h("th", "", "Task"));
+    for (const c of tl.columns) { const th = h("th", "m", c.head); th.title = c.start + " to " + c.end; head.append(th); }
+    head.append(h("th", "", "When"));
+    const table = h("table", "tl", head);
+    for (const t of tl.rows) {
+      const label = t.title + (t.assignees.length ? " (" + t.assignees.join(", ") + ")" : "");
+      const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
+      nm.title = "@" + t.project + "  " + label;
+      const tr = h("tr", t.status === "done" ? "done" : "", nm);
+      tr.dataset.line = t.line;
+      t.bar.forEach((on, i) => {
+        const prev = t.bar[i - 1], next = t.bar[i + 1];
+        const cell = h("i", on ? "on" : "");
+        if (on && !prev) cell.classList.add("s");           // round only the bar's two ends
+        if (on && !next) cell.classList.add("e");
+        tr.append(h("td", "c", cell));
+      });
+      const w = h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""));
+      w.title = t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "");
+      if (t.span.how !== "own") w.style.fontStyle = "italic";
+      tr.append(w);
+      table.append(tr);
+    }
+    out.append(h("div", "tlwrap", table));
+  }
+  if (tl.unscheduled.length) {
+    out.append(h("h4", "grp", "Unscheduled"));
+    for (const t of tl.unscheduled) out.append(taskNode(t, { project: true }));
+  }
+  if (d.targets.length) out.append(addTaskRow(null));
+  return out;
+}
+
+function vPeople(d) {
+  const out = h("div");
+  for (const g of d.people) {
+    const effort = sumPts(g.tasks);                // the tasks shown, so it follows the filters
+    if (!out.children.length) out.append(colHead("People"));
+    const [head, shut] = foldHead("collapsedPeople", g.name, "person", [g.name],
+      span("count", tasksN(g.tasks.length) + (effort ? ", " + pts(effort) : "")));
+    out.append(head);
+    if (shut) continue;
+    for (const t of g.tasks) out.append(taskNode(t, { project: true, span: true }));
+    out.append(addTaskRow(null, g.name === "(unassigned)" ? "" : g.name));
+  }
+  if (!d.people.length) out.append(h("div", "empty", d.filtered ? "No matching tasks." : "No open tasks."));
+  if (!d.people.length && d.targets.length) out.append(addTaskRow(null));
+  return out;
+}
+
+function vUpcoming(d) {
+  const u = d.upcoming, out = h("div", "", colHead(`Next ${u.days} days`, "to " + u.horizon));
+  const group = (title, items, row) => {          // empty groups are left out
+    if (!items.length) return;
+    out.append(h("h4", "grp", title));
+    for (const t of items) out.append(row(t));
+  };
+  group("Overdue", u.overdue, t => taskNode(t, { project: true, span: true }));
+  group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
+  group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
+  group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
+  if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
+    : "Nothing due, overdue or in progress in the next " + u.days + " days."));
+  if (d.targets.length) out.append(addTaskRow(null));
+  return out;
+}
+
+/* ---------- Week: plan tasks for days (>MonDD in the task's line, edit op "plan"); the server groups them ---------- */
+let dragged = null;                              // the task being dragged (this page only)
+function planPick(cell, t, w) {                 // the day list: Mon … Sat/Sun, and Unplan when it is planned
+  const day = w.days.find(x => x.dates.includes(t.plan));
+  pickCell(cell, "Plan for", [...w.days.map(x => ({ value: x.token, text: x.head, note: x.today ? "today" : "" })),
+    ...(t.plan ? [{ value: "", text: "Unplan" }] : [])], day ? day.token : null, v => planTask(t, v, w));
+}
+function planTask(t, token, w) {
+  const day = w.days.find(x => x.token === token), was = w.days.find(x => x.dates.includes(t.plan));
+  if (token && day === was) return;
+  editTask(t, "plan", token, null, !token ? `Unplanned "${t.title}".` : was ? `Moved "${t.title}" to ${day.head}.`
+    : `Planned "${t.title}" for ${day.head}.`);
+}
+function draggable(el, t) {
+  el.draggable = true;
+  el.addEventListener("dragstart", e => { dragged = t; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.title); });
+  el.addEventListener("dragend", () => { dragged = null; });
+}
+function dropZone(el, onDrop) {
+  el.addEventListener("dragover", e => { if (!dragged) return; e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
+  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const t = dragged; dragged = null; if (t) onDrop(t); });
+}
+function weekItem(cls, t, w, extra) {           // a planned task: status, title (+ meta); a click opens the day list, drag moves it
+  const body = h("span", "wbody", span("wt", t.title), ...extra);
+  const el = h("div", cls + " s-" + t.status, statusBox(t), body);
+  el.dataset.line = t.line;
+  el.title = "@" + t.project + "  " + t.title + "  (line " + t.line + ")";
+  el.onclick = e => {
+    if ($("viewPane").classList.contains("jump") || e.target.closest("button")) return;   // Edit alongside: the click jumps instead
+    e.stopPropagation(); planPick(el, t, w);
+  };
+  draggable(el, t);
+  return el;
+}
+function vWeek(d) {
+  const w = d.week, out = h("div");
+  const days = h("div", "wdays");
+  for (const day of w.days) {
+    const col = h("div", "wday" + (day.today ? " today" : ""), h("div", "whead", day.head + (day.today ? " · today" : "")));
+    for (const t of day.tasks)
+      col.append(weekItem("wcard", t, w, [span("wmeta", "@" + t.project + (t.effort ? " · " + t.effort.toUpperCase() : ""))]));
+    dropZone(col, t => planTask(t, day.token, w));
+    days.append(col);
+  }
+  const side = h("div", "wside", h("h4", "grp", "This week"));
+  for (const g of w.projects) {
+    const total = sumPts(g.tasks);                 // the tasks shown, so it follows the filters
+    side.append(h("div", "wproj", h("div", "wpname", "@" + g.name),
+      ...g.tasks.map(t => { const day = w.days.find(x => x.dates.includes(t.plan));
+        return weekItem("wline", t, w, [span("wd", day ? day.head.split(" ")[0] : t.plan_label)]); }),
+      h("div", "wsum", pts(total))));
+  }
+  if (!w.projects.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
+  out.append(h("div", "wtop", days, side));
+  const back = h("div", "wback", colHead("Backlog", "open tasks not planned this week"));
+  back.firstChild.classList.add("wrow");
+  back.firstChild.lastChild.textContent = "Plan";
+  back.firstChild.lastChild.classList.add("r");
+  for (const g of w.backlog) {
+    back.append(h("h3", "ph", h("span", "", span("at", "@"), g.name)));
+    for (const t of g.tasks) {                   // drag by the title side (the row's inputs stay selectable)
+      const row = taskNode(t, { depth: t.depth, week: w });
+      draggable(row.querySelector(".lead"), t);
+      back.append(row);
+    }
+  }
+  if (!w.backlog.length) back.append(h("div", "empty", d.filtered ? "No matching open tasks." : "Every open task is planned this week."));
+  dropZone(back, t => t.plan && planTask(t, "", w));   // drop a planned task here to unplan it
+  out.append(back);
+  return out;
+}
+
+/* ---------- markdown (small, safe: everything is escaped before any tag is added) ---------- */
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function inline(s) {
+  s = esc(s);
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => "\u0000" + (codes.push("<code>" + c + "</code>") - 1) + "\u0000");
+  s = s.replace(/!?\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+       .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => "<strong>" + (a || b) + "</strong>")
+       .replace(/(^|[^\w*])\*([^*\s][^*]*?)\*(?!\w)|(^|[^\w_])_([^_\s][^_]*?)_(?!\w)/g,
+                (m, p1, a, p2, b) => (p1 ?? p2) + "<em>" + (a || b) + "</em>")
+       .replace(/~~(.+?)~~/g, "<del>$1</del>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[+i]);
+}
+function markdown(src) {
+  const lines = src.replace(/\r\n?/g, "\n").split("\n"), out = [];
+  let i = 0;
+  const isBlock = l => /^(#{1,6}\s|```|>|\s*([-*+]|\d+\.)\s|(-{3,}|\*{3,})\s*$|\|)/.test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    let m;
+    if (/^```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push("<pre><code>" + esc(buf.join("\n")) + "</code></pre>");
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(l))) {
+      out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); i++;
+    } else if (/^(-{3,}|\*{3,})\s*$/.test(l)) { out.push("<hr>"); i++; }
+    else if (/^>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^>/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ""));
+      out.push("<blockquote>" + markdown(buf.join("\n")) + "</blockquote>");
+    } else if (/^\|/.test(l) && /^\|?\s*:?-+/.test(lines[i + 1] || "")) {
+      const row = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let t = "<table><tr>" + row(l).map(c => "<th>" + inline(c) + "</th>").join("") + "</tr>"; i += 2;
+      while (i < lines.length && /^\|/.test(lines[i])) t += "<tr>" + row(lines[i++]).map(c => "<td>" + inline(c) + "</td>").join("") + "</tr>";
+      out.push(t + "</table>");
+    } else if (/^\s*([-*+]|\d+\.)\s/.test(l)) {
+      const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s/.test(lines[i])) items.push(lines[i++]);
+      out.push(list(items));
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !(buf.length && isBlock(lines[i]))) buf.push(lines[i++]);
+      out.push("<p>" + buf.map(inline).join("<br>") + "</p>");
+    }
+  }
+  return out.join("\n");
+}
+function list(items) {                                  // nested by indent (tab = 4 spaces)
+  const parse = l => { const m = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(l.replace(/\t/g, "    ")); return { d: m[1].length, ord: /\d/.test(m[2]), text: m[3] }; };
+  const rows = items.map(parse);
+  let pos = 0;
+  function build(depth) {
+    const ord = rows[pos].ord;
+    const tasks = rows[pos] && /^\[[ xX]\]\s/.test(rows[pos].text);
+    let html = `<${ord ? "ol" : "ul"}${tasks ? ' class="tasks"' : ""}>`;
+    while (pos < rows.length && rows[pos].d >= depth) {
+      if (rows[pos].d > depth) { html = html.replace(/<\/li>$/, "") + build(rows[pos].d) + "</li>"; continue; }
+      let text = rows[pos++].text, box = "";
+      const c = /^\[([ xX])\]\s+(.*)$/.exec(text);
+      if (c) { box = `<input type="checkbox" disabled${c[1] === " " ? "" : " checked"}> `; text = c[2]; }
+      html += "<li>" + box + inline(text) + "</li>";
+    }
+    return html + `</${ord ? "ol" : "ul"}>`;
+  }
+  return build(rows[0].d);
+}
+
+/* ---------- start ---------- */
+if (!["plain", "planner", "markdown"].includes(state.mode)) state.mode = "plain";
+render(true);
+startFileMode();
