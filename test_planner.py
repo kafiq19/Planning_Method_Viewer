@@ -1190,7 +1190,7 @@ class TestServer(Base):
 
     def test_no_portfolio(self):
         with urllib.request.urlopen(self.url + "/api/portfolio") as r:
-            self.assertEqual(json.loads(r.read()), {"name": None})
+            self.assertEqual(json.loads(r.read()), {"name": None, "can": self.notes is None})
         self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "X"})[0], 409)
         self.assertEqual(self.post("/api/parse", {"all": True})[0], 409)
 
@@ -1307,6 +1307,28 @@ class TestServerPickedFile(Base):
 
     def get(self, path):
         return self.send(urllib.request.Request(self.url + path))
+
+    def test_open_or_make_a_portfolio_from_the_page(self):
+        os.makedirs(os.path.join(self.root, "folio", "HDC"))
+        code, d = self.post("/api/portfolio", {"op": "use", "path": os.path.join(self.root, "folio")})
+        self.assertEqual((code, d["name"], d["root"], [p["name"] for p in d["projects"]]),
+                         (200, "folio", os.path.join(self.root, "folio"), ["HDC"]))
+        self.assertEqual(self.get("/api/portfolio")[1]["root"], os.path.join(self.root, "folio"))
+        self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "MDM"})[0], 200)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "folio", "MDM")))
+        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "notes.md")})[0], 409)   # a portfolio is open
+        self.assertEqual(self.post("/api/portfolio", {"op": "leave"})[1], {"left": True})
+        self.assertEqual(self.get("/api/portfolio")[1], {"name": None, "can": True})
+        code, d = self.post("/api/portfolio", {"op": "use", "path": "~/Kafeen", "create": True})   # ~: the browse root
+        self.assertEqual((code, d["projects"], d["root"]), (200, [], os.path.join(self.root, "Kafeen")))
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "Kafeen")))
+        for body, code in [({"op": "use", "path": os.path.join(self.root, "Kafeen"), "create": True}, 409),   # exists
+                           ({"op": "use", "path": os.path.dirname(self.root)}, 403),                         # outside home
+                           ({"op": "use", "path": os.path.join(self.root, "nope")}, 404),
+                           ({"op": "use", "path": os.path.join(self.root, "a", "b"), "create": True}, 403),   # no parent
+                           ({"op": "use", "path": os.path.join(self.root, "notes.md")}, 404)]:              # a file
+            with self.subTest(body=body):
+                self.assertEqual(self.post("/api/portfolio", body)[0], code)
 
     def test_browse_lists_folders_and_notes_files(self):
         code, d = self.get("/api/browse?dir=" + urllib.parse.quote(self.root))
@@ -2004,8 +2026,12 @@ class TestServerPortfolio(Base):
         self.assertEqual(self.post("/api/archive", {"path": "HDC/backlog.kf", "version": self.file("HDC/backlog.kf")[1]["version"],
                                                     "archive_year": 2026, "habit_log": True})[0], 409)
 
-    def test_file_browser_is_off(self):
-        self.assertEqual(self.get("/api/browse")[0], 409)
+    def test_switch_portfolio_only_inside_home(self):
+        self.assertEqual(self.post("/api/portfolio", {"op": "use", "path": self.root})[0], 403)   # (a temp folder)
+        self.assertEqual(self.get("/api/portfolio")[1]["root"], self.root)
+
+    def test_file_browser_only_lists(self):
+        self.assertEqual(self.get("/api/browse")[0], 200)                     # listing folders: fine (to switch portfolios)
         self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "secret.txt")})[0], 409)
 
 

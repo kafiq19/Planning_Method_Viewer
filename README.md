@@ -162,7 +162,7 @@ python planner.py --import notes.txt ~/Kafeen           # one project, named aft
 python planner.py --import notes.txt ~/Kafeen --split   # one project per @ line
 ```
 
-Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio. In the terminal, `python planner.py ~/Kafeen` (or `… ~/Kafeen week`) shows the views over every project, the week with each day's habits.
+Your lines are copied exactly; nothing in `notes.txt` changes. Start the planner as usual (`python planner.py --serve`) and **click the KAFEEN logo**: the drawer offers **Create a portfolio** (a new folder in your home folder, called Kafeen unless you change it) or **Open a folder…** to use one you have. The page remembers it and opens it again next time; **Switch portfolio…** and **Close portfolio** are at the bottom of the drawer. You can also start with a folder, `python planner.py --serve ~/Kafeen` (and `python planner.py --serve example` serves a sample portfolio). In the terminal, `python planner.py ~/Kafeen` (or `… ~/Kafeen week`) shows the views over every project, the week with each day's habits.
 
 In the page, **click the KAFEEN logo** to open the project drawer:
 

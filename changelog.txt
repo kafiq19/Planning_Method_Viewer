@@ -5,6 +5,21 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.6  2026-11-06  The project drawer without a portfolio folder
+-------------------------------------------------
+- Fixed: the KAFEEN logo did nothing unless the planner was started with
+  a portfolio folder (python planner.py --serve FOLDER). Now it always
+  opens the drawer (except with --serve notes.txt): with no portfolio
+  yet, it offers Create a portfolio (a new folder in your home folder,
+  Kafeen suggested) or Open a folder…
+- New: the page remembers your portfolio and opens it again next time.
+  Switch portfolio… and Close portfolio are at the bottom of the drawer.
+- Code: POST /api/portfolio ops use {path, create} and leave (use_folio);
+  GET /api/portfolio gives `root`, or `can` without one; ~ means the
+  browse root; /api/browse lists folders while a portfolio is open. In
+  the page: state.canFolio, portfolioPath, drawNoFolio, useFolio,
+  closeFolio, openPicker("folder").
+
 2.0.5  2026-11-06  Portfolio, part 6: the terminal, and polish
 -------------------------------------------------
 - New: the terminal views read a portfolio folder:

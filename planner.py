@@ -2108,6 +2108,11 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
     root = os.path.realpath(browse_root or os.path.expanduser("~"))
     opened = []                                     # files opened from the page (resolved paths), most recent last
 
+    def use_folio(path):
+        """Serve the portfolio folder `path` from now on (None: none)."""
+        nonlocal folio
+        folio = path
+
     def inside(p):
         """`p` resolved, if it is `root` or under it; else None."""
         p = os.path.realpath(p)
@@ -2142,9 +2147,9 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             elif path == "/api/portfolio":
                 if not self._trusted():
                     return
-                if folio is None:
-                    return self._json(200, {"name": None})
-                self._json(200, portfolio_tree(folio))
+                if folio is None:                     # `can`: the page may open or make one (no command-line file)
+                    return self._json(200, {"name": None, "can": notes_path is None})
+                self._json(200, dict(portfolio_tree(folio), root=folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
@@ -2280,10 +2285,41 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
 
         def _portfolio(self, req):
             """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,
-            section?}; rename {path, name}; trash {path}. -> {path, tree}."""
-            if folio is None:
-                return self._json(409, {"error": "no portfolio folder was given (planner.py --serve FOLDER)"})
+            section?}; rename {path, name}; trash {path}. -> {path, tree}.
+            use {path, create?}: serve that folder (under the browse root) as the portfolio from now on, making it
+            first with `create` (its parent must exist) -> the tree with `root`; leave: serve none. Not with a
+            command-line file."""
             op = req.get("op")
+            if op in ("use", "leave"):
+                if notes_path is not None:
+                    return self._json(409, {"error": "a notes file was given on the command line"})
+                if op == "leave":
+                    use_folio(None)
+                    return self._json(200, {"left": True})
+                raw = req.get("path").strip() if isinstance(req.get("path"), str) else ""
+                if raw == "~" or raw.startswith("~/"):        # ~ is the browse root (the home folder)
+                    raw = os.path.join(root, raw[2:])
+                p = raw and inside(raw)
+                if not p or p == root and req.get("create"):
+                    return self._json(403, {"error": "a portfolio must be a folder in your home folder"})
+                if req.get("create"):
+                    try:
+                        _clean_name(os.path.basename(p))
+                        if os.path.lexists(p):
+                            return self._json(409, {"error": f"{os.path.basename(p)} already exists: open it instead"})
+                        if not os.path.isdir(os.path.dirname(p)):
+                            return self._json(403, {"error": "its folder doesn't exist"})
+                        os.mkdir(p)
+                    except PortfolioError as e:
+                        return self._json(409, {"error": str(e)})
+                    except OSError as e:
+                        return self._json(500, {"error": f"can't make it: {e.strerror or e}"})
+                if not os.path.isdir(p):
+                    return self._json(404, {"error": f"{p} isn't a folder (any more)"})
+                use_folio(p)
+                return self._json(200, dict(portfolio_tree(p), root=p))
+            if folio is None:
+                return self._json(409, {"error": "no portfolio is open: open or make one from the drawer"})
             try:
                 if op == "project":
                     path = new_project(folio, req.get("name"))
@@ -2343,9 +2379,8 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                              "picked": notes_path is None})
 
         def _browse(self, folder):
-            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
-            if folio is not None:
-                return self._json(409, {"error": "a portfolio folder is open: use its projects"})
+            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}. (Also while a
+            portfolio is open, to choose another; only opening files is refused then.)"""
             if notes_path is not None:
                 return self._json(409, {"error": "a notes file was given on the command line"})
             start = os.path.dirname(opened[-1]) if opened else (os.getcwd() if inside(os.getcwd()) else root)

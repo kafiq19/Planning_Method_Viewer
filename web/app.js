@@ -270,7 +270,19 @@ async function startFileMode() {
   if (d.name) return useFile(d);                            // a file given on the command line: just that one
   let folio = [{ ok: false }, {}];
   try { folio = await fileApi(null, "/api/portfolio"); } catch (e) {}
-  if (folio[0].ok && folio[1].name) return startPortfolio(folio[1]);   // python planner.py --serve FOLDER
+  if (folio[0].ok && folio[1].name) return startPortfolio(folio[1]);   // python planner.py --serve FOLDER, or opened before
+  state.canFolio = folio[0].ok && !!folio[1].can;           // the drawer can open or make one
+  $("brand").disabled = !state.canFolio;
+  $("brand").title = state.canFolio ? "Projects: open or make a portfolio" : "";
+  const lastFolio = store.get("portfolioPath", "");
+  if (state.canFolio && lastFolio) {                        // the portfolio this browser used last: open it again
+    let r = { ok: false }, pd = {};
+    try { [r, pd] = await fileApi({ op: "use", path: lastFolio }, "/api/portfolio"); } catch (e) {}
+    if (r.ok) return startPortfolio(pd);
+    store.del("portfolioPath");
+    state.msg = { text: `Couldn't open the portfolio ${baseName(lastFolio)} again: ${pd.error || "it isn't there any more"}.`, bad: true, anyMode: true };
+    showToast();
+  }
   let paths;
   try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
   if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
@@ -296,9 +308,32 @@ const FOLDER = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0
 const picker = h("dialog", "picker"), pickPath = h("div", "ppath"), pickList = h("div", "plist");
 const pickCancel = h("button", "ghost", "Cancel");
 const pickFoot = h("div", "pfoot");
-let pickDir = null;                                        // the folder the file browser shows
+let pickDir = null, pickHome = null;                       // the folder the file browser shows; the home folder
+let pickMode = "file";                                     // "file": open a notes file; "folder": choose a portfolio folder
 picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList, pickFoot);
 function footer() {                                        // "Files … save automatically." and New file… (once a folder is shown)
+  if (pickMode === "folder") {                             // choosing a portfolio: this folder, or a new one in it
+    const use = h("button", "", "Use this folder"), nf = h("button", "", "New folder…");
+    use.disabled = !pickDir || pickDir === pickHome;
+    use.title = pickDir === pickHome ? "Pick a folder inside your home folder" : "Each folder inside it is a project";
+    use.onclick = async () => { const err = await useFolio({ op: "use", path: pickDir }); if (err) pickFoot.prepend(span("bad", err + " ")); };
+    nf.onclick = () => {
+      const input = h("input"), ok = h("button", "", "Create"), form = h("form", "pnew", input, ok);
+      input.type = "text"; input.placeholder = "folder name, like  Kafeen"; input.setAttribute("aria-label", "New folder name");
+      form.onsubmit = async e => {
+        e.preventDefault();
+        const n = input.value.trim();
+        if (!n) return;
+        const err = await useFolio({ op: "use", path: pickDir.replace(/[\\/]$/, "") + "/" + n, create: true });
+        if (err) { input.setCustomValidity(err); input.reportValidity(); }
+      };
+      input.oninput = () => input.setCustomValidity("");
+      pickFoot.replaceChildren(form);
+      input.focus();
+    };
+    pickFoot.replaceChildren(span("", "Each folder inside it is a project."), ...(pickDir ? [nf, use] : []));
+    return;
+  }
   const nb = h("button", "", "New file…");
   nb.title = "Make a new, empty notes file in this folder";
   nb.onclick = newFileForm;
@@ -339,19 +374,22 @@ async function browse(dir) {
     : d.error || r.statusText);
   const shown = d.dir.startsWith(d.home) ? "~" + d.dir.slice(d.home.length) : d.dir;
   pickPath.textContent = shown || "~"; pickPath.title = d.dir;
-  pickDir = d.dir; footer();
+  pickDir = d.dir; pickHome = d.home; footer();
   const row = (iconPath, label, cls, go) => { const b = h("button", "pitem " + cls, icon(iconPath, 16), span("", label)); b.onclick = go; return b; };
   const rows = [];
   if (d.parent) rows.push(row("M15 18l-6-6 6-6", "Up", "up", () => browse(d.parent)));
-  for (const e of d.entries) rows.push(e.kind === "dir" ? row(FOLDER, e.name, "dir", () => browse(e.path))
+  const entries = pickMode === "folder" ? d.entries.filter(e => e.kind === "dir") : d.entries;
+  for (const e of entries) rows.push(e.kind === "dir" ? row(FOLDER, e.name, "dir", () => browse(e.path))
     : row(DOC, e.name, "file", () => { picker.close(); openPath(e.path); }));
-  if (!d.entries.length) rows.push(h("div", "empty", "No folders or .kf / .txt / .md files here."));
+  if (!entries.length) rows.push(h("div", "empty", pickMode === "folder" ? "No folders in here." : "No folders or .kf / .txt / .md files here."));
   pickList.replaceChildren(...rows);
   pickList.scrollTop = 0;
 }
-function openPicker() {
+function openPicker(mode = "file") {
   closePops();
   if (state.file && !state.file.picked) return;             // command-line file: one file only
+  pickMode = mode;
+  picker.querySelector(".phead b").textContent = mode === "folder" ? "Choose a portfolio folder" : "Open a notes file";
   pickList.replaceChildren(); pickDir = null; footer();
   if (!picker.open) picker.showModal();
   browse(null);
@@ -1702,8 +1740,12 @@ dQ.type = "search"; dQ.placeholder = "Find a project"; dQ.setAttribute("aria-lab
 dClose.title = "Close (Esc)"; dClose.setAttribute("aria-label", dClose.title);
 const dNew = h("button", "", "+ New project");
 drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-label", "Projects");
+const dSwitch = h("button", "ghost", "Switch portfolio…"), dLeave = h("button", "ghost", "Close portfolio");
+dSwitch.title = "Open another portfolio folder"; dLeave.title = "Go back to single files and the Quick note (the folder stays as it is)";
+dSwitch.onclick = () => { openDrawer(false); openPicker("folder"); };
+dLeave.onclick = () => closeFolio();
 drawer.append(h("div", "dhead", dTitle, dClose), h("label", "dsearch", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5", 14), dQ),
-  dNav, h("div", "dfoot", dNew));
+  dNav, h("div", "dfoot", dNew, h("div", "dmeta", dSwitch, dLeave)));
 document.body.append(scrim, drawer);
 pops.push(open => { if (!open) { dMenu.classList.add("hidden"); const b = dMenu.parentNode && dMenu.parentNode.querySelector(".dmore"); if (b) b.setAttribute("aria-expanded", "false"); } });
 function openDrawer(open = true) {
@@ -1711,7 +1753,7 @@ function openDrawer(open = true) {
   $("brand").setAttribute("aria-expanded", String(open));
   if (open) { drawDrawer(); dQ.focus(); } else closePops();
 }
-$("brand").onclick = () => state.folio && openDrawer(!document.body.classList.contains("drawer-open"));
+$("brand").onclick = () => (state.folio || state.canFolio) && openDrawer(!document.body.classList.contains("drawer-open"));
 scrim.onclick = () => openDrawer(false);
 dClose.onclick = () => openDrawer(false);
 dQ.oninput = () => drawDrawer();
@@ -1733,7 +1775,7 @@ async function refreshFolio() {                     // the folder may have chang
 }
 
 /* a one-line form in the drawer (new or rename): Enter submits (a refusal is shown on the field), Esc or leaving cancels */
-function ask(after, placeholder, initial, depth, submit, inside) {
+function ask(after, placeholder, initial, depth, submit, inside, suggest) {   // suggest: `initial` is a default, fine as it is
   const input = h("input"), form = h("form", "dask", input);
   input.type = "text"; input.placeholder = placeholder; input.value = initial; input.setAttribute("aria-label", placeholder);
   form.style.setProperty("--dd", depth);
@@ -1741,7 +1783,7 @@ function ask(after, placeholder, initial, depth, submit, inside) {
   const cancel = () => { if (!busy && form.isConnected) { form.remove(); drawDrawer(); } };
   const submitIt = async () => {
     const v = input.value.trim();
-    if (!v || v === initial) return cancel();
+    if (!v || (v === initial && !suggest)) return cancel();
     busy = true;
     try { await submit(v); busy = false; form.remove(); drawDrawer(); }
     catch (err) { busy = false; input.setCustomValidity(err.message); input.reportValidity(); }
@@ -1812,8 +1854,42 @@ function dRow(depth, iconPath, label, { active, go, more, type, chev, disabled, 
   item.onclick = go || (more ? e => { e.stopPropagation(); row.querySelector(".dmore").click(); } : null);   // no page: its menu
   return row;
 }
+async function useFolio(body) {                    // open (or make) a portfolio, then show it: -> an error message or null
+  const [r, d] = await fileApi(body, "/api/portfolio");
+  if (!r.ok) return d.error || r.statusText;
+  await leaveFile();
+  store.set("portfolioPath", d.root);
+  store.set("folioActive", "");
+  location.reload();                                 // start again in the portfolio (everything is saved)
+  return null;
+}
+async function closeFolio() {                        // back to files and the Quick note (the folder stays as it is)
+  await leaveFile();
+  await fileApi({ op: "leave" }, "/api/portfolio");
+  store.del("portfolioPath");
+  location.reload();
+}
+function drawNoFolio() {                             // the drawer before there is a portfolio
+  dTitle.textContent = "Projects"; dTitle.title = "";
+  dQ.parentNode.classList.add("hidden");
+  const make = h("button", "", "Create a portfolio"), open = h("button", "", "Open a folder…");
+  make.title = "Make a new folder in your home folder for your projects";
+  open.title = "Use a folder you already have; each folder inside it is a project";
+  const box = h("div", "dintro",
+    h("p", "", "Keep your projects together in one portfolio folder. Each project is a folder in it, with a backlog, a quick note, notes pages, habits and an archive."),
+    make, open);
+  make.onclick = () => ask(box, "portfolio name", "Kafeen", 0, async v => {
+    const err = await useFolio({ op: "use", path: "~/" + v, create: true });
+    if (err) throw new Error(err);
+  }, true, true);
+  open.onclick = () => { openDrawer(false); openPicker("folder"); };
+  dNav.replaceChildren(box);
+  dNew.parentNode.classList.add("hidden");
+}
 function drawDrawer() {
-  if (!state.folio) return;
+  if (!state.folio) return state.canFolio ? drawNoFolio() : undefined;
+  dQ.parentNode.classList.remove("hidden");
+  dNew.parentNode.classList.remove("hidden");
   const f = state.folio, here = state.all ? "" : state.file ? state.file.path : null, q = dQ.value.trim().toLowerCase();
   const opened = foldSet("folioOpen");
   dTitle.textContent = f.name; dTitle.title = "Portfolio folder: " + f.name;
@@ -1881,7 +1957,8 @@ function inTree(path) {                              // is this page still in th
   return p.notes.some(n => n.path === path || (n.pages || []).some(pg => pg.path === path));
 }
 async function startPortfolio(tree) {
-  state.folio = tree;
+  state.folio = tree; state.canFolio = true;
+  if (tree.root) store.set("portfolioPath", tree.root);    // opened again on the next visit
   $("brand").disabled = false; $("brand").title = "Projects and pages";
   $("openWrap").classList.add("hidden");
   const last = store.get("folioActive", "");
