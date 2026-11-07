@@ -119,11 +119,12 @@ const draftKey = p => "draft:" + p;
 function readDraft(p) { try { return JSON.parse(store.get(draftKey(p), "null")); } catch (e) { return null; } }
 function remember() {                                       // keep the text box's text: untitled text, or a file's unsaved edits
   const f = state.file;
-  if (!f) return store.set("text", editor.value);
+  if (!f) return state.folio ? undefined : store.set("text", editor.value);   // a portfolio has no browser-only text
   if (editor.value === f.saved) store.del(draftKey(f.path));
   else store.set(draftKey(f.path), JSON.stringify({ version: f.version || "", text: editor.value }));
 }
 function saveTabs() {
+  if (state.folio) return;                                  // a portfolio remembers its page instead ("folioActive")
   store.set("openFiles", JSON.stringify(state.tabs));
   store.set("activeFile", state.file && state.file.picked ? state.file.path : "");
 }
@@ -138,7 +139,7 @@ function showFile(problem) {                                // header: tabs (or 
   $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
   showTabs();
   if (problem) return st.replaceChildren(...problem);
-  if (!f) return st.replaceChildren(state.ready ? "Kept in this browser" : "");
+  if (!f) return st.replaceChildren(state.ready && !state.folio ? "Kept in this browser" : "");
   st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
   if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
 }
@@ -150,9 +151,10 @@ function tabLabel(p) {                                      // the file name, pl
 const PENCIL = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z";
 function showTabs() {                                       // [Quick note] [file ×] [file ×] +   (a command-line file: just its chip)
   const cli = !!state.file && !state.file.picked, box = $("tabs");
-  box.classList.toggle("hidden", !state.ready || cli);
+  box.classList.toggle("hidden", !state.ready || cli || !!state.folio);
   $("fileChip").classList.toggle("hidden", !cli);
-  if (!state.ready || cli) return box.replaceChildren();
+  showCrumbs();
+  if (!state.ready || cli || state.folio) return box.replaceChildren();
   const qn = h("button", "n", icon(PENCIL, 13), "Quick note");
   qn.setAttribute("role", "tab"); qn.setAttribute("aria-selected", String(!state.file));
   qn.title = "A note for quick ideas, kept in this browser (not in a file). It is always here and can't be closed.";
@@ -191,13 +193,14 @@ async function fileApi(body, path = "/api/file") {
   return [r, d];
 }
 // The file as it is on disk now. A file opened from the page is (re)opened, so this also works after a server restart.
-const fetchFile = f => f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
+const fetchFile = f => state.folio ? fileApi(null, "/api/file?path=" + encodeURIComponent(f.path))
+  : f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
 
 function useFile(d) {                                       // show this file (from /api/file or /api/open) in the text box
   state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text), picked: !!d.picked };
   state.fileName = d.name; state.switched = true; state.msg = null;
   $("openWrap").classList.toggle("hidden", !d.picked);
-  if (d.picked && !state.tabs.includes(d.path)) state.tabs.push(d.path);
+  if (d.picked && !state.folio && !state.tabs.includes(d.path)) state.tabs.push(d.path);
   const draft = readDraft(d.path), keep = !!draft && draft.text !== state.file.saved;
   editor.value = keep ? draft.text : state.file.saved;
   editor.setSelectionRange(0, 0); editor.scrollTop = 0;
@@ -236,7 +239,7 @@ async function switchTo(path, create) {                     // show an open file
 const openPath = path => switchTo(path);
 
 async function showQuickNote() {                           // the Quick note tab: text kept in this browser (key "text"), no file
-  await leaveFile();
+  if (state.folio) return showAll();                        // a portfolio has a quick note per project instead
   state.file = null; state.fileName = "quick-note.txt"; state.switched = true; state.msg = null; clearTimeout(autoTimer);
   editor.value = store.get("text", "");
   editor.setSelectionRange(0, 0); editor.scrollTop = 0;
@@ -265,6 +268,9 @@ async function startFileMode() {
   state.ready = true;
   if (!r.ok) return showFile();
   if (d.name) return useFile(d);                            // a file given on the command line: just that one
+  let folio = [{ ok: false }, {}];
+  try { folio = await fileApi(null, "/api/portfolio"); } catch (e) {}
+  if (folio[0].ok && folio[1].name) return startPortfolio(folio[1]);   // python planner.py --serve FOLDER
   let paths;
   try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
   if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
@@ -358,7 +364,7 @@ $("file").onchange = async e => {                           // fallback without 
   e.target.value = "";
 };
 async function save(force) {
-  if (!state.file) return download();
+  if (!state.file) return state.folio ? undefined : download();   // All projects: everything is already on disk
   const f = state.file;
   if (f.saving) { f.again = true; return; }                 // one write at a time; the newest text goes next
   clearTimeout(autoTimer);
@@ -368,7 +374,7 @@ async function save(force) {
   try {
     const body = { path: f.path, text, version: f.version, force: !!force };
     let [r, d] = await fileApi(body);
-    if (r.status === 409 && d.notOpen && f.picked) {        // the server was restarted: open the file again, then save
+    if (r.status === 409 && d.notOpen && f.picked && !state.folio) {        // the server was restarted: open the file again, then save
       const [r2, d2] = await fileApi({ path: f.path }, "/api/open");
       if (!r2.ok) throw new Error(d2.error || r2.statusText);
       [r, d] = await fileApi(body);
@@ -400,6 +406,7 @@ function conflict() {                                       // the file changed 
 }
 
 window.addEventListener("focus", async () => {              // pick up edits made in another editor
+  if (state.all) return render(false);                      // All projects: read the backlogs again
   if (!state.file || state.file.saving) return;
   const f = state.file;
   let r, d;
@@ -410,14 +417,14 @@ window.addEventListener("focus", async () => {              // pick up edits mad
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
-  if (e.key === "Escape") closePops();
+  if (e.key === "Escape") { closePops(); if (document.body.classList.contains("drawer-open")) openDrawer(false); }
 });
 $("save").onclick = () => save();
 $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
   e.preventDefault();
-  document.body.classList.toggle("drop", ev === "dragover" && !state.file);
-  if (state.file) return;                                   // a file is open: its text comes from that file
+  document.body.classList.toggle("drop", ev === "dragover" && !state.file && !state.folio);
+  if (state.file || state.folio) return;                    // a file is open: its text comes from that file
   if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
 });
 $("today").value = store.get("today", "");
@@ -438,12 +445,15 @@ $("split").checked = store.get("split", "0") === "1";
 $("split").onchange = () => { store.set("split", $("split").checked ? "1" : "0"); layout(); };
 
 function layout() {
-  const plain = state.mode === "plain", split = $("split").checked;
+  const all = !!state.all;                                  // All projects: the views only (there is no one text)
+  if (all) state.mode = "planner";
+  const plain = state.mode === "plain", split = $("split").checked && !all;
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
+  $("modes").classList.toggle("hidden", all);
   $("editorPane").classList.toggle("hidden", !plain && !split);
   $("editorPane").classList.toggle("solo", plain);
   $("viewPane").classList.toggle("hidden", plain);
-  $("splitWrap").classList.toggle("hidden", plain);
+  $("splitWrap").classList.toggle("hidden", plain || all);
   $("todayWrap").classList.toggle("hidden", state.mode !== "planner");
   $("viewPane").classList.toggle("jump", split && state.mode === "planner");
   if (state.mode !== "planner" && !(state.msg && state.msg.anyMode)) toast.classList.add("hidden");   // edit messages belong to Planner mode
@@ -487,8 +497,9 @@ async function render(relayout) {
   }
   const seq = ++state.seq;
   try {
+    const when = { today: $("today").value.trim() || null, period: state.period, week: state.week };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: editor.value, today: $("today").value.trim() || null, period: state.period, week: state.week }) });
+      body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }) });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
@@ -528,10 +539,21 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   let ok = false;
   clearTimeout(timer);
   if (btn) btn.disabled = true;
+  const when = { today: $("today").value.trim() || null, period: state.period, week: state.week };
   try {
+    if (state.all) {                                     // All projects: the server edits the task's backlog on disk
+      const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, line: t.line, title: t.title, op, value, ...when }) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
+      if (seq !== state.seq) return true;
+      state.data = res.data;
+      state.msg = { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
+      plannerView();
+      return true;
+    }
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: before, line: t.line, title: t.title, op, value, today: $("today").value.trim() || null,
-        period: state.period, week: state.week }) });
+      body: JSON.stringify({ text: before, name: folioName(), line: t.line, title: t.title, op, value, ...when }) });
     const res = await r.json();
     if (editor.value !== before) return render(false);          // typed meanwhile: drop the edit
     if (!r.ok) throw new Error(res.error || r.statusText);
@@ -630,8 +652,8 @@ const ADD = () => span("add", "+");
    Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
 function addTaskRow(project, who = "") {           // who: People prefills that person's initials
   const btn = h("button", "addtask", span("plus", "+"), "Add task");
-  btn.title = project ? "Add a task at the end of @" + project.name : "Add a task to a project";
-  btn.dataset.key = (project ? "p\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
+  btn.title = project ? "Add a task at the end of " + projLabel(project) : "Add a task to a project";
+  btn.dataset.key = (project ? "p\n" + (project.path || "") + "\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
   const row = h("div", "addrow", btn);
   btn.onclick = () => openAdd(btn, project, who);
   return row;
@@ -662,12 +684,12 @@ function openAdd(btn, project, presetWho, keep) {
     const count = {};
     for (const t of targets) count[t.name] = (count[t.name] || 0) + 1;
     sel = h("select", "", ...targets.map((t, i) => {
-      const o = h("option", "", "@" + t.name + (count[t.name] > 1 && t.section ? " (" + t.section + ")" : ""));
+      const o = h("option", "", projLabel(t) + (count[t.name] > 1 && t.section ? " (" + t.section + ")" : ""));
       o.value = i;
       return o;
     }));
     sel.setAttribute("aria-label", "Project");
-    const last = store.get("addTo", ""), at = i => targets[i].line + "\n" + targets[i].name;
+    const last = store.get("addTo", ""), at = i => (targets[i].path || "") + "\n" + targets[i].line + "\n" + targets[i].name;
     const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
     sel.value = pick;
   }
@@ -691,9 +713,9 @@ function openAdd(btn, project, presetWho, keep) {
       const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim() };
       cancel();
       if (!v) return;
-      if (sel) store.set("addTo", p.line + "\n" + p.name);
+      if (sel) store.set("addTo", (p.path || "") + "\n" + p.line + "\n" + p.name);
       const plain = !fields.who && !fields.effort && !fields.date;
-      const done = editTask({ line: p.line, title: p.name }, "task", plain ? v : fields, null, `Added "${v}" to @${p.name}.`);
+      const done = editTask({ line: p.line, title: p.name, path: p.path }, "task", plain ? v : fields, null, `Added "${v}" to ${projLabel(p)}.`);
       done.then(ok => {                            // keep adding: the form again, empty, same Who / Effort; refused: as typed
         const again = [...plannerBody.querySelectorAll(".addtask")].find(b => b.dataset.key === btn.dataset.key);
         if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields);
@@ -704,9 +726,14 @@ function openAdd(btn, project, presetWho, keep) {
   input.focus();
 }
 
-function undo() {
+async function undo() {
   const u = state.msg && state.msg.undo;
   state.msg = null;
+  if (u && u.path) {                                     // All projects: put the file back, unless it changed since
+    const [r, d] = await fileApi({ path: u.path, text: u.before, version: u.version });
+    if (!r.ok) state.msg = { text: "Can't undo: " + (d.conflict ? "that project changed since" : d.error || r.statusText), bad: true };
+    return render(false);
+  }
   if (u && editor.value === u.after) { replaceText(u.before); render(false); }
   else plannerView();
 }
@@ -1110,7 +1137,8 @@ function vProjects(d) {
     }
     for (const p of sec.projects) {
       const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
-      const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + p.name, "project", [span("at", "@"), p.name],
+      const label = p.folder && p.folder !== p.name ? [span("at", p.folder + " · @"), p.name] : [span("at", "@"), p.name];
+      const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + (p.folder ? p.folder + "\n" : "") + p.name, "project", label,
         span("count", p.done + "/" + p.total + " done" + effort));
       out.append(head);
       if (shut) continue;
@@ -1123,6 +1151,7 @@ function vProjects(d) {
   return out;
 }
 function welcome() {                             // first run: no notes yet
+  if (state.folio) return folioWelcome();
   const out = h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
     h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24 , or open a file from the ⋯ menu."));
   if (!editor.value.trim() && !state.file) {
@@ -1347,6 +1376,279 @@ function list(items) {                                  // nested by indent (tab
     return html + `</${ord ? "ol" : "ul"}>`;
   }
   return build(rows[0].d);
+}
+
+/* ---------- portfolio (python planner.py --serve FOLDER): the drawer, project pages and All projects ----------
+   The logo opens a drawer: All projects (the views over every project's backlog), then the projects. A project
+   shows its Quick note, Backlog, Notes (sections and pages, like OneNote), Habits and Archive. Each is a file in the
+   project's folder, opened in the text box like any picked file (autosaved, drafts, conflicts). All projects has no
+   text box: the server reads every backlog and edits the task's own file (version-checked). The page shown last is
+   remembered in "folioActive" ("" = All projects); open projects in "folioOpen". */
+const FOLIO_FILES = [["quicknote", "Quick note", "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"],
+  ["backlog", "Backlog", "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"]];
+const HABITS_ICON = "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3";
+const NOTES_ICON = "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5";
+const ARCHIVE_ICON = "M21 8v13H3V8M1 3h22v5H1zM10 12h4";
+const ALL_ICON = "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
+const MODE_OF = { kf: "planner", md: "markdown", markdown: "markdown", txt: "plain" };   // a page opens in its file type's mode
+const extOf = p => ((/\.([^./]+)$/.exec(p) || [])[1] || "").toLowerCase();
+const folioName = () => state.folio && state.file ? state.file.path.split("/")[0] : null;   // tasks before any @ belong to it
+const projLabel = p => (p.folder && p.folder !== p.name ? p.folder + " · " : "") + "@" + p.name;
+
+const drawer = h("aside", "drawer"), scrim = h("div", "scrim"), dNav = h("nav", "dnav"), dQ = h("input");
+const dClose = h("button", "ghost", "×"), dTitle = h("b"), dMenu = h("div", "menu dmenu hidden");
+dQ.type = "search"; dQ.placeholder = "Find a project"; dQ.setAttribute("aria-label", "Find a project");
+dClose.title = "Close (Esc)"; dClose.setAttribute("aria-label", dClose.title);
+const dNew = h("button", "", "+ New project");
+drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-label", "Projects");
+drawer.append(h("div", "dhead", dTitle, dClose), h("label", "dsearch", icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.5-3.5", 14), dQ),
+  dNav, h("div", "dfoot", dNew));
+document.body.append(scrim, drawer);
+pops.push(open => { if (!open) { dMenu.classList.add("hidden"); const b = dMenu.parentNode && dMenu.parentNode.querySelector(".dmore"); if (b) b.setAttribute("aria-expanded", "false"); } });
+function openDrawer(open = true) {
+  document.body.classList.toggle("drawer-open", open);
+  $("brand").setAttribute("aria-expanded", String(open));
+  if (open) { drawDrawer(); dQ.focus(); } else closePops();
+}
+$("brand").onclick = () => state.folio && openDrawer(!document.body.classList.contains("drawer-open"));
+scrim.onclick = () => openDrawer(false);
+dClose.onclick = () => openDrawer(false);
+dQ.oninput = () => drawDrawer();
+dQ.onkeydown = e => { if (e.key === "Escape" && dQ.value) { e.stopPropagation(); dQ.value = ""; drawDrawer(); } };
+dNew.onclick = () => ask(dNew.parentNode, "project name", "", 0, async v => {
+  const path = await folioOp({ op: "project", name: v });
+  foldSet("folioOpen").add(path); store.set("folioOpen", JSON.stringify([...foldSet("folioOpen")]));
+  openPage(path + "/backlog.kf");
+}, true);
+
+async function folioOp(body) {                     // POST /api/portfolio; -> the new path (the tree is updated)
+  const [r, d] = await fileApi(body, "/api/portfolio");
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  state.folio = d.tree;
+  return d.path;
+}
+async function refreshFolio() {                     // the folder may have changed outside the page
+  try { const [r, d] = await fileApi(null, "/api/portfolio"); if (r.ok && d.name) state.folio = d; } catch (e) {}
+}
+
+/* a one-line form in the drawer (new or rename): Enter submits (a refusal is shown on the field), Esc or leaving cancels */
+function ask(after, placeholder, initial, depth, submit, inside) {
+  const input = h("input"), form = h("form", "dask", input);
+  input.type = "text"; input.placeholder = placeholder; input.value = initial; input.setAttribute("aria-label", placeholder);
+  form.style.setProperty("--dd", depth);
+  let busy = false;
+  const cancel = () => { if (!busy && form.isConnected) { form.remove(); drawDrawer(); } };
+  const submitIt = async () => {
+    const v = input.value.trim();
+    if (!v || v === initial) return cancel();
+    busy = true;
+    try { await submit(v); busy = false; form.remove(); drawDrawer(); }
+    catch (err) { busy = false; input.setCustomValidity(err.message); input.reportValidity(); }
+  };
+  form.onsubmit = e => { e.preventDefault(); submitIt(); };
+  input.oninput = () => input.setCustomValidity("");
+  input.onkeydown = e => {
+    if (e.key === "Enter") { e.preventDefault(); submitIt(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
+  };
+  input.onblur = () => setTimeout(cancel, 150);
+  if (inside) after.prepend(form); else after.after(form);
+  input.focus(); input.select();
+}
+
+const isUnder = (path, dir) => path === dir || path.startsWith(dir + "/");
+async function renameItem(path, row, depth) {
+  const name = path.split("/").pop(), stem = extOf(name) ? name.slice(0, -extOf(name).length - 1) : name;
+  ask(row, "new name", stem, depth, async v => {
+    const f = state.file, here = f && isUnder(f.path, path);
+    if (here) await leaveFile();
+    const to = await folioOp({ op: "rename", path, name: v });
+    const opened = foldSet("folioOpen");
+    if (!path.includes("/") && opened.delete(path)) { opened.add(to); store.set("folioOpen", JSON.stringify([...opened])); }   // stays open
+    if (here) {                                      // the shown page moved: follow it (and its draft)
+      const next = to + f.path.slice(path.length), draft = store.get(draftKey(f.path), null);
+      if (draft) { store.set(draftKey(next), draft); store.del(draftKey(f.path)); }
+      f.path = next; f.name = baseName(next); state.fileName = f.name;
+      store.set("folioActive", next);
+      showFile();
+    }
+  });
+}
+async function trashItem(path, what) {
+  if (!confirm(`Delete ${what} "${baseName(path)}"? It moves to the .trash folder in the portfolio, so you can get it back from there.`)) return;
+  const here = state.file && isUnder(state.file.path, path);
+  if (here) await leaveFile();
+  try {
+    await folioOp({ op: "trash", path });
+    if (here) { store.del(draftKey(state.file.path)); state.file = null; await showAll(); }
+    drawDrawer();
+  } catch (e) { state.msg = { text: "Not deleted: " + e.message, bad: true, anyMode: true }; showToast(); }
+}
+function moreButton(row, items) {                   // ⋯ on a drawer row: a small menu (Rename, Delete, New page…)
+  const b = h("button", "dmore", "⋯");
+  b.title = "More"; b.setAttribute("aria-label", "More"); b.setAttribute("aria-haspopup", "menu"); b.setAttribute("aria-expanded", "false");
+  b.onclick = e => {
+    e.stopPropagation();
+    const open = dMenu.parentNode === row && !dMenu.classList.contains("hidden");
+    closePops();
+    if (open) return;
+    dMenu.replaceChildren(...items.map(([label, fn]) => { const m = h("button", "mi", label); m.onclick = ev => { ev.stopPropagation(); closePops(); fn(); }; return m; }));
+    row.append(dMenu); dMenu.classList.remove("hidden"); b.setAttribute("aria-expanded", "true");
+    dMenu.firstChild.focus();
+  };
+  return b;
+}
+function dRow(depth, iconPath, label, { active, go, more, type, chev, disabled, title } = {}) {
+  const item = h("button", "ditem", ...(chev !== undefined ? [icon(CHEVRON, 12)] : []), iconPath ? icon(iconPath, 15) : null, span("", label),
+    type ? span("type", type) : null);
+  if (chev !== undefined) item.firstChild.classList.add("chev", ...(chev ? ["open"] : []));
+  item.style.setProperty("--dd", depth);
+  item.disabled = !!disabled;
+  if (title) item.title = title;
+  if (active) item.setAttribute("aria-current", "page");
+  const row = h("div", "drow" + (active ? " on" : ""), item);
+  if (more) row.append(moreButton(row, more(row)));
+  item.onclick = go || (more ? e => { e.stopPropagation(); row.querySelector(".dmore").click(); } : null);   // no page: its menu
+  return row;
+}
+function drawDrawer() {
+  if (!state.folio) return;
+  const f = state.folio, here = state.all ? "" : state.file ? state.file.path : null, q = dQ.value.trim().toLowerCase();
+  const opened = foldSet("folioOpen");
+  dTitle.textContent = f.name; dTitle.title = "Portfolio folder: " + f.name;
+  const rows = [dRow(0, ALL_ICON, "All projects", { active: here === "", go: () => showAll(), title: "Every project's backlog together" }),
+    h("div", "dlabel", "Projects")];
+  for (const p of f.projects) {
+    if (q && !p.name.toLowerCase().includes(q)) continue;
+    const open = !!q || opened.has(p.name);
+    const toggle = () => {
+      opened[opened.has(p.name) ? "delete" : "add"](p.name);
+      store.set("folioOpen", JSON.stringify([...opened]));
+      drawDrawer();
+    };
+    const head = dRow(0, null, p.name, { chev: open, go: toggle, active: !open && here && isUnder(here, p.name),
+      more: row => [["New page", () => newPage(p.name, null, row, 1)], ["New section", () => newSection(p.name, row)],
+        ["Rename", () => renameItem(p.path, row, 0)], ["Delete", () => trashItem(p.path, "the project")]] });
+    rows.push(head);
+    if (!open) continue;
+    for (const [key, label, ic] of FOLIO_FILES)
+      rows.push(dRow(1, ic, label, { active: here === p.files[key], go: () => openPage(p.files[key]) }));
+    rows.push(dRow(1, NOTES_ICON, "Notes", { title: p.notes.length ? "Pages and sections" : "No pages yet: click to add one",
+      more: row => [["New page", () => newPage(p.name, null, row, 2)], ["New section", () => newSection(p.name, row)]] }));
+    for (const n of p.notes) {
+      if (n.kind === "section") {
+        rows.push(dRow(2, FOLDER, n.name, { title: n.path,
+          more: row => [["New page here", () => newPage(p.name, n.name, row, 3)], ["Rename", () => renameItem(n.path, row, 2)],
+            ["Delete", () => trashItem(n.path, "the section")]] }));
+        for (const pg of n.pages) rows.push(pageRow(pg, 3, here));
+      } else rows.push(pageRow(n, 2, here));
+    }
+    rows.push(dRow(1, HABITS_ICON, "Habits", { active: here === p.files.habits, go: () => openPage(p.files.habits),
+      title: "Repeating tasks (habits.kf)" }));
+    if (p.archive.length) {
+      rows.push(dRow(1, ARCHIVE_ICON, "Archive", { disabled: true }));
+      for (const a of p.archive) rows.push(dRow(2, null, String(a.year), { active: here === a.path, go: () => openPage(a.path) }));
+    } else rows.push(dRow(1, ARCHIVE_ICON, "Archive", { disabled: true, title: "Nothing archived yet" }));
+  }
+  if (!f.projects.length) rows.push(h("div", "empty", "No projects yet."));
+  else if (q && rows.length === 2) rows.push(h("div", "empty", "No project matches."));
+  dNav.replaceChildren(...rows);
+}
+function pageRow(pg, depth, here) {
+  return dRow(depth, DOC, pg.name, { active: here === pg.path, go: () => openPage(pg.path), type: pg.type === "kf" ? "" : pg.type,
+    title: pg.file, more: row => [["Rename", () => renameItem(pg.path, row, depth)], ["Delete", () => trashItem(pg.path, "the page")]] });
+}
+function newPage(project, section, row, depth) {
+  ask(row, "page name (ends .kf, or .md / .txt)", "", depth, async v => {
+    const path = await folioOp({ op: "page", project, name: v, section });
+    openPage(path);
+  });
+}
+function newSection(project, row) {
+  ask(row, "section name", "", 2, async v => { await folioOp({ op: "section", project, name: v }); });
+}
+
+function inTree(path) {                              // is this page still in the portfolio? (for "folioActive")
+  const parts = path.split("/"), p = state.folio.projects.find(x => x.name === parts[0]);
+  if (!p) return false;
+  if (Object.values(p.files).includes(path)) return true;
+  if (p.archive.some(a => a.path === path)) return true;
+  return p.notes.some(n => n.path === path || (n.pages || []).some(pg => pg.path === path));
+}
+async function startPortfolio(tree) {
+  state.folio = tree;
+  $("brand").disabled = false; $("brand").title = "Projects and pages";
+  $("openWrap").classList.add("hidden");
+  const last = store.get("folioActive", "");
+  if (last && inTree(last)) await openPage(last); else await showAll();
+  if (!last && !tree.projects.length) openDrawer(true);
+}
+async function openPage(path) {                      // show one of a project's files in the text box (autosaved)
+  await leaveFile();
+  let r, d;
+  try { [r, d] = await fileApi(null, "/api/file?path=" + encodeURIComponent(path)); }
+  catch (e) { r = { ok: false }; d = { error: "can't reach the planner server" }; }
+  if (!r.ok) {
+    state.msg = { text: "Can't open " + baseName(path) + ": " + (d.notOpen ? "it isn't in the portfolio any more" : d.error), bad: true, anyMode: true };
+    await refreshFolio(); drawDrawer();
+    return showToast();
+  }
+  state.all = false;
+  const mode = MODE_OF[extOf(path)];
+  if (mode) { state.mode = mode; store.set("mode", mode); }
+  store.set("folioActive", path);
+  useFile({ ...d, picked: true });
+  layout();
+  openDrawer(false);
+  drawDrawer();
+}
+async function showAll() {                           // All projects: every backlog together, no text box
+  await leaveFile();
+  state.file = null; state.all = true; state.switched = true; state.msg = null; clearTimeout(autoTimer);
+  editor.value = "";
+  store.set("folioActive", "");
+  openDrawer(false);
+  showFile();
+  render(true);
+  drawDrawer();
+}
+function showCrumbs() {                              // the header: Project › Notes › Section › Page (click: the drawer)
+  const c = $("crumbs");
+  c.classList.toggle("hidden", !state.folio);
+  if (!state.folio) return;
+  let parts;
+  if (state.all || !state.file) parts = ["All projects"];
+  else {
+    const [proj, kind, ...rest] = state.file.path.split("/");
+    const named = { "backlog.kf": "Backlog", "quicknote.kf": "Quick note", "habits.kf": "Habits" }[kind];
+    const strip = n => extOf(n) === "kf" ? n.slice(0, -3) : n;
+    parts = named ? [proj, named] : kind === "notes" ? [proj, "Notes", ...rest.slice(0, -1), strip(rest[rest.length - 1])]
+      : [proj, "Archive", rest[0].slice(0, 4)];
+  }
+  const kids = [];
+  parts.forEach((t, i) => {
+    if (i) kids.push(span("sep", "›"));
+    kids.push(i === parts.length - 1 ? h("b", "", t) : span("", t));
+  });
+  c.replaceChildren(...kids);
+  c.title = (state.file ? state.file.path : "All projects") + " (click for the projects)";
+  c.onclick = () => openDrawer(true);
+}
+function folioWelcome() {                            // an empty page, or All projects with no tasks yet
+  const out = h("div", "welcome");
+  if (state.all) {
+    const any = state.folio.projects.length;
+    out.append(h("h2", "", any ? "No tasks yet" : "No projects yet"),
+      h("p", "", any ? "Add the first one, or open a project's Backlog from the drawer (click the logo)." : "Start one from the drawer."));
+    if (any && state.data.targets.length) out.append(addTaskRow(null));
+    else { const b = h("button", "", "Open the drawer"); b.onclick = () => openDrawer(true); out.append(b); }
+    return out;
+  }
+  out.append(h("h2", "", editor.value.trim() ? "No tasks here" : "Nothing here yet"),
+    h("p", "", "Add a task, or write in Text mode, like  - finish proposal (KA) (m) Oct24"));
+  const own = state.data.targets[0];
+  if (own) out.append(addTaskRow(own));
+  return out;
 }
 
 /* ---------- start ---------- */

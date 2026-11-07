@@ -15,7 +15,8 @@ USAGE
   --today Oct10                        pretend today is another date (for testing)
   --import notes.txt FOLDER [--split]  make a portfolio project from notes.txt (--split: one project per @ line)
   --serve FOLDER                       serve a portfolio: one sub-folder per project (backlog.kf, quicknote.kf,
-                                       habits.kf, notes/, archive/YYYY.kf); see AGENTS.md
+                                       habits.kf, notes/, archive/YYYY.kf). Click the logo for the projects:
+                                       All projects (every backlog together) and each project's pages
   --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
                                        files from the page: each is a tab, saved automatically and reopened next time
                                        The page: tabs Projects / Timeline / People / Upcoming / Week and a
@@ -293,6 +294,7 @@ class Project:
     def __init__(self, name, section, line=None):
         self.name, self.section, self.line = name, section, line   # line: the @ line (for "(no project)", its first line)
         self.tasks, self.notes = [], []
+        self.path = self.folder = None   # in a portfolio's All projects: its backlog's path and its project folder
 
     def all_tasks(self):
         for t in self.tasks:
@@ -693,7 +695,8 @@ def task_data(t, keep=None):
         return None
     sp = t.span()
     d = {
-        "title": t.title, "text": t.text, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
+        "title": t.title, "text": t.text, "status": t.status, "line": t.line, "path": t.project and t.project.path,
+        "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
         "effort": t.effort, "points": t.points,
         "plan": iso(t.plan), "plan_label": fd(t.plan) if t.plan else None,
         "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
@@ -712,6 +715,7 @@ def flat(p, t):
     """A task with its project, for the flat lists (timeline, people, upcoming)."""
     d = task_data(t)
     d["project"] = p.name
+    d["folder"] = p.folder
     d["children"] = []
     return d
 
@@ -752,7 +756,7 @@ def to_data(projects, period=None, monday=None):
                          "projects": []}
             sections.append(seen[key])
         seen[key]["projects"].append({
-            "name": p.name, "line": p.line, "notes": p.notes,
+            "name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "notes": p.notes,
             "done": sum(t.status == "done" for t in tasks), "total": len(tasks),
             "points": dict(zip(("left", "total"), effort_points(tasks))),
             "tasks": shown})
@@ -782,7 +786,8 @@ def to_data(projects, period=None, monday=None):
                 ("prev", period_step(*period, -1)), ("next", period_step(*period, 1)),
                 ("now", period_at(period[0], TODAY)))}},
         "projects": sections,
-        "targets": [{"name": p.name, "line": p.line, "section": p.section.title if p.section else None} for p in projects],
+        "targets": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder,
+                     "section": p.section.title if p.section else None} for p in projects],
         "timeline": {
             "columns": [{"head": h, "start": iso(a), "end": iso(b)} for h, a, b in cols],
             "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
@@ -802,9 +807,9 @@ def to_data(projects, period=None, monday=None):
             "prev": wref(monday - timedelta(days=7)), "next": wref(monday + timedelta(days=7)), "now": wref(this_monday),
             "days": [{"head": head, "token": f"{MONTH_NAMES[ds[0].month - 1]}{ds[0].day:02d}", "dates": [iso(x) for x in ds], "today": TODAY in ds,
                       "tasks": [flat(p, t) for p, t in items]} for head, ds, items in wcols],
-            "projects": [{"name": p.name, "line": p.line, "points": effort_points(tasks)[1],
+            "projects": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "points": effort_points(tasks)[1],
                           "tasks": [flat(p, t) for t in tasks]} for p, tasks in wplanned],
-            "backlog": [{"name": p.name, "line": p.line, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
+            "backlog": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
                         for p, items in wbacklog]},
     }
 
@@ -1104,14 +1109,25 @@ def add_task(text, line, task_text, title=None):
     final line with no line ending gets one.
     """
     lines = text.splitlines(keepends=True)
+    task_text = task_text.strip() if isinstance(task_text, str) else ""
+    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+        raise EditError("a task is one line of text")
+    if line == 0:                               # the file's own project (a portfolio backlog's tasks before any @)
+        own = next((p for p in parse(text) if not lines[p.line - 1].strip().startswith("@")), None)
+        if own is None:                         # it has none yet: the new task goes first
+            ending = next((r[_content_end(r):].lstrip(" \t") for r in lines if r[_content_end(r):].lstrip(" \t")), "\n")
+            out = "- " + task_text + ending + text
+            n = _find(out, 1)
+            if n is None or n.parent is not None:
+                raise EditError("the new task wouldn't land in that project, so add it by hand")
+            return out
+        line, title = own.line, None
     if type(line) is not int or not 1 <= line <= len(lines):
         raise EditError(f"line {line!r} is not in the text")
     p = next((p for p in parse(text) if p.line == line), None)
-    if p is None or (title is not None and p.name != title):
+    own = p is not None and not lines[line - 1].strip().startswith("@")    # tasks before any @: named by the file, not the text
+    if p is None or (title is not None and p.name != title and not own):
         raise EditError(f"line {line} is no longer that project (the text has changed)")
-    task_text = task_text.strip()
-    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
-        raise EditError("a task is one line of text")
     raw = lines[line - 1]
     first = p.tasks[0] if p.tasks else None
     fr = lines[first.line - 1] if first else ""
@@ -1473,6 +1489,39 @@ def import_notes(text, root, name, split=False):
     return out
 
 
+def page_data(text, name=None, period=None, monday=None):
+    """to_data for one notes text; with `name` (a portfolio page: its project's name) the tasks before
+    any @ belong to that project, and `targets` always offers it (line 0 when it has no tasks yet)."""
+    projects = parse(text, name)
+    d = to_data(projects, period, monday)
+    if name and not any(t["name"] == name and t["line"] for t in d["targets"]):
+        d["targets"].insert(0, {"name": name, "line": 0, "path": None, "folder": None, "section": None})
+    return d
+
+
+def portfolio_data(root, period=None, monday=None):
+    """to_data over every project's backlog (All projects). Each project and task carries its backlog's
+    `path` and its project `folder`; sections with the same title are shown together; `targets` lists
+    every project folder (line 0 when its backlog has no tasks of its own yet); `versions` maps each
+    backlog's path to its version, for edits."""
+    projects, versions, sections, own = [], {}, {}, []
+    for info in portfolio_tree(root)["projects"]:
+        rel = info["files"]["backlog"]
+        text, versions[rel] = read_notes(portfolio_path(root, rel))
+        ps = parse(text, info["name"])
+        for pr in ps:
+            pr.path, pr.folder = rel, info["name"]
+            if pr.section is not None:
+                pr.section = sections.setdefault(pr.section.title, pr.section)
+        if not any(pr.name == info["name"] and pr.section is None and pr.line for pr in ps):
+            own.append({"name": info["name"], "line": 0, "path": rel, "folder": info["name"], "section": None})
+        projects += ps
+    d = to_data(projects, period, monday)
+    d["targets"] = own + d["targets"]
+    d["versions"] = versions
+    return d
+
+
 # ---------- web page ----------
 
 def set_today(val):
@@ -1597,12 +1646,17 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 text = req.get("text", "")
                 period = period_from(req.get("period"))
                 monday = week_monday(req.get("week"))
+                name = req.get("name") if isinstance(req.get("name"), str) else None
                 if self.path == "/api/parse":
-                    return self._json(200, to_data(parse(text), period, monday))
+                    if req.get("all"):
+                        if folio is None:
+                            return self._json(409, {"error": "no portfolio folder was given (planner.py --serve FOLDER)"})
+                        return self._json(200, portfolio_data(folio, period, monday))
+                    return self._json(200, page_data(text, name, period, monday))
                 if "path" in req:
                     return self._edit_file(req, period, monday)
                 text = apply_edit(text, req)
-                self._json(200, {"text": text, "data": to_data(parse(text), period, monday)})
+                self._json(200, {"text": text, "data": page_data(text, name, period, monday)})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -1617,14 +1671,15 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             text, current = read_notes(p)
             if current != req.get("version"):
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
-            name = project_name(req["path"]) if folio and portfolio_kind(req["path"]) == "backlog" else None
-            text = apply_edit(text, req)
+            name = project_name(req["path"]) if folio else None
+            before, text = text, apply_edit(text, req)
             try:
                 version = write_notes(p, text, current)
             except FileConflict:
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
                                         "version": read_notes(p)[1]})
-            self._json(200, {"text": text, "version": version, "data": to_data(parse(text, name), period, monday)})
+            data = portfolio_data(folio, period, monday) if folio and req.get("all") else page_data(text, name, period, monday)
+            self._json(200, {"text": text, "before": before, "version": version, "data": data})
 
         def _portfolio(self, req):
             """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,

@@ -330,3 +330,47 @@ table.tl td.w.late { color: var(--bad); font-weight: 600; }
 .md a { color: var(--accent); }
 .md ul, .md ol { padding-left: 1.5em; } .md ul.tasks { list-style: none; padding-left: .3em; }
 .md table { border-collapse: collapse; } .md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
+
+/* ---------- portfolio: the drawer (click the logo), the breadcrumb ---------- */
+.brand { border: 0; background: none; padding: 2px 4px; margin: -2px -4px; }
+.brand:disabled { opacity: 1; cursor: default; }
+.brand:not(:disabled):hover { background: var(--hover); }
+.crumbs { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 48ch; padding: 3px 8px; border: 0;
+  border-radius: 6px; background: var(--hover); font-size: 13px; color: var(--muted); }
+.crumbs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbs .sep { flex: none; opacity: .6; }
+.crumbs b { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scrim { position: fixed; inset: 0; z-index: 40; background: rgba(10, 14, 22, .3); display: none; }
+.drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 41; width: min(300px, 86vw); display: flex; flex-direction: column;
+  background: var(--panel); border-right: 1px solid var(--line); box-shadow: 8px 0 30px rgba(20, 25, 40, .18);
+  transform: translateX(-102%); transition: transform .16s ease; visibility: hidden; }
+body.drawer-open .drawer { transform: none; visibility: visible; }
+body.drawer-open .scrim { display: block; }
+.dhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 8px 16px; }
+.dhead b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dhead button { padding: 0 8px; font-size: 18px; line-height: 1.4; }
+.dsearch { display: flex; align-items: center; gap: 6px; margin: 0 12px 8px; padding: 0 8px; border: 1px solid var(--line);
+  border-radius: 6px; color: var(--muted); }
+.dsearch input { flex: 1; min-width: 0; border: 0; padding: 5px 0; background: none; outline: none; }
+.dnav { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.dlabel { padding: 12px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.drow { position: relative; display: flex; align-items: center; border-radius: 6px; }
+.drow:hover, .drow.on { background: var(--hover); }
+.drow.on > .ditem { font-weight: 600; color: var(--text); }
+.ditem { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px calc(8px + var(--dd, 0) * 18px);
+  border: 0; background: none; color: var(--text); font-size: 14px; text-align: left; }
+.ditem span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ditem svg { flex: none; color: var(--muted); }
+.ditem .chev { transition: transform .12s; }
+.ditem .chev.open { transform: rotate(90deg); }
+.ditem .type { flex: none; margin-left: auto; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.ditem:disabled { color: var(--muted); }
+.dmore { flex: none; visibility: hidden; padding: 0 7px; margin-right: 2px; border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1.6; }
+.drow:hover .dmore, .drow.on .dmore, .dmore:focus-visible, .dmore[aria-expanded="true"] { visibility: visible; }
+.dmore:hover { color: var(--text); background: var(--line); }
+@media (hover: none) { .dmore { visibility: visible; } }
+.dmenu { top: calc(100% + 2px); min-width: 170px; }
+.dask { display: flex; gap: 6px; padding: 3px 4px 3px calc(4px + var(--dd, 0) * 18px); }
+.dask input { flex: 1; min-width: 0; font-size: 13px; padding: 4px 8px; }
+.dfoot { padding: 8px 12px 12px; border-top: 1px solid var(--line); }
+.dfoot > button { width: 100%; }

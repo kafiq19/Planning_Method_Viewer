@@ -154,7 +154,15 @@ python planner.py --import notes.txt ~/Kafeen           # one project, named aft
 python planner.py --import notes.txt ~/Kafeen --split   # one project per @ line
 ```
 
-Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio. **This release adds the storage only:** the page's project drawer, archive, habits and the new Planner come in the next releases.
+Your lines are copied exactly; nothing in `notes.txt` changes. `python planner.py --serve ~/Kafeen` serves the folder, and `python planner.py --serve example` serves a sample portfolio.
+
+In the page, **click the KAFEEN logo** to open the project drawer:
+
+- **All projects** shows every project's backlog together, in the usual Projects / Timeline / People / Upcoming / Week tabs. Click a task's circle or cells to change it, as usual: the change is written straight into that project's `backlog.kf`.
+- Under each project: its **Quick note**, **Backlog**, **Notes** (pages, grouped in sections if you like, like OneNote), **Habits** and **Archive**. Click one to open it. `.kf` pages open in Planner mode, `.md` in Markdown and `.txt` in Text. Everything saves itself about a second after each change.
+- **⋯** on a project, section or page has New page, New section, Rename and Delete. **+ New project** is at the bottom, and **Find a project** at the top.
+
+The header shows where you are (`HDC › Notes › Kickoff call`); click it to open the drawer. The page you were on opens again next time. Archive, habits and the new Planner come in the next releases.
 
 ---
 

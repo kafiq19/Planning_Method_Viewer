@@ -5,6 +5,28 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.1  2026-11-06  Portfolio, part 2: the project drawer
+-------------------------------------------------
+- New: in a portfolio (--serve FOLDER), click the KAFEEN logo to open
+  the project drawer: All projects, then each project with its Quick
+  note, Backlog, Notes (pages in sections, like OneNote), Habits and
+  Archive. Find a project by name; + New project at the bottom; New
+  page, New section, Rename and Delete in each row's ⋯ menu (Delete
+  moves it to the portfolio's .trash folder).
+- New: All projects shows every project's backlog in the usual tabs.
+  Changes made there go straight into that project's backlog.kf, with
+  Undo; if the file changed meanwhile, nothing is overwritten.
+- New: the header shows where you are (HDC › Notes › Kickoff call). The
+  page you were on opens again next time; pages save themselves and
+  open in their own mode (.kf Planner, .md Markdown, .txt Text).
+- New: an empty backlog or page offers + Add task for its project.
+- Code: page_data / portfolio_data; /api/parse {name} or {all: true};
+  /api/edit with path returns `before` and, with all, All projects'
+  data; add_task line 0 (the file's own project); tasks, projects and
+  targets carry path and folder. In the page: drawer, ask, moreButton,
+  openPage, showAll, showCrumbs, folioWelcome; editTask and undo edit
+  files directly in All projects.
+
 2.0.0  2026-11-06  Portfolio, part 1: projects on disk, .kf
 -------------------------------------------------
 - New: portfolios. A portfolio is a folder with one sub-folder per

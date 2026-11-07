@@ -971,8 +971,15 @@ class TestAddTask(EditBase):
 
     def test_project_lines_in_data(self):
         d = planner.to_data(planner.parse("Fall\n@P\n- a\n@Q\n"))
-        self.assertEqual(d["targets"], [{"name": "P", "line": 2, "section": "Fall"}, {"name": "Q", "line": 4, "section": "Fall"}])
+        self.assertEqual(d["targets"], [{"name": "P", "line": 2, "path": None, "folder": None, "section": "Fall"},
+                                        {"name": "Q", "line": 4, "path": None, "folder": None, "section": "Fall"}])
         self.assertEqual(d["projects"][0]["projects"][0]["line"], 2)
+
+    def test_line_0_is_the_files_own_project(self):
+        self.assertEqual(planner.add_task("", 0, "a", "HDC"), "- a\n")
+        self.assertEqual(planner.add_task("@Stream\r\n- b\r\n", 0, "a", "HDC"), "- a\r\n@Stream\r\n- b\r\n")
+        self.assertEqual(planner.add_task("- x\n\n@Stream\n- b\n", 0, "a", "HDC"), "- x\n- a\n\n@Stream\n- b\n")
+        self.assertEqual(planner.add_task("Fall\n- x\n", 2, "a", "HDC"), "Fall\n- x\n- a\n")   # its own project: any name
 
     def test_rejects_bad_and_stale(self):
         for bad in ("", "  ", "a\nb"):
@@ -1102,6 +1109,7 @@ class TestServer(Base):
         with urllib.request.urlopen(self.url + "/api/portfolio") as r:
             self.assertEqual(json.loads(r.read()), {"name": None})
         self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "X"})[0], 409)
+        self.assertEqual(self.post("/api/parse", {"all": True})[0], 409)
 
     def test_example(self):
         with urllib.request.urlopen(self.url + "/api/example") as r:
@@ -1622,6 +1630,44 @@ class TestServerPortfolio(Base):
                                             "op": "status", "value": "doing"})
         self.assertEqual(code, 200)
         self.assertEqual(out["data"]["projects"][0]["projects"][0]["name"], "HDC")
+
+    def test_page_parse_names_the_project(self):
+        code, d = self.post("/api/parse", {"text": "", "name": "HDC"})
+        self.assertEqual(d["targets"], [{"name": "HDC", "line": 0, "path": None, "folder": None, "section": None}])
+        code, d = self.post("/api/edit", {"text": "", "name": "HDC", "line": 0, "title": "HDC", "op": "task", "value": "a"})
+        self.assertEqual((code, d["text"]), (200, "- a\n"))
+        self.assertEqual(d["data"]["projects"][0]["projects"][0]["name"], "HDC")
+        self.assertEqual(d["data"]["targets"][0]["line"], 1)
+
+    def test_all_projects(self):
+        self.write("MDM/backlog.kf", "- c (KA) Oct14\n")
+        os.mkdir(os.path.join(self.root, "OPS"))                       # no backlog yet
+        code, d = self.post("/api/parse", {"all": True, "today": "2026-10-12"})
+        self.assertEqual(code, 200)
+        self.assertEqual(sorted(d["versions"]), ["HDC/backlog.kf", "MDM/backlog.kf", "OPS/backlog.kf"])
+        self.assertIsNone(d["versions"]["OPS/backlog.kf"])
+        names = [(p["name"], p["folder"], p["path"]) for sec in d["projects"] for p in sec["projects"]]
+        self.assertEqual(names, [("Stream", "HDC", "HDC/backlog.kf"), ("MDM", "MDM", "MDM/backlog.kf")])
+        self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["path"], "HDC/backlog.kf")
+        self.assertEqual([(t["name"], t["line"]) for t in d["targets"]], [("HDC", 0), ("OPS", 0), ("Stream", 1), ("MDM", 1)])
+        self.assertEqual(d["people"][0]["tasks"][0]["folder"], "MDM")
+        self.assertEqual(self.post("/api/edit", {"path": "MDM/backlog.kf", "version": "stale", "line": 1, "title": "c",
+                                                 "op": "status", "value": "done"})[0], 409)
+        code, out = self.post("/api/edit", {"path": "MDM/backlog.kf", "version": d["versions"]["MDM/backlog.kf"], "all": True,
+                                            "line": 1, "title": "c", "op": "status", "value": "done"})
+        self.assertEqual((code, out["text"], out["before"]), (200, "!- c (KA) Oct14\n", "- c (KA) Oct14\n"))
+        self.assertEqual(out["data"]["versions"]["MDM/backlog.kf"], out["version"])
+        code, out = self.post("/api/edit", {"path": "OPS/backlog.kf", "version": None, "all": True,
+                                            "line": 0, "title": "OPS", "op": "task", "value": {"title": "first", "who": "RT"}})
+        self.assertEqual((code, out["text"]), (200, "- first (RT)\n"))
+        self.assertIn("OPS", [p["name"] for sec in out["data"]["projects"] for p in sec["projects"]])
+
+    def test_all_projects_merges_sections_by_title(self):
+        self.write("A/backlog.kf", "Fall\n- a\n")
+        self.write("B/backlog.kf", "Fall\n- b\nWinter\n- c\n")
+        d = planner.portfolio_data(self.root)
+        self.assertEqual([(s["title"], [p["name"] for p in s["projects"]]) for s in d["projects"]],
+                         [("Fall", ["A", "B"]), ("Winter", ["B"]), (None, ["Stream"])])
 
     def test_file_browser_is_off(self):
         self.assertEqual(self.get("/api/browse")[0], 409)
