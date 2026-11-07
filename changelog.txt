@@ -5,6 +5,24 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.4  2026-11-06  Portfolio, part 5: habits
+-------------------------------------------------
+- New: a Habits page for each project (habits.kf). A habit is a task with
+  how often it repeats (*daily, *weekdays, *weekly Mon, Wed, Fri,
+  *monthly 1st); the page shows a week of tick boxes, and ticking a day
+  writes it in a note under the habit: -- done Nov02 Nov03.
+- New: *weekdays and *weekly Mon, Wed, Fri (several days) as reminders.
+- New: habits in the Planner: on the Week level each day lists the habits
+  due that day with their tick boxes; on the other levels each column
+  says how many were done.
+- New: in January, move last year's ticks to the archive with one click.
+- Changed: the Planner's Plan column is a little wider.
+- Code: reminder_days, repeats, every_label, resolve_past, log_of,
+  LOG_END, Task.log, habit_rows; ops every and tick; take_habit_log
+  (/api/archive habit_log); planner.habits / days / log_years;
+  page_data(habits). In the page: vHabits, tickButton, habitsIn,
+  addHabitRow, isHabitsPage, state.habitWeek.
+
 2.0.3  2026-11-06  Portfolio, part 4: the Planner
 -------------------------------------------------
 - New: the Week tab is now the Planner, by Year, Season, Month or Week.

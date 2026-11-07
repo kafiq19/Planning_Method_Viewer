@@ -94,7 +94,8 @@ Pick how to view it:
 | `Oct23--26` or `Oct23--Nov03` | Date range: start--end |
 | `~Q1` `~T1` `~Nov` `~wk43` | Loose date: sometime in that quarter, trimester, month or week. Trimesters follow the calendar like quarters: `~T1` is Winter (Jan-Apr), `~T2` Summer (May-Aug), `~T3` Fall (Sep-Dec), the same months as the seasons |
 | `*Oct17` | Reminder on a date |
-| `*weekly Fri` `*monthly 1st` `*daily` | Repeating reminder |
+| `*daily` `*weekdays` `*weekly Fri` `*weekly Mon, Wed, Fri` `*monthly 1st` | Repeating reminder (in `habits.kf`, a habit's frequency) |
+| `-- done Nov02 Nov03` | A habit's log: the days it was done (the latest such days so far) |
 | `>Oct14` `>wk45` `>Nov` `>T3` | Planned: when you mean to work on it, a day, a week, a month or a trimester (the **Planner** tab). Separate from the due date: `draft report Oct24 >Oct14` is due Oct 24, planned for Oct 14 |
 | `^wk45` `^Nov` `^T3` `^yr` | A top priority for that week, month, trimester or this year (the ☆ in the Planner). A task can have several |
 
@@ -170,7 +171,9 @@ In the page, **click the KAFEEN logo** to open the project drawer:
 
 The header shows where you are (`HDC › Notes › Kickoff call`); click it to open the drawer. The page you were on opens again next time.
 
-**Circle, archive, delete.** Every task row ends in a faint **⋯**. Click it to **Circle in purple** (marks a notable task with a purple box; it writes `(!)` in front of the task), **Archive to 2026** (or last year), or **Delete** (the task goes with its subtasks and notes; it asks first if there are subtasks). Archiving moves the task and its subtasks, word for word, into the project's `archive/2026.kf`, under the same `@` group, and the year appears under **Archive** in the drawer. To clear out a project, point at its heading and click **Archive done**: every finished task (done, with all its subtasks done) moves to the archive; a finished subtask of a task that's still open stays where it is. **Undo** in the message at the bottom puts everything back. An archive page shows that year's dates (no years are written in the notes, so `Mar10` in `2025.kf` means March 10, 2025). Habits and the new Planner come in the next releases.
+**Circle, archive, delete.** Every task row ends in a faint **⋯**. Click it to **Circle in purple** (marks a notable task with a purple box; it writes `(!)` in front of the task), **Archive to 2026** (or last year), or **Delete** (the task goes with its subtasks and notes; it asks first if there are subtasks). Archiving moves the task and its subtasks, word for word, into the project's `archive/2026.kf`, under the same `@` group, and the year appears under **Archive** in the drawer. To clear out a project, point at its heading and click **Archive done**: every finished task (done, with all its subtasks done) moves to the archive; a finished subtask of a task that's still open stays where it is. **Undo** in the message at the bottom puts everything back. An archive page shows that year's dates (no years are written in the notes, so `Mar10` in `2025.kf` means March 10, 2025).
+
+**Habits.** Each project has a **Habits** page (`habits.kf`) for repeating tasks. Every habit is a task with how often it repeats: `- stretch *daily`, `- gym (KA) *weekly Mon, Wed, Fri`, `- standup *weekdays`, `- rent *monthly 1st`. The page shows this week with a tick box per day; click one when you've done it (days that haven't come yet can't be ticked). Ticks are written in a note under the habit, `-- done Nov02 Nov03`. Click **Every** to change how often, and **+ Add habit** to add one (a name and how often). **‹ ›** steps through the weeks. Your habits also show in the **Planner**: on the Week level, each day lists the habits due that day, with the same tick boxes; on the other levels, each column says how many were done. In January, the page offers to move last year's ticks to the archive. To retire a habit, mark it done (or delete it from its **⋯**).
 
 ---
 

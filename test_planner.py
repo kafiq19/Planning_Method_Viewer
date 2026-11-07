@@ -1576,6 +1576,79 @@ class TestArchive(EditBase):
                                                          (date(2025, 10, 1), date(2025, 12, 31))])
 
 
+# ---------- habits ----------
+
+class TestHabits(EditBase):
+    today = "2026-11-06"                                               # a Friday
+    TEXT = "- stretch *daily\n- gym (KA) *weekly Mon, Wed, Fri\n\t-- with RT\n- rent *monthly 1st\n- standup *weekdays\n"
+
+    def test_frequencies(self):
+        ts = planner.parse(self.TEXT)[0].tasks
+        self.assertEqual([[s for s, _ in t.reminders] for t in ts], [["daily"], ["weekly Mon, Wed, Fri"], ["monthly 1st"], ["weekdays"]])
+        a, b = planner.date(2026, 11, 2), planner.date(2026, 11, 8)
+        days = {t.title: [d.day for d in due] for _, t, _, due, _ in planner.habit_rows(planner.parse(self.TEXT), a, b)}
+        self.assertEqual(days, {"stretch": [2, 3, 4, 5, 6, 7, 8], "gym": [2, 4, 6], "rent": [], "standup": [2, 3, 4, 5, 6]})
+        self.assertEqual(planner.next_reminder("weekly Mon, Wed"), planner.date(2026, 11, 9))
+        self.assertEqual(planner.next_reminder("weekdays"), planner.date(2026, 11, 6))
+        self.assertEqual(planner.every_label("weekly mon, wed"), "Mon, Wed")
+        self.assertEqual(self.task("call *weekly Fri, then").title, "call , then")   # only day names join the list
+
+    def test_tick_and_untick(self):
+        a = planner.tick_habit(self.TEXT, 1, "Nov06", "stretch")
+        self.assertEqual(a, self.TEXT.replace("- stretch *daily\n", "- stretch *daily\n\t-- done Nov06\n"))
+        b = planner.tick_habit(a, 1, "Nov05")
+        self.assertIn("\t-- done Nov06 Nov05\n", b)
+        self.assertEqual(planner.parse(b)[0].tasks[0].log(), [planner.date(2026, 11, 5), planner.date(2026, 11, 6)])
+        self.assertEqual(planner.tick_habit(b, 1, "Nov05"), b)                    # already
+        self.assertEqual(planner.tick_habit(planner.tick_habit(b, 1, "-Nov06"), 1, "-Nov05"), self.TEXT)
+        self.assertEqual(planner.tick_habit(self.TEXT, 2, "-Nov04"), self.TEXT)
+        c = planner.tick_habit(self.TEXT, 2, "Nov04", "gym")                   # its own log goes first; other notes stay
+        self.assertIn("- gym (KA) *weekly Mon, Wed, Fri\n\t-- done Nov04\n\t-- with RT\n", c)
+
+    def test_log_reads_back_to_the_latest_day_so_far(self):
+        t = planner.parse("- x *daily\n\t-- done Nov06 Nov07 Jan02\n")[0].tasks[0]
+        self.assertEqual(t.log(), [planner.date(2025, 11, 7), planner.date(2026, 1, 2), planner.date(2026, 11, 6)])
+        self.assertEqual(t.notes, ["done Nov06 Nov07 Jan02"])
+        self.assertEqual(planner.to_data(planner.parse("- x *daily\n\t-- done Nov06\n\t-- done with Lisa\n"))
+                         ["projects"][0]["projects"][0]["tasks"][0]["notes"], ["done with Lisa"])   # not a log: a note
+
+    def test_tick_refusals(self):
+        for bad in ("Feb30", "tomorrow", "Nov"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.tick_habit(self.TEXT, 1, bad)
+        out = planner.tick_habit(self.TEXT, 1, "Nov07")                      # the latest Nov 7 so far: last year's
+        self.assertEqual(planner.parse(out)[0].tasks[0].log(), [planner.date(2025, 11, 7)])
+
+    def test_set_every(self):
+        self.assertEqual(planner.set_every(self.TEXT, 1, "weekly Tue, Thu").splitlines()[0], "- stretch *weekly Tue, Thu")
+        self.assertEqual(planner.set_every("- x (KA)\r\n", 1, "*weekdays"), "- x (KA) *weekdays\r\n")
+        self.assertEqual(planner.set_every("- x *monthly 1st *Oct13\n", 1, ""), "- x *Oct13\n")
+        self.assertEqual(planner.set_every("- x\n", 1, ""), "- x\n")
+        for bad in ("Oct13", "weekly Fry", "hourly", "monthly 40th"):
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_every("- x\n", 1, bad)
+        out = planner.add_with_fields("task", "@P\n", 1, {"title": "read", "who": "KA", "every": "daily"}, "P")
+        self.assertEqual(out, "@P\n- read (KA) *daily\n")
+
+    def test_planner_habits(self):
+        d = planner.to_data([], None, ("week", 2026, 45), planner.parse(self.TEXT.replace("- stretch *daily\n", "- stretch *daily\n\t-- done Nov02\n")))
+        h = {x["title"]: x for x in d["planner"]["habits"]}
+        self.assertEqual(sorted(h), ["gym", "rent", "standup", "stretch"])
+        self.assertEqual((h["gym"]["due"], h["gym"]["every_label"]), (["2026-11-02", "2026-11-04", "2026-11-06"], "Mon, Wed, Fri"))
+        self.assertEqual(h["stretch"]["done"], ["2026-11-02"])
+        page = planner.page_data("- stretch *daily\n- no frequency yet\n!- retired *daily\n", "HDC", None, ("week", 2026, 45), habits=True)
+        self.assertEqual([(x["title"], x["every"]) for x in page["planner"]["habits"]], [("stretch", ["daily"]), ("no frequency yet", [])])
+
+    def test_archive_last_years_log(self):
+        planner.set_today("2027-01-05")
+        rest, moved = planner.take_habit_log("- stretch *daily\n\t-- done Dec30 Dec31 Jan02\n- gym *weekly Mon\n\t-- done Dec28\n", 2026)
+        self.assertEqual(rest, "- stretch *daily\n\t-- done Jan02\n- gym *weekly Mon\n")
+        self.assertEqual(moved, [("Habits", ["- stretch *daily\n", "\t-- done Dec30 Dec31\n"]), ("Habits", ["- gym *weekly Mon\n", "\t-- done Dec28\n"])])
+        self.assertEqual(planner.to_data([], habits=planner.parse("- x *daily\n\t-- done Dec30\n"))["planner"]["log_years"], [2026])
+        with self.assertRaises(planner.EditError):
+            planner.take_habit_log(rest, 2025)
+
+
 # ---------- the portfolio ----------
 
 class TestPortfolio(Base):
@@ -1820,7 +1893,8 @@ class TestServerPortfolio(Base):
         os.mkdir(os.path.join(self.root, "OPS"))                       # no backlog yet
         code, d = self.post("/api/parse", {"all": True, "today": "2026-10-12"})
         self.assertEqual(code, 200)
-        self.assertEqual(sorted(d["versions"]), ["HDC/backlog.kf", "MDM/backlog.kf", "OPS/backlog.kf"])
+        self.assertEqual(sorted(d["versions"]), ["HDC/backlog.kf", "HDC/habits.kf", "MDM/backlog.kf", "MDM/habits.kf",
+                                                 "OPS/backlog.kf", "OPS/habits.kf"])
         self.assertIsNone(d["versions"]["OPS/backlog.kf"])
         names = [(p["name"], p["folder"], p["path"]) for sec in d["projects"] for p in sec["projects"]]
         self.assertEqual(names, [("Stream", "HDC", "HDC/backlog.kf"), ("MDM", "MDM", "MDM/backlog.kf")])
@@ -1889,6 +1963,29 @@ class TestServerPortfolio(Base):
         code, d = self.post("/api/parse", {"text": "- a Jan03\n", "name": "HDC", "year": 2025})
         self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["span"]["start"], "2025-01-03")
         self.assertEqual(self.post("/api/parse", {"text": "", "year": "2025"})[0], 400)
+
+    def test_habits_in_the_portfolio(self):
+        self.write("HDC/habits.kf", "- stretch *daily\n")
+        d = self.post("/api/parse", {"all": True, "today": "2026-11-06"})[1]
+        self.assertEqual([(x["title"], x["path"], x["folder"]) for x in d["planner"]["habits"]], [("stretch", "HDC/habits.kf", "HDC")])
+        code, out = self.post("/api/edit", {"path": "HDC/habits.kf", "version": d["versions"]["HDC/habits.kf"], "all": True, "today": "2026-11-06",
+                                            "line": 1, "title": "stretch", "op": "tick", "value": "Nov06"})
+        self.assertEqual((code, out["text"]), (200, "- stretch *daily\n\t-- done Nov06\n"))
+        self.assertEqual(out["data"]["planner"]["habits"][0]["done"], ["2026-11-06"])
+        code, d = self.post("/api/parse", {"text": out["text"], "name": "HDC", "habits": True, "today": "2026-11-06"})
+        self.assertEqual(d["planner"]["habits"][0]["done"], ["2026-11-06"])
+        code, d = self.post("/api/parse", {"text": "- x *daily\n\t-- done Dec30\n", "name": "HDC", "habits": True, "year": 2025})
+        self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["log"], ["2025-12-30"])   # an archive: its own year
+
+    def test_archive_habit_log(self):
+        self.write("HDC/habits.kf", "- stretch *daily\n\t-- done Dec30 Jan02\n")
+        v = self.file("HDC/habits.kf")[1]["version"]
+        code, out = self.post("/api/archive", {"path": "HDC/habits.kf", "version": v, "archive_year": 2026, "habit_log": True,
+                                               "today": "2027-01-05"})
+        self.assertEqual((code, out["text"]), (200, "- stretch *daily\n\t-- done Jan02\n"))
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/archive/2026.kf"))[0], "@Habits\n- stretch *daily\n\t-- done Dec30\n")
+        self.assertEqual(self.post("/api/archive", {"path": "HDC/backlog.kf", "version": self.file("HDC/backlog.kf")[1]["version"],
+                                                    "archive_year": 2026, "habit_log": True})[0], 409)
 
     def test_file_browser_is_off(self):
         self.assertEqual(self.get("/api/browse")[0], 409)

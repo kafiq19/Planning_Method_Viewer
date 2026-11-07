@@ -39,6 +39,8 @@ NOTE FORMAT (quick reference)
   ~Q1  ~T1  ~Nov  ~wk43         loose date: sometime in that period (T1-T3: trimesters
                                 Winter Jan-Apr, Summer May-Aug, Fall Sep-Dec)
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
+  *weekdays  *weekly Mon, Wed, Fri                repeating: in habits.kf, a habit's frequency
+  -- done Nov02 Nov03           a habit's log: the days it was done
   >Oct14  >wk45  >Nov  >T3      planned: when you mean to work on it (the Planner; separate from the date)
   ^wk45  ^Nov  ^T3  ^yr         a top priority for that week, month, trimester or this year
 """
@@ -56,8 +58,11 @@ WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat"
 RE_TASK = re.compile(r"^(\(!\))?([!~]?)-\s*(.*)$")              # a task line's content: (!) notable, ! done, ~ doing
 RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
-RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
+DAYNAME = r"(?:[Mm]on|[Tt]ue|[Ww]ed|[Tt]hu|[Ff]ri|[Ss]at|[Ss]un)[a-z]*"
+RE_REMIND = re.compile(r"\*(daily|weekdays|weekly\s+[A-Za-z]{3}[a-z]*(?:\s*,\s*" + DAYNAME + r")*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
                        + MON + r"\d{1,2})\b")
+RE_LOG = re.compile(r"done((?:\s+" + MON + r"\d{1,2})+)\s*")       # a habit's log note: -- done Nov02 Nov03
+LOG_END = None       # the last day a habit log can mean (None: TODAY; an archive page: the end of its year)
 RE_PLAN = re.compile(r"(?<!\S)>(?:(" + MON + r")(\d{1,2})|wk(\d{1,2})|(" + MON + r")|(T[1-3]))\b")   # >Oct14 >wk45 >Nov >T3
 RE_PRIO = re.compile(r"(?<!\S)\^(wk\d{1,2}|" + MON + r"|T[1-3]|yr)\b")             # ^wk45 ^Nov ^T3 ^yr: a top priority for that period
 RE_RANGE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})--(" + MON + r")?(\d{1,2})\b")
@@ -170,32 +175,66 @@ def plan_label(kind, start, end):
     return str(start.year)
 
 
-def next_reminder(spec):
-    """Next date a reminder fires (today or later), or None if it has passed."""
+def repeats(spec):
+    """Is this reminder a repeating one (a habit's frequency), not a one-off *Oct13?"""
+    return not re.fullmatch(MON + r"\d{1,2}", spec)
+
+
+def reminder_days(spec, a, b):
+    """The days from `a` to `b` (inclusive) on which the reminder fires, in order."""
     m = re.fullmatch("(" + MON + r")(\d{1,2})", spec)
     if m:
         d = resolve(MONTHS[m.group(1)], int(m.group(2)))
-        return d if d and d >= TODAY else None
-    parts = spec.lower().split()
+        return [d] if d and a <= d <= b else []
+    parts = spec.lower().split(None, 1)
     if parts[0] == "daily":
-        return TODAY
-    if parts[0] == "weekly":
-        wd = WEEKDAYS.get(parts[1][:3])
-        return None if wd is None else TODAY + timedelta(days=(wd - TODAY.weekday()) % 7)
-    if parts[0] == "monthly":
+        test = lambda d: True
+    elif parts[0] == "weekdays":
+        test = lambda d: d.weekday() < 5
+    elif parts[0] == "weekly":
+        wds = {WEEKDAYS.get(x.strip()[:3]) for x in parts[1].split(",")} - {None}
+        test = lambda d: d.weekday() in wds
+    elif parts[0] == "monthly":
         n = int(re.match(r"\d+", parts[1]).group())
-        y, mo = TODAY.year, TODAY.month
-        for _ in range(13):
-            try:
-                d = date(y, mo, n)
-                if d >= TODAY:
-                    return d
-            except ValueError:
-                pass
-            mo += 1
-            if mo > 12:
-                mo, y = 1, y + 1
+        test = lambda d: d.day == n
+    else:
+        return []
+    return [a + timedelta(days=i) for i in range((b - a).days + 1) if test(a + timedelta(days=i))]
+
+
+def next_reminder(spec):
+    """Next date a reminder fires (today or later), or None if it has passed (or never fires)."""
+    days = reminder_days(spec, TODAY, TODAY + timedelta(days=400))
+    return days[0] if days else None
+
+
+def every_label(spec):
+    """How a frequency reads: Daily, Weekdays, Mon, Wed, Fri, Monthly 1st."""
+    parts = spec.split(None, 1)
+    if parts[0].lower() == "weekly":
+        return ", ".join(x.strip()[:3].capitalize() for x in parts[1].split(","))
+    return spec[0].upper() + spec[1:]
+
+
+def resolve_past(month, day):
+    """A habit log's MonDD: the latest such day on or before LOG_END (TODAY by default); None if there is none."""
+    end = LOG_END or TODAY
+    for y in (end.year, end.year - 1, end.year - 4):          # (a Feb 29 may be four years back)
+        try:
+            d = date(y, month, day)
+        except ValueError:
+            continue
+        if d <= end:
+            return d
     return None
+
+
+def log_of(note):
+    """A note's habit log dates (`done Nov02 Nov03`), or None if it isn't a log."""
+    m = RE_LOG.fullmatch(note)
+    if not m:
+        return None
+    return [d for d in (resolve_past(MONTHS[x[:3]], int(x[3:])) for x in m.group(1).split()) if d]
 
 
 def fd(d):
@@ -293,6 +332,10 @@ class Task:
                 self.start = self.end = d
                 cut_date(m)
         return " ".join(text.split())
+
+    def log(self):
+        """The days this habit was done (from its `-- done …` notes), sorted."""
+        return sorted({d for n in self.notes for d in (log_of(n) or [])})
 
     def walk(self):
         yield self
@@ -739,6 +782,20 @@ def planner_star(kind, y, i):
     return token, bool(pr) and pr == (kind, ps, pe)
 
 
+def habit_rows(projects, a, b, every=False):
+    """[(project, task, specs, due, done)]: each open task with a repeating reminder (`every`: each open task, a
+    Habits page lists those without one too), the days from `a` to `b` it is due and those it was done."""
+    out = []
+    for p in projects:
+        for t in p.all_tasks():
+            specs = [spec for spec, _ in t.reminders if repeats(spec)]
+            if t.status == "done" or not (specs or every):
+                continue
+            due = sorted({d for spec in specs for d in reminder_days(spec, a, b)})
+            out.append((p, t, specs, due, [d for d in t.log() if a <= d <= b]))
+    return out
+
+
 def planner_groups(projects, period):
     """-> (columns, planned, backlog, priorities) for a planner period.
     columns: [(heading, start, end, token, ok, [(project, task)])]: tasks planned for that column or a part of it
@@ -863,7 +920,8 @@ def task_data(t, keep=None):
     sp = t.span()
     d = {
         "title": t.title, "text": t.text, "status": t.status, "notable": t.notable, "line": t.line, "path": t.project and t.project.path,
-        "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
+        "log": [iso(x) for x in t.log()],
+        "date_text": t.date_text, "assignees": t.assignees, "notes": [n for n in t.notes if log_of(n) is None],
         "effort": t.effort, "points": t.points,
         "plan": iso(t.plan), "plan_end": iso(t.plan_end), "plan_kind": t.plan_kind, "plan_token": t.plan_token,
         "plan_label": plan_label(t.plan_kind, t.plan, t.plan_end) if t.plan else None,
@@ -889,10 +947,11 @@ def flat(p, t):
     return d
 
 
-def to_data(projects, period=None, plan=None):
+def to_data(projects, period=None, plan=None, habits=None, every=False):
     """Everything the five views show, as plain dicts and lists (JSON-ready).
 
-    `plan` (from planner_from) picks the Planner's period; default this week.
+    `plan` (from planner_from) picks the Planner's period; default this week. `habits` (projects from habits files)
+    adds `planner.habits` for the Planner's columns (`every`: a Habits page, listing tasks without a frequency too).
 
     With `period` (from period_from), Projects, Timeline and People show only tasks
     whose span overlaps it, and the timeline's columns are that period.
@@ -982,7 +1041,14 @@ def to_data(projects, period=None, plan=None):
                           "tasks": [flat(p, t) for t in tasks]} for p, tasks in pplanned],
             "backlog": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
                         for p, items in pbacklog],
-            "priorities": [flat(p, t) for p, t in pprios]},
+            "priorities": [flat(p, t) for p, t in pprios],
+            "habits": [dict(flat(p, t), every=specs, every_label=", ".join(every_label(x) for x in specs) or None,
+                            due=[iso(x) for x in due], done=[iso(x) for x in done])
+                       for p, t, specs, due, done in habit_rows(habits or [], pcols[0][1], pcols[-1][2], every)],
+            "days": [{"date": iso(x), "head": f"{('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[x.weekday()]} {x.day}",
+                      "token": f"{MONTH_NAMES[x.month - 1]}{x.day:02d}", "today": x == TODAY, "future": x > TODAY}
+                     for x in (pstart + timedelta(days=k) for k in range(7))] if plan[0] == "week" else [],
+            "log_years": sorted({x.year for p in (habits or []) for t in p.all_tasks() for x in t.log() if x.year < TODAY.year})},
     }
 
 
@@ -1041,6 +1107,128 @@ def set_status(text, line, status, title=None):
         body = body[1:]
     lines[line - 1] = ws + notable + STATUS_MARK[status] + body
     return "".join(lines)
+
+
+def set_every(text, line, spec, title=None):
+    """Set how often a habit repeats: `daily`, `weekdays`, `weekly Mon, Wed`, `monthly 1st` (with or without
+    the `*`), or (empty) remove it. Its repeating reminder is replaced in place; a new one goes at the end."""
+    lines, t = _task_at(text, line, title)
+    spec = " ".join(spec.strip().lstrip("*").split())
+    probe = Task("x *" + spec) if spec else None
+    if probe and (len(probe.reminders) != 1 or probe.title != "x" or not repeats(spec) or next_reminder(spec) is None):
+        raise EditError(f"{spec!r} is not a frequency (use daily, weekdays, weekly Mon, Wed or monthly 1st)")
+    raw = lines[line - 1]
+    i = next((k for k, (sp, _) in enumerate(t.reminders) if repeats(sp)), None)
+    if i is not None:
+        s, e = (t.col + x for x in t.at["reminders"][i])
+        raw = raw[:s] + "*" + spec + raw[e:] if spec else _drop(raw, s, e, t.col)
+    elif not spec:
+        return text
+    else:
+        p = _content_end(raw)
+        raw = raw[:p] + " *" + spec + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    old = [sp for sp, _ in t.reminders if not repeats(sp)]
+    want = ([spec] if spec else []) + [sp for k, (sp, _) in enumerate(t.reminders) if repeats(sp) and k != i]
+    if (n is None or n.title != t.title or [sp for sp, _ in n.reminders if not repeats(sp)] != old
+            or sorted(sp for sp, _ in n.reminders if repeats(sp)) != sorted(want)):
+        raise EditError("the line wouldn't read back with that frequency, so edit it by hand")
+    return out
+
+
+def tick_habit(text, line, value, title=None):
+    """Mark a habit done on a day (`Nov02`) or not (`-Nov02`), in its log note `-- done Nov02 Nov03`
+    (directly under the task; made if new, removed when empty). Only that note line changes."""
+    lines, t = _task_at(text, line, title)
+    value = value.strip()
+    off = value.startswith("-")
+    m = re.fullmatch("(" + MON + r")(\d{1,2})", value.lstrip("-").strip())
+    day = m and resolve_past(MONTHS[m.group(1)], int(m.group(2)))
+    if not day or (LOG_END is None and day > TODAY):
+        raise EditError(f"{value.lstrip('-')!r} is not a day so far (use Nov02)")
+    token = f"{MONTH_NAMES[day.month - 1]}{day.day:02d}"
+    end = _subtree_end(lines, line, t.level)
+    log_at = None                                   # the task's own log note: before its first subtask
+    for i in range(line, end):
+        c = lines[i].strip()
+        if c.startswith("--"):
+            if log_of(c[2:].strip()) is not None:
+                log_at = i
+                break
+        elif c and RE_TASK.match(c):
+            break
+    if off:
+        if log_at is None:
+            return text
+        raw = lines[log_at]
+        keep = []
+        for x in re.finditer(MON + r"\d{1,2}", raw):
+            if resolve_past(MONTHS[x.group()[:3]], int(x.group()[3:])) == day:
+                keep.append(x)
+        if not keep:
+            return text
+        for x in reversed(keep):
+            raw = _drop(raw, x.start(), x.end(), 0)
+        if log_of(raw.strip()[2:].strip()) is None:  # nothing left: the note goes
+            del lines[log_at]
+        else:
+            lines[log_at] = raw
+    elif log_at is not None:
+        if day in (log_of(lines[log_at].strip()[2:].strip()) or []):
+            return text
+        raw = lines[log_at]
+        p = _content_end(raw)
+        lines[log_at] = raw[:p] + " " + token + raw[p:]
+    else:
+        raw = lines[line - 1]
+        ws = raw[:len(raw) - len(raw.lstrip())]
+        ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
+        if not raw.endswith(tuple("\r\n")):
+            lines[line - 1] = raw + ending
+        lines.insert(line, ws + ("    " if ws and "\t" not in ws else "\t") + "-- done " + token + ending)
+    out = "".join(lines)
+    n = _find(out, line)
+    before = [(x.title, x.status) for p in parse(text) for x in p.all_tasks()]
+    after = [(x.title, x.status) for p in parse(out) for x in p.all_tasks()]
+    if n is None or (day in n.log()) == off or before != after:
+        raise EditError("the habit's log wouldn't read back that way, so edit it by hand")
+    return out
+
+
+def take_habit_log(text, year):
+    """For the archive: each habit's log days from `year` (taken out of its log note) -> (rest of the text,
+    [("Habits", [the habit's line, its log note for that year])])."""
+    lines = text.splitlines(keepends=True)
+    moved, cuts = [], []
+    for p in parse(text):
+        for t in p.all_tasks():
+            days = [d for d in t.log() if d.year == year]
+            if not days:
+                continue
+            end = _subtree_end(lines, t.line, t.level)
+            for i in range(t.line, end):
+                c = lines[i].strip()
+                if c.startswith("--") and log_of(c[2:].strip()) is not None:
+                    cuts.append((i, year))
+            raw = lines[t.line - 1]
+            head = raw.lstrip(" \t")
+            moved.append(("Habits", [head if head.endswith(("\n", "\r")) else head + "\n",
+                                     "\t-- done " + " ".join(f"{MONTH_NAMES[d.month - 1]}{d.day:02d}" for d in days) + "\n"]))
+    if not moved:
+        raise EditError(f"no habit was ticked in {year}")
+    for i, y in sorted(set(cuts), reverse=True):
+        raw = lines[i]
+        for x in reversed(list(re.finditer(MON + r"\d{1,2}", raw))):
+            d = resolve_past(MONTHS[x.group()[:3]], int(x.group()[3:]))
+            if d and d.year == y:
+                raw = _drop(raw, x.start(), x.end(), 0)
+        if log_of(raw.strip()[2:].strip()) is None:
+            del lines[i]
+        else:
+            lines[i] = raw
+    return "".join(lines), moved
 
 
 def set_notable(text, line, value, title=None):
@@ -1502,7 +1690,7 @@ def add_with_fields(op, text, line, fields, title=None):
     out = EDITS[op](text, line, fields["title"], title)
     a, b = text.splitlines(), out.splitlines()
     n = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), len(a)) + 1   # the new line
-    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date)):
+    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date), ("every", set_every)):
         value = fields.get(key)
         if value in (None, ""):
             continue
@@ -1512,7 +1700,7 @@ def add_with_fields(op, text, line, fields, title=None):
     return out
 
 
-EDITS = {"priority": set_priority, "notable": set_notable, "delete": delete_task, "text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
+EDITS = {"every": set_every, "tick": tick_habit, "priority": set_priority, "notable": set_notable, "delete": delete_task, "text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
 
@@ -1822,11 +2010,11 @@ def import_notes(text, root, name, split=False):
     return out
 
 
-def page_data(text, name=None, period=None, plan=None):
+def page_data(text, name=None, period=None, plan=None, habits=False):
     """to_data for one notes text; with `name` (a portfolio page: its project's name) the tasks before
     any @ belong to that project, and `targets` always offers it (line 0 when it has no tasks yet)."""
     projects = parse(text, name)
-    d = to_data(projects, period, plan)
+    d = to_data(projects, period, plan, projects if habits else None, habits)
     if name and not any(t["name"] == name and t["line"] for t in d["targets"]):
         d["targets"].insert(0, {"name": name, "line": 0, "path": None, "folder": None, "section": None})
     return d
@@ -1837,8 +2025,13 @@ def portfolio_data(root, period=None, plan=None):
     `path` and its project `folder`; sections with the same title are shown together; `targets` lists
     every project folder (line 0 when its backlog has no tasks of its own yet); `versions` maps each
     backlog's path to its version, for edits."""
-    projects, versions, sections, own = [], {}, {}, []
+    projects, versions, sections, own, habits = [], {}, {}, [], []
     for info in portfolio_tree(root)["projects"]:
+        hrel = info["files"]["habits"]
+        htext, versions[hrel] = read_notes(portfolio_path(root, hrel))
+        for hp in parse(htext, info["name"]):
+            hp.path, hp.folder = hrel, info["name"]
+            habits.append(hp)
         rel = info["files"]["backlog"]
         text, versions[rel] = read_notes(portfolio_path(root, rel))
         ps = parse(text, info["name"])
@@ -1849,7 +2042,7 @@ def portfolio_data(root, period=None, plan=None):
         if not any(pr.name == info["name"] and pr.section is None and pr.line for pr in ps):
             own.append({"name": info["name"], "line": 0, "path": rel, "folder": info["name"], "section": None})
         projects += ps
-    d = to_data(projects, period, plan)
+    d = to_data(projects, period, plan, habits)
     d["targets"] = own + d["targets"]
     d["versions"] = versions
     return d
@@ -1962,7 +2155,8 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send JSON"})
-            global TODAY
+            global TODAY, LOG_END
+            LOG_END = None
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 if self.path == "/api/file":
@@ -1980,6 +2174,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                     if type(req["year"]) is not int or not 1900 <= req["year"] <= 2999:
                         raise ValueError("year must be a year, like 2026")
                     TODAY = archive_today(req["year"])
+                    LOG_END = date(req["year"], 12, 31)
                 if self.path == "/api/archive":
                     return self._archive(req, period_from(req.get("period")), planner_from(req.get("planner")))
                 text = req.get("text", "")
@@ -1991,11 +2186,11 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                         if folio is None:
                             return self._json(409, {"error": "no portfolio folder was given (planner.py --serve FOLDER)"})
                         return self._json(200, portfolio_data(folio, period, monday))
-                    return self._json(200, page_data(text, name, period, monday))
+                    return self._json(200, page_data(text, name, period, monday, bool(req.get("habits"))))
                 if "path" in req:
                     return self._edit_file(req, period, monday)
                 text = apply_edit(text, req)
-                self._json(200, {"text": text, "data": page_data(text, name, period, monday)})
+                self._json(200, {"text": text, "data": page_data(text, name, period, monday, bool(req.get("habits")))})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -2011,13 +2206,14 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             if current != req.get("version"):
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
             name = project_name(req["path"]) if folio else None
+            hab = folio and portfolio_kind(req["path"]) == "habits"
             before, text = text, apply_edit(text, req)
             try:
                 version = write_notes(p, text, current)
             except FileConflict:
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
                                         "version": read_notes(p)[1]})
-            data = portfolio_data(folio, period, monday) if folio and req.get("all") else page_data(text, name, period, monday)
+            data = portfolio_data(folio, period, monday) if folio and req.get("all") else page_data(text, name, period, monday, hab)
             self._json(200, {"text": text, "before": before, "version": version, "data": data})
 
         def _archive(self, req, period, monday):
@@ -2038,7 +2234,11 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             text, current = read_notes(src)
             if current != req.get("version"):
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
-            if req.get("done"):
+            if req.get("habit_log"):
+                if portfolio_kind(path) != "habits":
+                    return self._json(409, {"error": "habit logs are archived from a project's Habits"})
+                rest, moved = take_habit_log(text, year)
+            elif req.get("done"):
                 rest, moved = take_done(text, req.get("project_line"))
             else:
                 rest, block, group = take_task(text, req["line"], req.get("title"))
@@ -2058,7 +2258,8 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
                                         "version": read_notes(src)[1]})
             name = project_name(path)
-            data = portfolio_data(folio, period, monday) if req.get("all") else page_data(rest, name, period, monday)
+            data = (portfolio_data(folio, period, monday) if req.get("all")
+                    else page_data(rest, name, period, monday, portfolio_kind(path) == "habits"))
             self._json(200, {"text": rest, "version": version, "data": data, "archive": arel,
                              "moved": sum(1 for _, b in moved for r in b if RE_TASK.match(r.strip()) and not r.strip().startswith("--")),
                              "tree": portfolio_tree(folio),

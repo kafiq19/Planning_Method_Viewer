@@ -497,7 +497,7 @@ async function render(relayout) {
   }
   const seq = ++state.seq;
   try {
-    const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: state.plan, year: archiveYear() };
+    const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }) });
     const data = await r.json();
@@ -540,7 +540,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   let ok = false;
   clearTimeout(timer);
   if (btn) btn.disabled = true;
-  const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: state.plan, year: archiveYear() };
+  const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
   try {
     if (state.all) {                                     // All projects: the server edits the task's backlog on disk
       const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -585,7 +585,7 @@ function editCell(cell, placeholder, initial, apply, wide, fill, tab) {   // fil
   };
   input.onblur = close;
   input.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task");               // float over the cell's line, right edge on the cell's right edge
+  const row = cell.closest(".task, .hrow");        // float over the cell's line, right edge on the cell's right edge
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.top - r.top) + "px"; box.style.height = c.height + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
@@ -632,7 +632,7 @@ function pickCell(cell, label, choices, current, apply, tab) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task, .wcard, .wline, .ph");   // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow");   // drop down from the cell, right edge on the cell's right edge
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
@@ -789,7 +789,7 @@ function filtered(d) {
     planner: { ...d.planner, columns: d.planner.columns.map(x => ({ ...x, tasks: flat(x.tasks).filter(shown) })),
       projects: d.planner.projects.map(g => ({ ...g, tasks: flat(g.tasks).filter(shown) })).filter(g => g.tasks.length),
       backlog: d.planner.backlog.map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
-      priorities: flat(d.planner.priorities).filter(shown) } };
+      priorities: flat(d.planner.priorities).filter(shown), habits: flat(d.planner.habits) } };
 }
 
 /* ---------- period: All dates / Month / Season, stepped with ‹ › (the server does the date math) ---------- */
@@ -860,12 +860,20 @@ for (const [k, label] of PLAN_LEVELS) {
   b.onclick = () => { store.set("planKind", k); setPlan({ kind: k }); };
   wSeg.append(b);
 }
-const setPlan = p => { state.plan = p.year != null ? { kind: p.kind, year: p.year, index: p.index } : { kind: p.kind }; render(false); };
+state.habitWeek = { kind: "week" };                       // the Habits page has its own week (not remembered)
+const isHabitsPage = () => !!(state.folio && !state.all && state.file && /^[^/]+\/habits\.kf$/.test(state.file.path));
+const planFor = () => isHabitsPage() ? state.habitWeek : state.plan;
+const setPlan = p => {
+  const v = p.year != null ? { kind: p.kind, year: p.year, index: p.index } : { kind: p.kind };
+  if (isHabitsPage()) state.habitWeek = v; else state.plan = v;
+  render(false);
+};
 wPrev.onclick = () => setPlan(state.data.planner.prev);
 wNext.onclick = () => setPlan(state.data.planner.next);
 wMid.onclick = () => { if (!state.data.planner.current) setPlan(state.data.planner.now); };
 function showPlan(pl, on) {
   wbox.classList.toggle("hidden", !on); pctl.classList.toggle("hidden", on);
+  wSeg.classList.toggle("hidden", isHabitsPage());          // Habits: one week at a time
   if (!on) return;
   const unit = PLAN_UNIT[pl.kind];
   for (const b of wSeg.children) { const sel = b.dataset.kind === pl.kind; b.classList.toggle("on", sel); b.setAttribute("aria-checked", String(sel)); }
@@ -948,9 +956,10 @@ function plannerView() {
   fBtn.title = n ? `${n} filter${n > 1 ? "s" : ""} on` : "Filter by person or project, or hide done tasks";
   fClear.disabled = !n;
   showPeriod(state.data.period);
-  showPlan(state.data.planner, state.tab === "planner");
+  const habitsPage = isHabitsPage();
+  showPlan(state.data.planner, state.tab === "planner" || habitsPage);
   if (archiveYear()) pctl.classList.add("hidden");   // an archive page is one year; no period
-  contentBox.classList.toggle("wide", state.tab === "planner");
+  contentBox.classList.toggle("wide", state.tab === "planner" || habitsPage);
   showCrumbs();
   const tabs = [];
   for (const [id, label] of TABS) {
@@ -962,11 +971,12 @@ function plannerView() {
     };
     tabs.push(b);
   }
-  tabsBox.replaceChildren(...tabs);
+  tabsBox.replaceChildren(...(habitsPage ? [h("button", "tab on", "Habits")] : tabs));
   const per = d.period, bits = [];               // say only what isn't obvious: a pinned Today, a period
   if (archiveYear()) bits.push(`The archive for ${archiveYear()}: finished tasks, as they were moved here`);
   else if ($("today").value.trim()) bits.push("As of " + d.today_label);
-  if (state.tab === "planner") {
+  if (habitsPage) bits.push("Tick a day when you've done it · each habit repeats on the days its frequency says");
+  else if (state.tab === "planner") {
     const pl = d.planner, unit = COLUMN_UNIT[pl.column_kind];
     bits.push(`Drag a task onto a ${unit}, or use its Plan cell · ☆ marks a top priority for this ${PLAN_UNIT[pl.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
@@ -974,7 +984,7 @@ function plannerView() {
   else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
   contextLine.textContent = bits.join(" · ");
-  plannerBody.replaceChildren({ projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab](d));
+  plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
   showToast();
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
 }
@@ -1130,7 +1140,7 @@ function moreCell(t) {
    Undo puts both files back (each only if it hasn't changed since). */
 async function archiveOp(body, target, year) {
   let path, version;
-  if (state.all) { path = target.path; version = state.data.versions[path]; }
+  if (state.all && target) { path = target.path; version = state.data.versions[path]; }
   else {
     const f = state.file;
     clearTimeout(autoTimer);
@@ -1144,7 +1154,7 @@ async function archiveOp(body, target, year) {
   try {
     const r = await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, name: folioName(),
-        today: $("today").value.trim() || null, period: state.period, planner: state.plan }) });
+        today: $("today").value.trim() || null, period: state.period, planner: planFor() }) });
     res = await r.json();
     if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
   } catch (err) {
@@ -1156,7 +1166,7 @@ async function archiveOp(body, target, year) {
   if (!state.all && state.file && state.file.path === path) setFile(res.text, res.version);
   if (seq !== state.seq) return;
   state.data = res.data;
-  const what = body.done ? tasksN(res.moved).replace(/^1 task$/, "1 finished task") : `"${body.title}"` + (res.moved > 1 ? ` and its ${tasksN(res.moved - 1).replace("task", "subtask")}` : "");
+  const what = body.habit_log ? `${year}'s habit ticks` : body.done ? tasksN(res.moved).replace(/^1 task$/, "1 finished task") : `"${body.title}"` + (res.moved > 1 ? ` and its ${tasksN(res.moved - 1).replace("task", "subtask")}` : "");
   state.msg = { text: `Archived ${what} to ${year}.`, undo: { files: res.undo } };
   plannerView();
 }
@@ -1435,6 +1445,110 @@ function weekItem(cls, t, w, extra) {           // a planned task: status, ☆, 
   draggable(el, t);
   return el;
 }
+/* ---------- Habits (a project's habits.kf): tasks with a frequency (*daily, *weekdays, *weekly Mon, Wed, *monthly 1st).
+   Ticking a day writes it in the habit's log note (-- done Nov02 Nov03, op "tick"); a day not yet come can't be ticked. ---------- */
+const TICK = { on: '<rect x="2.5" y="2.5" width="13" height="13" rx="3.5" fill="currentColor"/><path d="M5.6 9.3l2.2 2.2 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  off: '<rect x="3" y="3" width="12" height="12" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/>' };
+function tickButton(t, day, due) {               // one habit on one day: ticked, to do (due), or extra (not due)
+  const done = t.done.includes(day.date), b = h("button", "tick" + (done ? " on" : due ? " due" : " extra"));
+  b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${done ? TICK.on : TICK.off}</svg>`;   // fixed markup
+  b.title = `${t.title}, ${day.head}: ` + (done ? "done. Click to untick" : day.future ? "not yet" : due ? "due. Click when done" : "not due (click to tick anyway)");
+  b.setAttribute("aria-label", b.title); b.setAttribute("aria-pressed", String(done));
+  b.disabled = day.future && !done;
+  b.onclick = e => {
+    e.stopPropagation();
+    editTask(t, "tick", (done ? "-" : "") + day.token, b, done ? `Unticked "${t.title}" for ${day.head}.` : `Ticked "${t.title}" for ${day.head}.`);
+  };
+  return b;
+}
+function habitsIn(pl, c, on) {                   // a Planner column's habits: ticks per day (Week), or how many were done
+  const hs = (pl.habits || []).filter(on).filter(t => t.due.some(x => x >= c.start && x <= c.end) || t.done.some(x => x >= c.start && x <= c.end));
+  if (!hs.length) return null;
+  const box = h("div", "whab");
+  if (pl.days.length) {
+    for (const day of pl.days.filter(x => x.date >= c.start && x.date <= c.end))
+      for (const t of hs) {
+        const due = t.due.includes(day.date);
+        if (!due && !t.done.includes(day.date)) continue;
+        const row = h("div", "whrow", tickButton(t, day, due), span("wt", t.title), c.start !== c.end ? span("wd", day.head.split(" ")[0]) : null);
+        row.title = projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "");
+        box.append(row);
+      }
+  } else {
+    const due = hs.reduce((n, t) => n + t.due.filter(x => x >= c.start && x <= c.end).length, 0);
+    const done = hs.reduce((n, t) => n + t.done.filter(x => x >= c.start && x <= c.end).length, 0);
+    box.append(h("div", "whsum", `Habits: ${done} of ${due} done`));
+    box.title = hs.map(t => t.title).join(", ");
+  }
+  return box.children.length ? box : null;
+}
+function vHabits(d) {
+  const pl = d.planner, out = h("div", "habits");
+  for (const y of pl.log_years) {               // last year's ticks: move them to the archive (on the user's click)
+    const b = h("button", "", `Move ${y}'s ticks to the archive`);
+    b.onclick = () => archiveOp({ habit_log: true }, null, y);
+    out.append(h("div", "hbanner", span("", `Your habits still hold ticks from ${y}. `), b));
+  }
+  const table = h("div", "htable");
+  table.style.setProperty("--ndays", pl.days.length);
+  table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"),
+    ...pl.days.map(x => span("hday" + (x.today ? " today" : ""), x.head)), span("hcount", "Done"), span("", "")));
+  for (const t of pl.habits) {
+    const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : ""));
+    row.dataset.line = t.line; row.title = "line " + t.line;
+    const name = span("hname", t.title);
+    name.onclick = e => {                          // the habit's text, like a task's title (Edit alongside: jump instead)
+      if ($("viewPane").classList.contains("jump")) return;
+      e.stopPropagation();
+      editCell(name, "habit, like  stretch (KA) *daily", t.text, v => { v = v.trim(); if (v && v !== t.text) editTask(t, "text", v, null, `Changed "${t.title}".`); }, false, true);
+    };
+    const every = cellButton("hevery", "How often", t.every.length ? `${t.every_label}. Click to change` : "Set how often it repeats",
+      [t.every.length ? span("t", t.every_label) : span("add", "Set")],
+      cell => editCell(cell, "daily, weekdays, weekly Mon, Wed, monthly 1st", t.every.join(", "),
+        v => { v = v.trim(); if (v !== t.every.join(", ")) editTask(t, "every", v, null, v ? `"${t.title}" repeats ${v} now.` : `"${t.title}" doesn't repeat now.`); }, true));
+    const due = pl.days.filter(x => t.due.includes(x.date) && !x.future).length;
+    const done = pl.days.filter(x => t.done.includes(x.date)).length;
+    row.append(name, every, ...pl.days.map(x => h("span", "hday" + (x.today ? " today" : ""), tickButton(t, x, t.due.includes(x.date)))),
+      span("hcount", t.every.length ? `${done}/${due}` : ""), moreCell(t));
+    table.append(row);
+  }
+  if (!pl.habits.length) table.append(h("div", "empty", "No habits yet: add one below, like  stretch  every  daily."));
+  out.append(table);
+  out.append(addHabitRow(d));
+  return out;
+}
+function addHabitRow(d) {                        // + Add habit: a title and how often (the server writes the line)
+  const own = d.targets[0], btn = h("button", "addtask", span("plus", "+"), "Add habit");
+  btn.dataset.key = "habit";
+  const row = h("div", "addrow", btn);
+  btn.onclick = () => {
+    const title = h("input"), every = h("input", "fevery"), list = h("datalist");
+    title.type = every.type = "text"; title.placeholder = "new habit"; every.placeholder = "every: daily";
+    title.setAttribute("aria-label", "New habit"); every.setAttribute("aria-label", "How often");
+    list.id = "everyList";
+    for (const v of ["daily", "weekdays", "weekly Mon", "weekly Mon, Wed, Fri", "weekly Sat", "monthly 1st"]) { const o = h("option"); o.value = v; list.append(o); }
+    every.setAttribute("list", "everyList");
+    const form = h("div", "addform", title, every, list);
+    let closed = false;
+    const cancel = () => { if (!closed) { closed = true; form.replaceWith(btn); } };
+    form.addEventListener("focusout", () => setTimeout(() => { if (!form.contains(document.activeElement)) cancel(); }));
+    form.onkeydown = e => {
+      e.stopPropagation();
+      if (e.key === "Escape") { cancel(); btn.focus(); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        const v = title.value.trim(), ev = every.value.trim();
+        cancel();
+        if (!v || !own) return;
+        editTask({ line: own.line, title: own.name }, "task", ev ? { title: v, every: ev } : v, null, `Added the habit "${v}".`)
+          .then(ok => { const again = plannerBody.querySelector('.addtask[data-key="habit"]'); if (again && ok) again.click(); });
+      }
+    };
+    btn.replaceWith(form);
+    title.focus();
+  };
+  return row;
+}
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
   const pl = d.planner, out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
@@ -1455,6 +1569,8 @@ function vPlanner(d) {
     const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
     for (const t of c.tasks.filter(on)) col.append(weekItem("wcard", t, pl, [meta(t)]));
+    const hab = habitsIn(pl, c, on);
+    if (hab) col.append(hab);
     if (c.ok) dropZone(col, t => planTask(t, c.token, pl));
     days.append(col);
   }
