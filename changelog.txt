@@ -5,6 +5,21 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.8  2026-11-06  Planner only where it belongs; file tabs removed
+-------------------------------------------------
+- Changed: Planner mode is only for a project's Backlog and Archive, and
+  Habits, whose tick boxes are drawn in it. The Quick note and notes pages
+  open in Text (.md pages in Markdown), with Planner greyed out. That
+  includes .kf notes pages.
+- Removed: the file tabs, Open file, New file, the browser-kept Quick note,
+  Load the example, dropping a file on the page, and downloading text
+  without a file. --serve notes.txt still edits one file.
+- Code: modeOf, pageHasPlanner, plannerOK replace MODE_OF. Gone from the
+  server: GET /api/browse, GET /api/example, POST /api/open, POST
+  /api/close, make_server's browse_root and `picked`. Gone from the page:
+  showTabs, switchTo, showQuickNote, closeTab, the picker, loadText,
+  download. Autosave now goes with state.folio.
+
 2.0.7  2026-11-06  One Projects folder
 -------------------------------------------------
 - Changed: python planner.py --serve is all you need. Your projects live

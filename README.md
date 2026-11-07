@@ -170,7 +170,7 @@ Your lines are copied exactly; nothing in `notes.txt` changes. In the terminal, 
 In the page, **click the KAFEEN logo** to open the project drawer:
 
 - **All projects** shows every project's backlog together, in the usual Projects / Timeline / People / Upcoming tabs. The **Planner** (first in the drawer) plans all of them together. Click a task's circle or cells to change it, as usual: the change is written straight into that project's `backlog.kf`.
-- Under each project: its **Quick note**, **Backlog**, **Notes** (pages, grouped in sections if you like, like OneNote), **Habits** and **Archive**. Click one to open it. `.kf` pages open in Planner mode, `.md` in Markdown and `.txt` in Text. Everything saves itself about a second after each change.
+- Under each project: its **Quick note**, **Backlog**, **Notes** (pages, grouped in sections if you like, like OneNote), **Habits** and **Archive**. Click one to open it. The Backlog, Archive and Habits open in Planner mode. The Quick note and notes pages open in Text (`.md` pages in Markdown), with **Planner** greyed out. Everything saves itself about a second after each change.
 - **⋯** on a project, section or page has New page, New section, Rename and Delete. **+ New project** is at the bottom, and **Find a project** at the top.
 
 The header shows where you are (`HDC › Notes › Kickoff call`); click it to open the drawer. The page you were on opens again next time.

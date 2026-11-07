@@ -2087,19 +2087,14 @@ def apply_edit(text, req):
     return op(text, req["line"], req["value"], req.get("title"))
 
 
-def make_server(port, notes_path=None, browse_root=None, portfolio=None):
+def make_server(port, notes_path=None, portfolio=None):
     """The local server (127.0.0.1 only). Port 0 picks a free port.
 
     With `portfolio` (a folder; `--serve` passes PROJECTS), GET /api/portfolio lists its projects, POST /api/portfolio
     makes, renames and deletes (moves to .trash) projects, sections and pages, and
     /api/file reads and saves any file in it by its path relative to the folder.
 
-    With `notes_path`, GET/POST /api/file read and save that one file. Without
-    it, the page can list folders under `browse_root` (default: the home folder)
-    with GET /api/browse, open .txt / .md files there with POST /api/open (several
-    at once: the page shows them as tabs and autosaves them; `create` makes a new
-    empty one), and close them with POST /api/close; /api/file then reads and saves
-    an open file, named by `path`. Only open files are ever written.
+    With `notes_path`, GET/POST /api/file read and save that one file. Nothing else is ever written.
     """
     import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2111,13 +2106,6 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
     statics = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
                "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8")}
     folio = os.path.realpath(portfolio) if portfolio else None
-    root = os.path.realpath(browse_root or os.path.expanduser("~"))
-    opened = []                                     # files opened from the page (resolved paths), most recent last
-
-    def inside(p):
-        """`p` resolved, if it is `root` or under it; else None."""
-        p = os.path.realpath(p)
-        return p if p == root or p.startswith(root.rstrip(os.sep) + os.sep) else None
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype):
@@ -2153,19 +2141,11 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 if not self._trusted():
                     return
                 self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
-            elif path == "/api/browse":
-                if not self._trusted():
-                    return
-                self._browse(parse_qs(urlsplit(self.path).query).get("dir", [None])[0])
-            elif path == "/api/example":            # the sample notes, for the page's "Load the example"
-                if not self._trusted():
-                    return
-                self._json(200, {"text": (Path(__file__).resolve().parent / "example.kf").read_text(encoding="utf-8")})
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close", "/api/portfolio", "/api/archive"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -2177,10 +2157,6 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 if self.path == "/api/file":
                     return self._save(req)
-                if self.path == "/api/open":
-                    return self._open(req)
-                if self.path == "/api/close":
-                    return self._close(req)
                 if self.path == "/api/portfolio":
                     return self._portfolio(req)
                 TODAY = default_today
@@ -2308,8 +2284,8 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
             self._json(200, {"path": path, "tree": portfolio_tree(folio)})
 
         def _target(self, path):
-            """The file a request means: the command-line file, `path` if it is open, or in a
-            portfolio the file at `path` (relative to it) if its folder exists; else None."""
+            """The file a request means: the command-line file, or in a portfolio the file at `path`
+            (relative to it) if its folder exists; else None."""
             if folio is not None:
                 if portfolio_kind(path) in (None, "project", "section"):
                     return None
@@ -2321,17 +2297,14 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 if portfolio_kind(path) == "archive":     # archive/ is made on the first save
                     folder = os.path.dirname(folder)
                 return p if os.path.isdir(folder) else None
-            if notes_path is not None:
-                return notes_path if path in (None, notes_path) else None
-            p = isinstance(path, str) and os.path.realpath(path)
-            return p if p in opened else None
+            return notes_path if notes_path is not None and path in (None, notes_path) else None
 
         def _not_open(self, path):
-            """409 notOpen: e.g. the server was restarted; the page opens the file again and retries."""
+            """409 notOpen: `path` isn't a file this server can read or write."""
             self._json(409, {"error": f"{os.path.basename(str(path))} isn't open", "notOpen": True})
 
         def _file(self, path=None):
-            """{name, path, text, version, picked} for the command-line file, an open file or a
+            """{name, path, text, version} for the command-line file or a
             portfolio file (text "" and version null if not made yet); {name: null} without a path
             and without a command-line file."""
             if path is None and notes_path is None:
@@ -2343,67 +2316,7 @@ def make_server(port, notes_path=None, browse_root=None, portfolio=None):
                 text, version = read_notes(p)
             except (OSError, UnicodeDecodeError) as e:
                 return self._json(500, {"error": f"can't read {p}: {e}"})
-            self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version,
-                             "picked": notes_path is None})
-
-        def _browse(self, folder):
-            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
-            if folio is not None:
-                return self._json(409, {"error": "the projects folder is open: use its projects"})
-            if notes_path is not None:
-                return self._json(409, {"error": "a notes file was given on the command line"})
-            start = os.path.dirname(opened[-1]) if opened else (os.getcwd() if inside(os.getcwd()) else root)
-            d = inside(folder or start)
-            if d is None or not os.path.isdir(d):
-                return self._json(403, {"error": "you can only open files in your home folder"})
-            try:
-                found = list(os.scandir(d))
-            except OSError as e:
-                return self._json(403, {"error": f"can't open that folder: {e.strerror or e}"})
-            entries = []
-            for e in found:
-                if e.name.startswith("."):
-                    continue
-                try:
-                    if e.is_dir():
-                        entries.append({"name": e.name, "kind": "dir", "path": os.path.join(d, e.name)})
-                    elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
-                        entries.append({"name": e.name, "kind": "file", "path": os.path.join(d, e.name)})
-                except OSError:
-                    continue
-            entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].casefold()))
-            self._json(200, {"dir": d, "home": root, "parent": None if d == root else os.path.dirname(d), "entries": entries})
-
-        def _open(self, req):
-            """Open the notes file at req["path"] (under the browse root) and return it; opening an
-            open file again is fine. With "create", make it first (empty; refused if it exists)."""
-            if folio is not None:
-                return self._json(409, {"error": "the projects folder is open: use its projects"})
-            if notes_path is not None:
-                return self._json(409, {"error": "a notes file was given on the command line"})
-            p = isinstance(req.get("path"), str) and inside(req["path"])
-            if not p or not p.lower().endswith(NOTE_SUFFIXES) or not os.path.isdir(os.path.dirname(p)):
-                return self._json(403, {"error": "you can open .kf, .txt and .md files in your home folder"})
-            if req.get("create"):
-                if os.path.lexists(p):
-                    return self._json(409, {"error": f"{os.path.basename(p)} already exists"})
-                try:
-                    write_notes(p, "", None)
-                except (OSError, FileConflict) as e:
-                    return self._json(500, {"error": f"can't create {os.path.basename(p)}: {e}"})
-            if not os.path.isfile(p):
-                return self._json(404, {"error": f"{os.path.basename(p)} isn't there any more"})
-            if p in opened:
-                opened.remove(p)
-            opened.append(p)
-            self._file(p)
-
-        def _close(self, req):
-            """Stop serving the open file req["path"] (nothing is written)."""
-            p = isinstance(req.get("path"), str) and os.path.realpath(req["path"])
-            if p in opened:
-                opened.remove(p)
-            self._json(200, {"closed": True})
+            self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version})
 
         def _save(self, req):
             p = self._target(req.get("path"))

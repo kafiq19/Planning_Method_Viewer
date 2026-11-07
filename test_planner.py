@@ -1197,12 +1197,6 @@ class TestServer(Base):
         self.assertEqual(self.post("/api/portfolio", {"op": "project", "name": "X"})[0], 409)
         self.assertEqual(self.post("/api/parse", {"all": True})[0], 409)
 
-    def test_example(self):
-        with urllib.request.urlopen(self.url + "/api/example") as r:
-            self.assertEqual(json.loads(r.read()), {"text": read_example()})
-        req = urllib.request.Request(self.url + "/api/example", headers={"Origin": "https://evil.example"})
-        self.assertEqual(self.send(req)[0], 403)
-
     def test_parse(self):
         code, d = self.post("/api/parse", {"text": read_example(), "today": "2026-10-12"})
         self.assertEqual(code, 200)
@@ -1284,121 +1278,6 @@ class TestServer(Base):
                                 ("subtask", "b", "@P\n- a\n\t- b\n")]:
             code, d = self.post("/api/edit", {"text": text, "line": 2, "op": op, "value": value, "title": "a"})
             self.assertEqual((code, d["text"]), (200, want))
-
-
-class TestServerPickedFile(Base):
-    """No file on the command line: the page browses a folder and opens one notes file there."""
-    def setUp(self):
-        super().setUp()
-        self.dir = tempfile.TemporaryDirectory()
-        self.root = os.path.realpath(self.dir.name)
-        os.mkdir(os.path.join(self.root, "work"))
-        for name, data in [("work/plan.txt", b"@P\r\n- a\r\n"), ("notes.md", b"- b\n"), ("photo.png", b"x"), (".hidden.txt", b"")]:
-            with open(os.path.join(self.root, name), "wb") as f:
-                f.write(data)
-        self.server = planner.make_server(0, None, browse_root=self.root)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.dir.cleanup()
-        super().tearDown()
-
-    post, send = TestServer.post, TestServer.send
-
-    def get(self, path):
-        return self.send(urllib.request.Request(self.url + path))
-
-    def test_browse_lists_folders_and_notes_files(self):
-        code, d = self.get("/api/browse?dir=" + urllib.parse.quote(self.root))
-        self.assertEqual(code, 200)
-        self.assertEqual([(e["name"], e["kind"]) for e in d["entries"]], [("work", "dir"), ("notes.md", "file")])
-        self.assertIsNone(d["parent"])
-        code, d = self.get("/api/browse?dir=" + urllib.parse.quote(os.path.join(self.root, "work")))
-        self.assertEqual((d["parent"], [e["name"] for e in d["entries"]]), (self.root, ["plan.txt"]))
-
-    def test_browse_and_open_stay_inside_the_root(self):
-        self.assertEqual(self.get("/api/browse?dir=" + urllib.parse.quote(os.path.dirname(self.root)))[0], 403)
-        self.assertEqual(self.get("/api/browse?dir=" + urllib.parse.quote(os.path.join(self.root, "..")))[0], 403)
-        for path in (os.path.join(self.root, "photo.png"), os.path.join(os.path.dirname(self.root), "x.txt"), 5):
-            with self.subTest(path=path):
-                self.assertEqual(self.post("/api/open", {"path": path})[0], 403)
-        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "gone.txt")})[0], 404)
-        req = urllib.request.Request(self.url + "/api/browse", headers={"Origin": "https://evil.example"})
-        self.assertEqual(self.send(req)[0], 403)
-
-    def test_open_save_conflict_close(self):
-        plan = os.path.join(self.root, "work", "plan.txt")
-        code, d = self.post("/api/open", {"path": plan})
-        self.assertEqual((code, d["name"], d["path"], d["text"], d["picked"]), (200, "plan.txt", plan, "@P\r\n- a\r\n", True))
-        code, d2 = self.post("/api/file", {"path": plan, "text": "@P\n- a\n- c\n", "version": d["version"]})
-        self.assertEqual(code, 200)
-        with open(plan, "rb") as f:
-            self.assertEqual(f.read(), b"@P\r\n- a\r\n- c\r\n")         # CRLF kept, like file mode
-        code, c = self.post("/api/file", {"path": plan, "text": "x", "version": d["version"]})   # stale version
-        self.assertEqual((code, c["conflict"]), (409, True))
-        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[1]["text"], "@P\r\n- a\r\n- c\r\n")
-        self.assertEqual(self.get("/api/file")[1], {"name": None})          # no path: no command-line file
-        self.assertEqual(self.post("/api/close", {"path": plan})[1], {"closed": True})
-        code, c = self.post("/api/file", {"path": plan, "text": "x", "version": d2["version"]})
-        self.assertEqual((code, c.get("notOpen")), (409, True))               # closed: can't be written any more
-        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[0], 409)
-        with open(plan, "rb") as f:
-            self.assertEqual(f.read(), b"@P\r\n- a\r\n- c\r\n")
-
-    def test_several_files_open_at_once(self):
-        plan, notes = os.path.join(self.root, "work", "plan.txt"), os.path.join(self.root, "notes.md")
-        a, b = self.post("/api/open", {"path": plan})[1], self.post("/api/open", {"path": notes})[1]
-        self.assertEqual(self.post("/api/open", {"path": plan})[0], 200)     # opening an open file again is fine
-        self.assertEqual(self.post("/api/file", {"path": plan, "text": "A", "version": a["version"]})[0], 200)
-        self.assertEqual(self.post("/api/file", {"path": notes, "text": "B", "version": b["version"]})[0], 200)
-        for path, want in ((plan, b"A"), (notes, b"B")):
-            with open(path, "rb") as f:
-                self.assertEqual(f.read(), want)
-        self.post("/api/close", {"path": plan})
-        self.assertEqual(self.post("/api/file", {"path": notes, "text": "C", "version": planner.file_version(b"B")})[0], 200)
-        self.assertEqual(self.post("/api/file", {"path": plan, "text": "x", "version": planner.file_version(b"A")})[0], 409)
-
-    def test_unopened_files_cannot_be_read_or_written(self):
-        plan = os.path.join(self.root, "work", "plan.txt")             # e.g. after a server restart: open it first
-        for path in (plan, None, 5, os.path.join(self.root, "notes.md")):
-            with self.subTest(path=path):
-                code, d = self.post("/api/file", {"path": path, "text": "x", "version": None})
-                self.assertEqual((code, d.get("notOpen")), (409, True))
-        self.assertEqual(self.get("/api/file?path=" + urllib.parse.quote(plan))[0], 409)
-        with open(plan, "rb") as f:
-            self.assertEqual(f.read(), b"@P\r\n- a\r\n")
-
-    def test_create_new_file(self):
-        new = os.path.join(self.root, "work", "q4.txt")
-        code, d = self.post("/api/open", {"path": new, "create": True})
-        self.assertEqual((code, d["name"], d["text"], d["picked"]), (200, "q4.txt", "", True))
-        self.assertTrue(os.path.isfile(new))
-        self.assertEqual(self.post("/api/file", {"path": new, "text": "@Q4\n", "version": d["version"]})[0], 200)
-        self.assertEqual(self.post("/api/open", {"path": new, "create": True})[0], 409)      # already exists
-        for bad in (os.path.join(self.root, "nofolder", "x.txt"), os.path.join(self.root, "x.png"),
-                    os.path.join(os.path.dirname(self.root), "x.txt")):
-            with self.subTest(path=bad):
-                self.assertEqual(self.post("/api/open", {"path": bad, "create": True})[0], 403)
-                self.assertFalse(os.path.exists(bad))
-
-    def test_command_line_file_cannot_be_switched(self):
-        with tempfile.TemporaryDirectory() as other:
-            notes = os.path.join(other, "plan.txt")
-            open(notes, "w").close()
-            server = planner.make_server(0, notes, browse_root=self.root)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            try:
-                url = f"http://127.0.0.1:{server.server_address[1]}"
-                for req in (urllib.request.Request(url + "/api/browse"),
-                            urllib.request.Request(url + "/api/open", json.dumps({"path": os.path.join(self.root, "notes.md")}).encode(),
-                                                   {"Content-Type": "application/json"})):
-                    self.assertEqual(self.send(req)[0], 409)
-                self.assertFalse(self.send(urllib.request.Request(url + "/api/file"))[1]["picked"])
-            finally:
-                server.shutdown(); server.server_close()
 
 
 class TestServerWithFile(TestServer):
@@ -2062,8 +1941,16 @@ class TestServerPortfolio(Base):
     def test_no_other_folder_or_file_can_be_opened(self):
         for op in ("use", "leave"):
             self.assertEqual(self.post("/api/portfolio", {"op": op, "path": self.root})[0], 400)
-        self.assertEqual(self.get("/api/browse")[0], 409)
-        self.assertEqual(self.post("/api/open", {"path": os.path.join(self.root, "secret.txt")})[0], 409)
+        self.assertEqual(self.file(os.path.join(self.root, "secret.txt"))[1].get("notOpen"), True)
+        self.assertEqual(self.file("secret.txt")[1].get("notOpen"), True)
+        for path in ("/api/browse", "/api/example"):
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(self.url + path)
+            self.assertEqual(e.exception.code, 404)
+        for path in ("/api/open", "/api/close"):
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(urllib.request.Request(self.url + path, b"{}", {"Content-Type": "application/json"}))
+            self.assertEqual(e.exception.code, 404)
 
 
 if __name__ == "__main__":

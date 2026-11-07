@@ -11,8 +11,7 @@
 <header>
   <button id="brand" class="brand" aria-label="KAFEEN Planner" aria-haspopup="dialog" aria-expanded="false" disabled><svg class="logo" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="currentColor"/><rect x="5" y="6.5" width="9" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="8" y="10.7" width="11" height="2.6" rx="1.3" fill="var(--logo-ink)"/><rect x="5" y="14.9" width="6" height="2.6" rx="1.3" fill="var(--logo-ink)"/></svg><span class="bname">KAFEEN</span><span class="bsub">Planner</span></button>
   <button id="crumbs" class="crumbs hidden" title="Projects and pages"></button>
-  <button id="fileChip" class="filechip none hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
-  <span id="tabs" class="ftabs hidden" role="tablist" aria-label="Open files"></span>
+  <button id="fileChip" class="filechip hidden" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg><span id="fileName">Untitled</span></button>
   <button id="save" class="pill hidden" title="Save (Ctrl/⌘-S)">• Unsaved · Save</button>
   <span id="fileStatus" class="hint"></span>
   <span class="spacer"></span>
@@ -22,11 +21,10 @@
     <button data-mode="markdown">Markdown</button>
   </span>
   <span class="pop">
-    <button id="more" class="ghost" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="Open, save, theme and more">
+    <button id="more" class="ghost" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="Save, theme and more">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
     </button>
     <div id="moreMenu" class="menu hidden" role="menu">
-      <button class="mi" id="openWrap" role="menuitem">Open file… <span class="k">saves automatically</span></button>
       <button class="mi" id="saveItem" role="menuitem">Save <span class="k">Ctrl/⌘-S</span></button>
       <div class="sep"></div>
       <label class="mi" id="splitWrap">Edit alongside <input type="checkbox" id="split"></label>
@@ -41,10 +39,9 @@
     </div>
   </span>
 </header>
-<input id="file" type="file" accept=".kf,.txt,.md,.markdown,text/plain,text/markdown" hidden>
 <main>
   <section class="pane" id="editorPane">
-    <textarea id="editor" spellcheck="false" placeholder="Paste your notes here, or open a .kf / .txt / .md file. Drag and drop works too."></textarea>
+    <textarea id="editor" spellcheck="false" placeholder="Write here."></textarea>
   </section>
   <section class="pane hidden" id="viewPane"></section>
 </main>

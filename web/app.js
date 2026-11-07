@@ -5,7 +5,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
-const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, fileName: "notes.txt", seq: 0, msg: null, tabs: [], ready: false };
+const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, seq: 0, msg: null };
 
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
@@ -74,7 +74,6 @@ applyText();
 
 /* ---------- editor, files ---------- */
 const editor = $("editor");
-editor.value = store.get("text", "");
 editor.addEventListener("input", () => { remember(); state.msg = null; showFile(); schedule(); });
 editor.addEventListener("keydown", e => {            // Tab indents (the format is tab-based)
   if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -90,25 +89,11 @@ editor.addEventListener("keydown", e => {            // Tab indents (the format 
   editor.dispatchEvent(new Event("input"));
 });
 
-function loadText(text, name) {
-  if (!state.file && editor.value.trim() && editor.value !== text
-      && !confirm(`Replace your quick note with ${name || "this text"}?`)) return;
-  editor.value = text; remember();
-  if (name) state.fileName = name;
-  schedule();
-}
-function download() {
-  const a = h("a"); a.href = URL.createObjectURL(new Blob([editor.value], { type: "text/plain;charset=utf-8" }));
-  a.download = state.fileName; a.click(); URL.revokeObjectURL(a.href);
-}
-
-/* ---------- open files, read and written by the local server through /api/file. Two kinds:
-   - given on the command line (python planner.py --serve notes.txt): one file, saved when you press Save.
-   - opened from the page (Open file…, or + after the tabs): any number, shown as tabs in the header, each saved
-     automatically about a second after each change. The tabs are remembered in this browser ("openFiles",
-     "activeFile") and opened again on the next visit, like Notepad.
-   The text box shows one file at a time: switching tabs saves the current file first and loads the other from disk.
-   Edits that couldn't be saved yet are kept per file ("draft:<path>": {version, text}) and come back with the tab.
+/* ---------- files, read and written by the local server through /api/file. Two kinds:
+   - a project's pages (python planner.py --serve): saved automatically about a second after each change.
+   - one file given on the command line (python planner.py --serve notes.txt): saved when you press Save.
+   The text box shows one file at a time: opening a page saves the one being left first and loads the other from disk.
+   Edits that couldn't be saved yet are kept per file ("draft:<path>": {version, text}) and come back with the page.
    The server checks the version before every write, so a change made elsewhere is never overwritten silently. ---------- */
 const nl = s => s.replace(/\r\n?/g, "\n");                 // what a text box does to line endings
 const unsaved = () => state.file && editor.value !== state.file.saved;
@@ -117,65 +102,25 @@ let autoTimer;
 const baseName = p => p.split(/[\\/]/).pop();
 const draftKey = p => "draft:" + p;
 function readDraft(p) { try { return JSON.parse(store.get(draftKey(p), "null")); } catch (e) { return null; } }
-function remember() {                                       // keep the text box's text: untitled text, or a file's unsaved edits
+function remember() {                                       // keep a file's unsaved edits
   const f = state.file;
-  if (!f) return state.folio ? undefined : store.set("text", editor.value);   // a portfolio has no browser-only text
+  if (!f) return;
   if (editor.value === f.saved) store.del(draftKey(f.path));
   else store.set(draftKey(f.path), JSON.stringify({ version: f.version || "", text: editor.value }));
 }
-function saveTabs() {
-  if (state.folio) return;                                  // a portfolio remembers its page instead ("folioActive")
-  store.set("openFiles", JSON.stringify(state.tabs));
-  store.set("activeFile", state.file && state.file.picked ? state.file.path : "");
-}
 
-function showFile(problem) {                                // header: tabs (or the file chip) · Saved, or the Save pill
-  const st = $("fileStatus"), f = state.file, chip = $("fileChip");
+function showFile(problem) {                                // header: the breadcrumb (or the file chip) · Saved, or the Save pill
+  const st = $("fileStatus"), f = state.file, chip = $("fileChip"), auto = !!state.folio;
   st.classList.toggle("bad", !!problem);
-  $("fileName").textContent = f ? f.name : "Untitled";
-  chip.classList.toggle("none", !f);
-  chip.disabled = !!f;                                      // a command-line file can't be switched from the page
-  chip.title = f ? f.path : "Not saved to a file. Click to open one.";
-  $("save").classList.toggle("hidden", !unsaved() || !!problem || !!(f && f.picked));
-  showTabs();
-  if (problem) return st.replaceChildren(...problem);
-  if (!f) return st.replaceChildren(state.ready && !state.folio ? "Kept in this browser" : "");
-  st.replaceChildren(unsaved() ? (f.picked ? "Saving…" : "") : "Saved");
-  if (f.picked && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
-}
-
-function tabLabel(p) {                                      // the file name, plus its folder when two open files share a name
-  const n = baseName(p);
-  return state.tabs.filter(q => baseName(q) === n).length > 1 ? n + " · " + baseName(p.slice(0, -n.length - 1)) : n;
-}
-const PENCIL = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z";
-function showTabs() {                                       // [Quick note] [file ×] [file ×] +   (a command-line file: just its chip)
-  const cli = !!state.file && !state.file.picked, box = $("tabs");
-  box.classList.toggle("hidden", !state.ready || cli || !!state.folio);
-  $("fileChip").classList.toggle("hidden", !cli);
+  $("fileName").textContent = f ? f.name : "";
+  chip.title = f ? f.path : "";
+  chip.classList.toggle("hidden", !f || auto);
+  $("save").classList.toggle("hidden", !unsaved() || !!problem || auto);
   showCrumbs();
-  if (!state.ready || cli || state.folio) return box.replaceChildren();
-  const qn = h("button", "n", icon(PENCIL, 13), "Quick note");
-  qn.setAttribute("role", "tab"); qn.setAttribute("aria-selected", String(!state.file));
-  qn.title = "A note for quick ideas, kept in this browser (not in a file). It is always here and can't be closed.";
-  qn.onclick = () => { if (state.file) showQuickNote(); };
-  const quick = h("span", "ftab quick" + (state.file ? "" : " on"), qn);
-  const kids = state.tabs.map(p => {
-    const active = !!state.file && state.file.path === p;
-    const warn = active ? state.file.blocked : !!readDraft(p);
-    const name = h("button", "n", tabLabel(p));
-    name.setAttribute("role", "tab"); name.setAttribute("aria-selected", String(active));
-    name.title = p + (active ? "\nChanges save automatically." : "") + (warn ? "\nHas changes that aren't saved yet." : "");
-    name.onclick = () => { if (!active) switchTo(p); };
-    const x = h("button", "x", "×");
-    x.title = "Close " + baseName(p); x.setAttribute("aria-label", x.title);
-    x.onclick = e => { e.stopPropagation(); closeTab(p); };
-    return h("span", "ftab" + (active ? " on" : "") + (warn ? " warn" : ""), name, x);
-  });
-  const add = h("button", "ftadd ghost", "+");
-  add.title = "Open another file"; add.setAttribute("aria-label", add.title);
-  add.onclick = () => openPicker();
-  box.replaceChildren(quick, ...kids, add);
+  if (problem) return st.replaceChildren(...problem);
+  if (!f) return st.replaceChildren();
+  st.replaceChildren(unsaved() ? (auto ? "Saving…" : "") : "Saved");
+  if (auto && unsaved() && !f.blocked) { clearTimeout(autoTimer); autoTimer = setTimeout(() => save(), AUTOSAVE_MS); }
 }
 
 function setFile(text, version) {                           // the page now matches the file on disk
@@ -192,22 +137,18 @@ async function fileApi(body, path = "/api/file") {
   try { d = await r.json(); } catch (e) { d = { error: r.status === 404 ? "OLD_SERVER" : r.statusText || "no answer from the server" }; }
   return [r, d];
 }
-// The file as it is on disk now. A file opened from the page is (re)opened, so this also works after a server restart.
-const fetchFile = f => state.folio ? fileApi(null, "/api/file?path=" + encodeURIComponent(f.path))
-  : f.picked ? fileApi({ path: f.path }, "/api/open") : fileApi();
+// The file as it is on disk now.
+const fetchFile = f => state.folio ? fileApi(null, "/api/file?path=" + encodeURIComponent(f.path)) : fileApi();
 
-function useFile(d) {                                       // show this file (from /api/file or /api/open) in the text box
-  state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text), picked: !!d.picked };
-  state.fileName = d.name; state.switched = true; state.msg = null;
-  $("openWrap").classList.toggle("hidden", !d.picked);
-  if (d.picked && !state.folio && !state.tabs.includes(d.path)) state.tabs.push(d.path);
+function useFile(d) {                                       // show this file (from /api/file) in the text box
+  state.file = { name: d.name, path: d.path, version: d.version, saved: nl(d.text) };
+  state.switched = true; state.msg = null;
   const draft = readDraft(d.path), keep = !!draft && draft.text !== state.file.saved;
   editor.value = keep ? draft.text : state.file.saved;
   editor.setSelectionRange(0, 0); editor.scrollTop = 0;
   if (!keep) store.del(draftKey(d.path));
   const stale = keep && draft.version !== (d.version || "");   // edits made on an older version: let the user choose
   if (stale) state.file.blocked = true;
-  saveTabs();
   showFile();
   if (stale) conflict();
   render(false);
@@ -215,156 +156,27 @@ function useFile(d) {                                       // show this file (f
 
 async function leaveFile() {                                // before showing another file: save this one (if that fails, its draft stays)
   const f = state.file;
-  if (!f || !f.picked) return;
+  if (!f) return;
   clearTimeout(autoTimer);
   while (f.saving) await new Promise(ok => setTimeout(ok, 50));
   if (unsaved() && !f.blocked) await save();
   remember();
 }
 
-async function switchTo(path, create) {                     // show an open file, or open one (create: make it first)
-  await leaveFile();
-  try {
-    const [r, d] = await fileApi(create ? { path, create: true } : { path }, "/api/open");
-    if (!r.ok) {
-      if (r.status === 404 && state.tabs.includes(path)) { state.tabs = state.tabs.filter(p => p !== path); saveTabs(); }
-      throw new Error(d.error === "OLD_SERVER" ? "restart the server (python3 planner.py --serve)" : d.error || r.statusText);
-    }
-    useFile(d);
-  } catch (e) {
-    if (!state.file) showQuickNote();
-    showFile(["Can't open " + baseName(path) + ": " + e.message]);
-  }
-}
-const openPath = path => switchTo(path);
-
-async function showQuickNote() {                           // the Quick note tab: text kept in this browser (key "text"), no file
-  if (state.folio) return showAll();                        // a portfolio has a quick note per project instead
-  state.file = null; state.fileName = "quick-note.txt"; state.switched = true; state.msg = null; clearTimeout(autoTimer);
-  editor.value = store.get("text", "");
-  editor.setSelectionRange(0, 0); editor.scrollTop = 0;
-  $("openWrap").classList.remove("hidden");
-  saveTabs(); showFile(); render(false);
-}
-
-async function closeTab(p) {                                // stop showing and saving this file (the file itself stays)
-  const active = !!state.file && state.file.path === p;
-  if (active) await leaveFile();
-  if (readDraft(p) && !confirm(baseName(p) + " has changes that couldn't be saved. Close it anyway and lose them?")) return;
-  store.del(draftKey(p));
-  const i = state.tabs.indexOf(p);
-  if (i >= 0) state.tabs.splice(i, 1);
-  fileApi({ path: p }, "/api/close").catch(() => {});
-  if (!active) { saveTabs(); return showFile(); }
-  state.file = null;
-  const next = state.tabs[Math.min(i, state.tabs.length - 1)];
-  if (next) return switchTo(next);
-  showQuickNote();
-}
-
 async function startFileMode() {
   let r, d;
-  try { [r, d] = await fileApi(); } catch (e) { state.ready = true; return showFile(); }   // page opened without the server
-  state.ready = true;
+  try { [r, d] = await fileApi(); } catch (e) { return showFile(); }   // page opened without the server
   if (!r.ok) return showFile();
   if (d.name) return useFile(d);                            // a file given on the command line: just that one
   let folio = [{ ok: false }, {}];
   try { folio = await fileApi(null, "/api/portfolio"); } catch (e) {}
   if (folio[0].ok && folio[1].name) return startPortfolio(folio[1]);   // python planner.py --serve: the Projects folder
-  let paths;
-  try { paths = JSON.parse(store.get("openFiles", "null")); } catch (e) {}
-  if (!Array.isArray(paths)) { const last = store.get("lastPath", ""); paths = last ? [last] : []; }   // from 1.3.x
-  store.del("lastPath");
-  const gone = [];
-  for (const p of paths) {                                  // open last time's files again
-    let ok = false;
-    try { ok = (await fileApi({ path: p }, "/api/open"))[0].ok; } catch (e) {}
-    if (ok) state.tabs.push(p); else gone.push(baseName(p));
-  }
-  const active = store.get("activeFile", null);              // "" = the Quick note was showing
-  const first = active === "" ? null : state.tabs.includes(active) ? active : state.tabs[0];
-  if (first) await switchTo(first); else await showQuickNote();
-  if (gone.length) {
-    state.msg = { text: `Couldn't reopen ${gone.join(", ")}: moved, renamed or deleted.`, bad: true, anyMode: true };
-    showToast();
-  }
 }
 
-/* ---------- Open file…: a small browser of your home folder (the server lists it; only .kf / .txt / .md files) ---------- */
 const DOC = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5";
 const FOLDER = "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z";
-const picker = h("dialog", "picker"), pickPath = h("div", "ppath"), pickList = h("div", "plist");
-const pickCancel = h("button", "ghost", "Cancel");
-const pickFoot = h("div", "pfoot");
-let pickDir = null;                                        // the folder the file browser shows
-picker.append(h("div", "phead", h("b", "", "Open a notes file"), pickCancel), pickPath, pickList, pickFoot);
-function footer() {                                        // "Files … save automatically." and New file… (once a folder is shown)
-  const nb = h("button", "", "New file…");
-  nb.title = "Make a new, empty notes file in this folder";
-  nb.onclick = newFileForm;
-  pickFoot.replaceChildren(span("", "Files you open here save automatically."), ...(pickDir ? [nb] : []));
-}
-function newFileForm() {
-  const input = h("input"), ok = h("button", "", "Create"), form = h("form", "pnew", input, ok);
-  input.type = "text"; input.placeholder = "name, like  q4-plan.kf"; input.setAttribute("aria-label", "New file name");
-  form.onsubmit = e => {
-    e.preventDefault();
-    let n = input.value.trim();
-    if (!n) return;
-    if (/[\\/]/.test(n) || n.startsWith(".")) { input.setCustomValidity("Just a file name, without folders"); return input.reportValidity(); }
-    if (!/\.(kf|txt|md|markdown)$/i.test(n)) n += ".kf";
-    picker.close();
-    switchTo(pickDir.replace(/[\\/]$/, "") + (pickDir.includes("\\") && !pickDir.includes("/") ? "\\" : "/") + n, true);
-  };
-  input.oninput = () => input.setCustomValidity("");
-  pickFoot.replaceChildren(form);
-  input.focus();
-}
-pickCancel.onclick = () => picker.close();
-picker.onclick = e => { if (e.target === picker) picker.close(); };     // a click on the backdrop closes it
-document.body.append(picker);
-function pickProblem(text) {                               // the list can't be shown: say why, offer loading a file's text
-  const load = h("button", "", "Load a file's text instead");
-  load.title = "Copies the text into the page; it won't be saved back to the file";
-  load.onclick = () => { picker.close(); $("file").click(); };
-  pickPath.textContent = ""; pickDir = null; footer();
-  pickList.replaceChildren(h("div", "pmsg", text, h("div", "", load)));
-}
-async function browse(dir) {
-  let r, d;
-  try { [r, d] = await fileApi(null, "/api/browse" + (dir ? "?dir=" + encodeURIComponent(dir) : "")); }
-  catch (e) { return pickProblem("Can't reach the planner server. Start it with  python3 planner.py --serve  and reload this page."); }
-  if (!r.ok) return pickProblem(d.error === "OLD_SERVER"
-    ? "This server was started before the file browser existed. Stop it (Ctrl-C) and run  python3 planner.py --serve  again, then reload this page."
-    : d.error || r.statusText);
-  const shown = d.dir.startsWith(d.home) ? "~" + d.dir.slice(d.home.length) : d.dir;
-  pickPath.textContent = shown || "~"; pickPath.title = d.dir;
-  pickDir = d.dir; footer();
-  const row = (iconPath, label, cls, go) => { const b = h("button", "pitem " + cls, icon(iconPath, 16), span("", label)); b.onclick = go; return b; };
-  const rows = [];
-  if (d.parent) rows.push(row("M15 18l-6-6 6-6", "Up", "up", () => browse(d.parent)));
-  for (const e of d.entries) rows.push(e.kind === "dir" ? row(FOLDER, e.name, "dir", () => browse(e.path))
-    : row(DOC, e.name, "file", () => { picker.close(); openPath(e.path); }));
-  if (!d.entries.length) rows.push(h("div", "empty", "No folders or .kf / .txt / .md files here."));
-  pickList.replaceChildren(...rows);
-  pickList.scrollTop = 0;
-}
-function openPicker() {
-  closePops();
-  if (state.file && !state.file.picked) return;             // command-line file: one file only
-  pickList.replaceChildren(); pickDir = null; footer();
-  if (!picker.open) picker.showModal();
-  browse(null);
-}
-$("openWrap").onclick = () => openPicker();
-$("fileChip").onclick = () => openPicker();
-$("file").onchange = async e => {                           // fallback without the server: load the text only
-  const f = e.target.files[0];
-  if (f) loadText(await f.text(), f.name);
-  e.target.value = "";
-};
 async function save(force) {
-  if (!state.file) return state.folio ? undefined : download();   // All projects: everything is already on disk
+  if (!state.file) return;                                  // All projects: everything is already on disk
   const f = state.file;
   if (f.saving) { f.again = true; return; }                 // one write at a time; the newest text goes next
   clearTimeout(autoTimer);
@@ -373,12 +185,7 @@ async function save(force) {
   showFile(["Saving…"]);
   try {
     const body = { path: f.path, text, version: f.version, force: !!force };
-    let [r, d] = await fileApi(body);
-    if (r.status === 409 && d.notOpen && f.picked && !state.folio) {        // the server was restarted: open the file again, then save
-      const [r2, d2] = await fileApi({ path: f.path }, "/api/open");
-      if (!r2.ok) throw new Error(d2.error || r2.statusText);
-      [r, d] = await fileApi(body);
-    }
+    const [r, d] = await fileApi(body);
     if (r.status === 409 && d.conflict) return conflict();
     if (!r.ok) throw new Error(d.error || r.statusText);
     f.version = d.version; f.saved = text; f.blocked = false;
@@ -421,12 +228,7 @@ document.addEventListener("keydown", e => {
 });
 $("save").onclick = () => save();
 $("saveItem").onclick = () => { closePops(); save(); };
-for (const ev of ["dragover", "dragleave", "drop"]) document.body.addEventListener(ev, async e => {
-  e.preventDefault();
-  document.body.classList.toggle("drop", ev === "dragover" && !state.file && !state.folio);
-  if (state.file || state.folio) return;                    // a file is open: its text comes from that file
-  if (ev === "drop" && e.dataTransfer.files[0]) loadText(await e.dataTransfer.files[0].text(), e.dataTransfer.files[0].name);
-});
+for (const ev of ["dragover", "drop"]) document.body.addEventListener(ev, e => e.preventDefault());   // a dropped file must not replace the page
 $("today").value = store.get("today", "");
 $("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
 $("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
@@ -447,6 +249,10 @@ $("split").onchange = () => { store.set("split", $("split").checked ? "1" : "0")
 function layout() {
   const all = !!state.all;                                  // All projects: the views only (there is no one text)
   if (all) state.mode = "planner";
+  const can = plannerOK(), pb = $("modes").querySelector('[data-mode="planner"]');
+  if (state.mode === "planner" && !can) state.mode = "plain";
+  pb.disabled = !can;
+  pb.title = can ? "" : "Planner is for a project's Backlog and Archive";
   const plain = state.mode === "plain", split = $("split").checked && !all;
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === state.mode);
   $("modes").classList.toggle("hidden", all);
@@ -1269,19 +1075,10 @@ function archiveDoneButton(p) {                  // a project heading's "Archive
   };
   return b;
 }
-function welcome() {                             // first run: no notes yet
+function welcome() {                             // no notes yet
   if (state.folio) return folioWelcome();
-  const out = h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
-    h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24 , or open a file from the ⋯ menu."));
-  if (!editor.value.trim() && !state.file) {
-    const b = h("button", "", "Load the example");
-    b.onclick = async () => {
-      try { const r = await fetch("/api/example"); const d = await r.json(); if (r.ok && !editor.value.trim()) loadText(d.text, "example.kf"); }
-      catch (e) {}
-    };
-    out.append(b);
-  }
-  return out;
+  return h("div", "welcome", h("h2", "", editor.value.trim() ? "No projects or tasks found" : "No notes yet"),
+    h("p", "", "Write tasks in Text mode, like  - finish proposal (KA) (m) Oct24"));
 }
 
 function vTimeline(d) {
@@ -1677,7 +1474,7 @@ function list(items) {                                  // nested by indent (tab
 /* ---------- portfolio (python planner.py --serve: the Projects folder): the drawer, project pages and All projects ----------
    The logo opens a drawer: All projects (the views over every project's backlog), then the projects. A project
    shows its Quick note, Backlog, Notes (sections and pages, like OneNote), Habits and Archive. Each is a file in the
-   project's folder, opened in the text box like any picked file (autosaved, drafts, conflicts). All projects has no
+   project's folder, opened in the text box (autosaved, drafts, conflicts). All projects has no
    text box: the server reads every backlog and edits the task's own file (version-checked). The page shown last is
    remembered in "folioActive" ("" = All projects); open projects in "folioOpen". */
 const FOLIO_FILES = [["quicknote", "Quick note", "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"],
@@ -1687,7 +1484,11 @@ const NOTES_ICON = "M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4
 const ARCHIVE_ICON = "M21 8v13H3V8M1 3h22v5H1zM10 12h4";
 const ALL_ICON = "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 const PLANNER_ICON = "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z";
-const MODE_OF = { kf: "planner", md: "markdown", markdown: "markdown", txt: "plain" };   // a page opens in its file type's mode
+/* Planner mode exists for a project's Backlog and its Archive, and Habits (its page of tick boxes is drawn in that mode).
+   Everything else (the Quick note, notes pages) opens in Markdown if it is a .md, else in Text, with Planner greyed out. */
+const pageHasPlanner = path => /^[^/]+\/(backlog\.kf|habits\.kf|archive\/\d{4}\.kf)$/.test(path);
+const plannerOK = () => !state.folio || state.all || !state.file || pageHasPlanner(state.file.path);
+const modeOf = path => pageHasPlanner(path) ? "planner" : /\.(md|markdown)$/i.test(path) ? "markdown" : "plain";
 const extOf = p => ((/\.([^./]+)$/.exec(p) || [])[1] || "").toLowerCase();
 const folioName = () => state.folio && state.file ? state.file.path.split("/")[0] : null;   // tasks before any @ belong to it
 const archiveYear = () => {                       // an archive page's year: its dates are read in that year
@@ -1769,7 +1570,7 @@ async function renameItem(path, row, depth) {
     if (here) {                                      // the shown page moved: follow it (and its draft)
       const next = to + f.path.slice(path.length), draft = store.get(draftKey(f.path), null);
       if (draft) { store.set(draftKey(next), draft); store.del(draftKey(f.path)); }
-      f.path = next; f.name = baseName(next); state.fileName = f.name;
+      f.path = next; f.name = baseName(next);
       store.set("folioActive", next);
       showFile();
     }
@@ -1883,7 +1684,6 @@ function inTree(path) {                              // is this page still in th
 async function startPortfolio(tree) {
   state.folio = tree;
   $("brand").disabled = false; $("brand").title = "Projects and pages";
-  $("openWrap").classList.add("hidden");
   const last = store.get("folioActive", "");
   if (last && inTree(last)) await openPage(last); else await showAll();
   if (!last && !tree.projects.length) openDrawer(true);
@@ -1899,10 +1699,9 @@ async function openPage(path) {                      // show one of a project's 
     return showToast();
   }
   state.all = false;
-  const mode = MODE_OF[extOf(path)];
-  if (mode) { state.mode = mode; store.set("mode", mode); }
+  state.mode = modeOf(path); store.set("mode", state.mode);
   store.set("folioActive", path);
-  useFile({ ...d, picked: true });
+  useFile(d);
   layout();
   openDrawer(false);
   drawDrawer();

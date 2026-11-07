@@ -35,43 +35,7 @@ input[type=text], input[type=search] { cursor: text; }
   background: var(--hover); color: var(--text); font-size: 13px; }
 .filechip svg { flex: none; color: var(--muted); }
 .filechip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.filechip.none { background: none; color: var(--muted); }
 .filechip:disabled { opacity: 1; cursor: default; }
-/* open files as tabs in the header: [name ×] [name ×] + ; the active one is filled, a red dot marks unsaved edits */
-.ftabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
-.ftabs::-webkit-scrollbar { display: none; }
-.ftab { display: inline-flex; align-items: center; flex: none; max-width: 24ch; border-radius: 6px; color: var(--muted); }
-.ftab:hover { background: var(--hover); color: var(--text); }
-.ftab.on { background: var(--hover); color: var(--text); }
-.ftab .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; color: inherit;
-  font-size: 13px; padding: 3px 2px 3px 10px; }
-.ftab.on .n { font-weight: 600; cursor: default; }
-.ftab.warn .n::after { content: " •"; color: var(--bad); }
-.ftab.quick .n { display: inline-flex; align-items: center; gap: 5px; padding-right: 10px; }   /* Quick note: always first, no × */
-.ftab.quick svg { flex: none; }
-.ftab .x { flex: none; width: 20px; height: 20px; margin-right: 3px; padding: 0; border: 0; border-radius: 4px; background: none;
-  color: var(--muted); font-size: 15px; line-height: 1; visibility: hidden; }
-.ftab.on .x, .ftab:hover .x, .ftab .x:focus-visible { visibility: visible; }
-.ftab .x:hover { background: var(--line); color: var(--text); }
-@media (hover: none) { .ftab .x { visibility: visible; } }
-.ftadd { flex: none; padding: 1px 8px; font-size: 16px; line-height: 1.2; }
-.picker { width: min(460px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 12px;
-  background: var(--panel); color: var(--text); box-shadow: 0 16px 40px rgba(20, 25, 40, .25); }
-.picker::backdrop { background: rgba(10, 14, 22, .35); }
-.phead { display: flex; justify-content: space-between; align-items: center; padding: 12px 12px 6px 16px; }
-.ppath { padding: 0 16px 8px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plist { max-height: 50vh; overflow: auto; padding: 4px 8px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.pitem { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none;
-  text-align: left; font-size: 14px; }
-.pitem:hover, .pitem:focus-visible { background: var(--hover); }
-.pitem svg { flex: none; color: var(--muted); }
-.pitem.dir svg { color: var(--accent); }
-.pmsg { display: flex; flex-direction: column; gap: 10px; padding: 12px 8px; color: var(--muted); font-size: 13px; line-height: 1.45; }
-.pfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px 12px 16px; font-size: 12px; color: var(--muted); }
-.pfoot button { font-size: 13px; padding: 3px 10px; }
-.pnew { display: flex; gap: 6px; width: 100%; }
-.pnew input { flex: 1; min-width: 0; font-size: 13px; padding: 3px 8px; border-color: var(--accent); }
-.pill { font-size: 13px; padding: 2px 10px; border-radius: 12px; color: var(--accent); border-color: var(--accent); }
 .seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--code); border-radius: 8px; }
 .seg button { border: 0; background: none; color: var(--muted); padding: 4px 12px; font-size: 13px; }
 .seg button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 25, 40, .15); }
@@ -133,7 +97,6 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
 .hidden { display: none !important; }
 #viewPane.jump [data-line] { cursor: pointer; }      /* Edit alongside: a click on a task shows its line in the text */
 .measure { position: absolute; visibility: hidden; top: 0; left: -9999px; white-space: pre-wrap; overflow-wrap: break-word; }
-.drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
 
 /* the views' text: size and font from the ⋯ menu (the text editor takes the size only and stays monospace) */
 .content, .md { font-family: var(--vfont); font-size: calc(15px * var(--fz)); }
