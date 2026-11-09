@@ -412,3 +412,15 @@ td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
   .hrow .hevery, .hrow .hcount { display: none; }
   .hhead .hday { font-size: 10.5px; }
 }
+
+/* All projects: a heading per project (folds everything in it), and its section labels */
+.sechead.fhead { position: relative; margin-top: 26px; }
+.sechead.fhead:first-child { margin-top: 4px; }
+.sechead.fhead h2 { font-size: calc(15px * var(--fz)); letter-spacing: 0; text-transform: none; color: var(--text); }
+.sechead.fhead h2 .when { color: var(--muted); font-weight: 400; }
+.sechead.fhead h2 .archdone { visibility: hidden; margin-left: 8px; padding: 0 8px; font-size: calc(12px * var(--fz)); font-weight: 400; }
+.sechead.fhead:hover h2 .archdone, .sechead.fhead h2 .archdone:focus-visible { visibility: visible; }
+@media (hover: none) { .sechead.fhead h2 .archdone { visibility: visible; } }
+.sechead.fhead.shut { border-bottom-color: transparent; }
+.subsec { padding: 10px 8px 0; font-size: calc(11.5px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.subsec .when { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }

@@ -101,11 +101,11 @@ Pick how to view it:
 
 ### The Planner tab
 
-The **Planner** plans by **Year**, **Season**, **Month** or **Week** (pick one next to Filter; **‹ ›** step, and the date between them brings you back to now). The columns are the next step down: a year's trimesters (Winter, Summer, Fall), a season's months, a month's weeks, a week's days (Monday to Friday, then Saturday/Sunday together). On the right, **This week** (or month, season, year) lists what's planned, grouped by project, with the points per project. Below is the **Backlog**: every open task that isn't planned for that period.
+The **Planner** plans by **Year**, **Season**, **Month** or **Week** (pick one next to Filter; **‹ ›** step, and the date between them brings you back to now). The columns are the next step down: a year's trimesters (Winter, Summer, Fall), a season's months, a month's weeks, a week's days (Monday to Friday, then Saturday/Sunday together). On the right, **This week** (or month, season, year) lists what's planned, grouped by project, with the points done out of those planned per project (like `4/16 pts`). Below is the **Backlog**: every open task that isn't planned for that period.
 
 To plan a task, drag it from the backlog onto a column, or click its **Plan** cell and pick one (that works on a phone too). Drag a planned task to another column to move it, or back onto the backlog to unplan it. Planning adds `>Oct14`, `>wk45`, `>Nov` or `>T3` to the task's line, so you can also type it. A task planned for a day also shows in its week, month and season. A finished task stays where it was planned, crossed out; one you didn't get to stays put and is back in the backlog next time, showing its old plan.
 
-Click the **☆** on a task to make it a **top priority** for the period you're looking at (it adds `^wk45`, `^Nov`, `^T3` or `^yr`); they're listed at the top. Since the notes have no years, a column or star too far away (like Winter of this year, once it's past) is greyed out.
+Click the **☆** on a task to make it a **top priority** for the period you're looking at (it adds `^wk45`, `^Nov`, `^T3` or `^yr`); they're listed at the top, and a starred task also comes first in its day, in the list on the right and in the backlog (with its subtasks). Since the notes have no years, a column or star too far away (like Winter of this year, once it's past) is greyed out.
 
 **On the calendar** at the top shows which projects are on the Planner: click **×** on one to take it off, and **+ Add project** to put it back. There is one Planner for all your projects: it's first in the drawer, and the Planner tab on any project page takes you there.
 
@@ -169,7 +169,7 @@ Your lines are copied exactly; nothing in `notes.txt` changes. In the terminal, 
 
 In the page, **click the KAFEEN logo** to open the project drawer:
 
-- **All projects** shows every project's backlog together, in the usual Projects / Timeline / People / Upcoming tabs. The **Planner** (first in the drawer) plans all of them together. Click a task's circle or cells to change it, as usual: the change is written straight into that project's `backlog.kf`.
+- **All projects** shows every project's backlog together, in the usual Projects / Timeline / People / Upcoming tabs. In the Projects tab each project has one heading, with its counts; click it to fold away everything in that project (its `@` sub-groups fold on their own too). The **Planner** (first in the drawer) plans all of them together. Click a task's circle or cells to change it, as usual: the change is written straight into that project's `backlog.kf`.
 - Under each project: its **Quick note**, **Backlog**, **Notes** (pages, grouped in sections if you like, like OneNote), **Habits** and **Archive**. Click one to open it. The Backlog, Archive and Habits open in Planner mode. The Quick note and notes pages open in Text (`.md` pages in Markdown), with **Planner** greyed out. Everything saves itself about a second after each change.
 - **⋯** on a project, section or page has New page, New section, Rename and Delete. **+ New project** is at the bottom, and **Find a project** at the top.
 

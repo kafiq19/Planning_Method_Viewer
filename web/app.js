@@ -438,7 +438,7 @@ function pickCell(cell, label, choices, current, apply, tab) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow");   // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow, .fhead");   // drop down from the cell, right edge on the cell's right edge
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
@@ -1038,7 +1038,57 @@ function foldHead(name, key, what, label, count) {   // a project or person head
   const [fold, shut] = foldButton(name, key, what, label);
   return [h("h3", "ph" + (shut ? " shut" : ""), fold, count), shut];
 }
+/* All projects: one heading per project (its folder), which folds everything in it ("collapsedFolders"); inside, its
+   tasks by section, and its @ sub-groups with their own fold. A project with no tasks yet still shows, with + Add task. */
+function vAllProjects(d) {
+  const out = h("div"), by = new Map(state.folio.projects.map(f => [f.name, []]));
+  for (const sec of d.projects)
+    for (const p of sec.projects) {
+      const f = p.folder || p.name;
+      if (!by.has(f)) by.set(f, []);
+      by.get(f).push({ sec, p });
+    }
+  const add = (n, f) => n.reduce((a, x) => a + f(x), 0);
+  for (const [folder, items] of by) {
+    if (d.filtered && !items.length) continue;
+    const ps = items.map(x => x.p), ptot = add(ps, p => p.points.total);
+    const count = `${add(ps, p => p.done)}/${add(ps, p => p.total)} done` + (ptot ? ` · ${add(ps, p => p.points.left)} of ${pts(ptot)} left` : "");
+    const [fold, shut] = foldButton("collapsedFolders", folder, "project", [folder]);
+    const head = colHead(fold, null);
+    head.classList.add("fhead");
+    head.firstChild.append(span("when", count));
+    const backlog = ps.find(p => p.path) || d.targets.find(t => t.folder === folder);
+    if (canArchive() && add(ps, p => p.done) && !d.filtered && backlog)   // Archive done: the project's whole backlog
+      head.firstChild.append(archiveDoneButton({ line: null, path: backlog.path }));
+    out.append(head);
+    if (shut) { head.classList.add("shut"); continue; }
+    if (!items.length) {                          // no tasks yet: + Add task for the project itself
+      const own = d.targets.find(t => t.folder === folder && t.name === folder);
+      out.append(own ? addTaskRow(own) : h("div", "empty", "No tasks yet."));
+      continue;
+    }
+    let lastSec = null;
+    for (const { sec, p } of items) {
+      if (sec.title && sec !== lastSec) out.append(h("div", "subsec", sec.title, sec.when ? span("when", sec.when) : null));
+      lastSec = sec;
+      const key = folder + "\n" + (sec.title || "") + "\n" + p.name;
+      if (p.name !== folder) {                     // an @ sub-group: its own heading and fold
+        const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
+        const [ph, pshut] = foldHead("collapsed", key, "group", [span("at", "@"), p.name], span("count", p.done + "/" + p.total + " done" + effort));
+        if (canArchive() && p.done && !d.filtered) ph.append(archiveDoneButton(p));
+        out.append(ph);
+        if (pshut) continue;
+      }
+      for (const n of p.notes) out.append(noteNode(n, 0));
+      for (const t of p.tasks) out.append(treeNode(t, 0, key));
+      out.append(addTaskRow(p));
+    }
+  }
+  if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : folioWelcome());
+  return out;
+}
 function vProjects(d) {
+  if (state.all && state.folio) return vAllProjects(d);
   const out = h("div");
   for (const sec of d.projects) {
     const [sfold, sshut] = foldButton("collapsedSections", sec.title || "", "section", [sec.title || "Projects"]);
@@ -1071,7 +1121,7 @@ function archiveDoneButton(p) {                  // a project heading's "Archive
   b.onclick = e => {
     e.stopPropagation();
     pickCell(b, "Archive finished tasks to", archiveYears().map(y => ({ value: y, text: "Archive done to " + y })), null,
-      y => archiveOp({ done: true, project_line: p.line || null }, p, y));
+      y => archiveOp({ done: true, project_line: p.line || null }, p, y));   // (line null: the whole file)
   };
   return b;
 }
@@ -1346,6 +1396,21 @@ function addHabitRow(d) {                        // + Add habit: a title and how
   };
   return row;
 }
+/* starred (☆ for the period shown) first: in a list, and a backlog's starred task with its subtasks under it */
+const starFirst = (tasks, pl) => [...tasks.filter(t => starred(t, pl)), ...tasks.filter(t => !starred(t, pl))];
+function starBlocksFirst(items, pl) {
+  const top = [], rest = [];
+  for (let i = 0; i < items.length; i++) {
+    const t = items[i];
+    if (!starred(t, pl)) { rest.push(t); continue; }
+    let j = i + 1;
+    while (j < items.length && items[j].depth > t.depth) j++;
+    for (const x of items.slice(i, j)) top.push({ ...x, depth: x.depth - t.depth });
+    i = j - 1;
+  }
+  return [...top, ...rest];
+}
+const groupsStarFirst = (groups, pl) => [...groups.filter(g => g.tasks.some(t => starred(t, pl))), ...groups.filter(g => !g.tasks.some(t => starred(t, pl)))];
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
   const pl = d.planner, out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
@@ -1365,20 +1430,22 @@ function vPlanner(d) {
   for (const c of pl.columns) {
     const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
-    for (const t of c.tasks.filter(on)) col.append(weekItem("wcard", t, pl, [meta(t)]));
+    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)]));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
     if (c.ok) dropZone(col, t => planTask(t, c.token, pl));
     days.append(col);
   }
   const side = h("div", "wside", h("h4", "grp", where[0].toUpperCase() + where.slice(1)));
-  const groups = pl.projects.filter(g => !hidden.has(projKey(g)));
+  const groups = groupsStarFirst(pl.projects.filter(g => !hidden.has(projKey(g))), pl);
   for (const g of groups) {
-    const total = sumPts(g.tasks);                 // the tasks shown, so it follows the filters
+    const total = sumPts(g.tasks), done = sumPts(g.tasks.filter(t => t.status === "done"));   // the tasks shown (follows the filters)
+    const sum = h("div", "wsum", `${done}/${pts(total)}`);
+    sum.title = `${pts(done)} done of ${pts(total)} planned`;
     side.append(h("div", "wproj", h("div", "wpname", projLabel(g)),
-      ...g.tasks.map(t => { const c = pl.columns.find(x => inColumn(t, x, pl));
+      ...starFirst(g.tasks, pl).map(t => { const c = pl.columns.find(x => inColumn(t, x, pl));
         return weekItem("wline", t, pl, [span("wd", c && t.plan_kind === pl.column_kind ? c.head.split(" ")[0] : t.plan_label)]); }),
-      h("div", "wsum", pts(total))));
+      sum));
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
   out.append(h("div", "wtop", days, side));
@@ -1386,10 +1453,10 @@ function vPlanner(d) {
   back.firstChild.classList.add("wrow");
   back.firstChild.children[4].textContent = "Plan";
   back.firstChild.children[4].classList.add("r");
-  const bgroups = pl.backlog.filter(g => !hidden.has(projKey(g)));
+  const bgroups = groupsStarFirst(pl.backlog.filter(g => !hidden.has(projKey(g))), pl);
   for (const g of bgroups) {
     back.append(h("h3", "ph", h("span", "", ...(g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name]))));
-    for (const t of g.tasks) {                   // drag by the title side (the row's inputs stay selectable)
+    for (const t of starBlocksFirst(g.tasks, pl)) {   // drag by the title side (the row's inputs stay selectable)
       const row = taskNode(t, { depth: t.depth, week: pl });
       draggable(row.querySelector(".lead"), t);
       back.append(row);

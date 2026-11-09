@@ -5,6 +5,21 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.9  2026-11-09  Fold projects in All projects; starred first; points done
+-------------------------------------------------
+- New: in All projects, each project has one heading (with its counts)
+  that folds away everything in it; its sections are small labels under
+  it, and its @ sub-groups still fold on their own. A project with no
+  tasks yet shows too, with + Add task. Archive done on the project's
+  heading archives its whole backlog.
+- New: in the Planner, a starred task (☆) comes first: in its column, in
+  the list on the right, and in the backlog (with its subtasks under it).
+- New: the Planner's list on the right shows the points done out of
+  those planned per project, like 4/16 pts.
+- Code: vAllProjects (fold key collapsedFolders), starFirst,
+  starBlocksFirst, groupsStarFirst. Page only; the data is unchanged.
+
+
 2.0.8  2026-11-06  Planner only where it belongs; file tabs removed
 -------------------------------------------------
 - Changed: Planner mode is only for a project's Backlog and Archive, and
