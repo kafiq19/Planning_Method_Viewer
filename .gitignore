@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Your own projects stay out of git; only the sample project is tracked
+Projects/*
+!Projects/Example/

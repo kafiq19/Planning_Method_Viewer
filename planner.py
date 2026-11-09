@@ -4,17 +4,25 @@ planner.py (KAFEEN Planner) - turn plain-text planning notes into five views:
 projects, timeline, people, what's coming up, and the week.
 Standard library only (Python 3.8+).
 
+Notes files end in .kf (the KAFEEN format; .txt works the same).
+
 USAGE
   python planner.py                    paste your notes, then press
                                        Ctrl-D (Mac/Linux) or Ctrl-Z then Enter (Windows)
   python planner.py notes.txt          read notes from a file instead
+  python planner.py ./Projects week    a projects folder: the views over every project (week: with habits)
   python planner.py notes.txt people   show one view only:
                                        projects | timeline | people | upcoming | week
   --today Oct10                        pretend today is another date (for testing)
-  --serve [notes.txt] [--port 8765]    open the web page; with a file, Save writes back to it. Without one, open
-                                       files from the page: each is a tab, saved automatically and reopened next time
-                                       The page: tabs Projects / Timeline / People / Upcoming / Week and a
-                                       Quick note; click a task's box, title or Who / Effort / Date / + cells
+  --import notes.txt [FOLDER] [--split]  make a project from notes.txt in Projects/, or in FOLDER
+                                       (--split: one project per @ line)
+  --serve [--port 8765]                open the web page on the Projects folder next to planner.py (made if it's
+                                       missing): one sub-folder per project (backlog.kf, quicknote.kf, habits.kf,
+                                       notes/, archive/YYYY.kf). Click the logo for the projects: All projects
+                                       (every backlog together) and each project's pages
+  --serve notes.txt [--port 8765]      the web page on that one file instead; Save writes back to it
+                                       The page: tabs Projects / Timeline / People / Upcoming / Week;
+                                       click a task's box, title or Who / Effort / Date / + cells
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
                                        Date fields) to add tasks one after another, fold any level in Projects,
                                        and plan tasks for days in Week
@@ -23,6 +31,7 @@ NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
   @HDC                          project: runs until the next @ or heading
   - task  ~- task  !- task      open / in progress / done
+  (!)- task                     notable: circled in purple (before any status mark)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
@@ -32,7 +41,10 @@ NOTE FORMAT (quick reference)
   ~Q1  ~T1  ~Nov  ~wk43         loose date: sometime in that period (T1-T3: trimesters
                                 Winter Jan-Apr, Summer May-Aug, Fall Sep-Dec)
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
-  >Oct14                        planned: the day you mean to work on it (the Week view)
+  *weekdays  *weekly Mon, Wed, Fri                repeating: in habits.kf, a habit's frequency
+  -- done Nov02 Nov03           a habit's log: the days it was done
+  >Oct14  >wk45  >Nov  >T3      planned: when you mean to work on it (the Planner; separate from the date)
+  ^wk45  ^Nov  ^T3  ^yr         a top priority for that week, month, trimester or this year
 """
 import os
 import re
@@ -45,11 +57,16 @@ MONTHS = {m: i for i, m in enumerate(MONTH_NAMES, 1)}
 MON = "(?:" + "|".join(MONTH_NAMES) + ")"
 WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])}
 
+RE_TASK = re.compile(r"^(\(!\))?([!~]?)-\s*(.*)$")              # a task line's content: (!) notable, ! done, ~ doing
 RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
-RE_REMIND = re.compile(r"\*(daily|weekly\s+[A-Za-z]{3}[a-z]*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
+DAYNAME = r"(?:[Mm]on|[Tt]ue|[Ww]ed|[Tt]hu|[Ff]ri|[Ss]at|[Ss]un)[a-z]*"
+RE_REMIND = re.compile(r"\*(daily|weekdays|weekly\s+[A-Za-z]{3}[a-z]*(?:\s*,\s*" + DAYNAME + r")*|monthly\s+\d{1,2}(?:st|nd|rd|th)?|"
                        + MON + r"\d{1,2})\b")
-RE_PLAN = re.compile(r"(?<!\S)>(" + MON + r")(\d{1,2})\b")
+RE_LOG = re.compile(r"done((?:\s+" + MON + r"\d{1,2})+)\s*")       # a habit's log note: -- done Nov02 Nov03
+LOG_END = None       # the last day a habit log can mean (None: TODAY; an archive page: the end of its year)
+RE_PLAN = re.compile(r"(?<!\S)>(?:(" + MON + r")(\d{1,2})|wk(\d{1,2})|(" + MON + r")|(T[1-3]))\b")   # >Oct14 >wk45 >Nov >T3
+RE_PRIO = re.compile(r"(?<!\S)\^(wk\d{1,2}|" + MON + r"|T[1-3]|yr)\b")             # ^wk45 ^Nov ^T3 ^yr: a top priority for that period
 RE_RANGE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})--(" + MON + r")?(\d{1,2})\b")
 RE_LOOSE = re.compile(r"(?<!\S)~(Q[1-4]|T[1-3]|wk\d{1,2}|" + MON + r")\b")
 RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
@@ -122,32 +139,104 @@ def loose_span(label):
     return None
 
 
-def next_reminder(spec):
-    """Next date a reminder fires (today or later), or None if it has passed."""
+PLAN_RANK = {"day": 0, "week": 1, "month": 2, "season": 3, "year": 4}
+
+
+def plan_of(m):
+    """A RE_PLAN match -> (kind, token, start, end): day (>Oct14), week (>wk45), month (>Nov) or
+    season (>T3), resolved like dates and loose dates; None if there is no such date."""
+    if m.group(1):
+        d = resolve(MONTHS[m.group(1)], int(m.group(2)))
+        return d and ("day", m.group(1) + m.group(2), d, d)
+    token = "wk" + m.group(3) if m.group(3) else m.group(4) or m.group(5)
+    span = loose_span(token)
+    kind = "week" if m.group(3) else "month" if m.group(4) else "season"
+    return span and (kind, token, span[0], span[1])
+
+
+def priority_of(token):
+    """^wk45 / ^Nov / ^T3 / ^yr (without the ^) -> (kind, start, end); ^yr is TODAY's year. None if invalid."""
+    if token == "yr":
+        return "year", date(TODAY.year, 1, 1), date(TODAY.year, 12, 31)
+    span = loose_span(token)
+    kind = "week" if token.startswith("wk") else "season" if token.startswith("T") else "month"
+    return span and (kind, span[0], span[1])
+
+
+def plan_label(kind, start, end):
+    """How a plan reads: "Oct 14", "Nov 2 - 8", "Nov", "Fall" (with the year when it isn't TODAY's)."""
+    if kind == "day":
+        return fd(start)
+    if kind == "week":
+        return fspan(start, end)
+    yr = "" if start.year == TODAY.year else f" {start.year}"
+    if kind == "month":
+        return MONTH_NAMES[start.month - 1] + yr
+    if kind == "season":
+        return next(n for n, a, _ in SEASONS if a == start.month) + yr
+    return str(start.year)
+
+
+def repeats(spec):
+    """Is this reminder a repeating one (a habit's frequency), not a one-off *Oct13?"""
+    return not re.fullmatch(MON + r"\d{1,2}", spec)
+
+
+def reminder_days(spec, a, b):
+    """The days from `a` to `b` (inclusive) on which the reminder fires, in order."""
     m = re.fullmatch("(" + MON + r")(\d{1,2})", spec)
     if m:
         d = resolve(MONTHS[m.group(1)], int(m.group(2)))
-        return d if d and d >= TODAY else None
-    parts = spec.lower().split()
+        return [d] if d and a <= d <= b else []
+    parts = spec.lower().split(None, 1)
     if parts[0] == "daily":
-        return TODAY
-    if parts[0] == "weekly":
-        wd = WEEKDAYS.get(parts[1][:3])
-        return None if wd is None else TODAY + timedelta(days=(wd - TODAY.weekday()) % 7)
-    if parts[0] == "monthly":
+        test = lambda d: True
+    elif parts[0] == "weekdays":
+        test = lambda d: d.weekday() < 5
+    elif parts[0] == "weekly":
+        wds = {WEEKDAYS.get(x.strip()[:3]) for x in parts[1].split(",")} - {None}
+        test = lambda d: d.weekday() in wds
+    elif parts[0] == "monthly":
         n = int(re.match(r"\d+", parts[1]).group())
-        y, mo = TODAY.year, TODAY.month
-        for _ in range(13):
-            try:
-                d = date(y, mo, n)
-                if d >= TODAY:
-                    return d
-            except ValueError:
-                pass
-            mo += 1
-            if mo > 12:
-                mo, y = 1, y + 1
+        test = lambda d: d.day == n
+    else:
+        return []
+    return [a + timedelta(days=i) for i in range((b - a).days + 1) if test(a + timedelta(days=i))]
+
+
+def next_reminder(spec):
+    """Next date a reminder fires (today or later), or None if it has passed (or never fires)."""
+    days = reminder_days(spec, TODAY, TODAY + timedelta(days=400))
+    return days[0] if days else None
+
+
+def every_label(spec):
+    """How a frequency reads: Daily, Weekdays, Mon, Wed, Fri, Monthly 1st."""
+    parts = spec.split(None, 1)
+    if parts[0].lower() == "weekly":
+        return ", ".join(x.strip()[:3].capitalize() for x in parts[1].split(","))
+    return spec[0].upper() + spec[1:]
+
+
+def resolve_past(month, day):
+    """A habit log's MonDD: the latest such day on or before LOG_END (TODAY by default); None if there is none."""
+    end = LOG_END or TODAY
+    for y in (end.year, end.year - 1, end.year - 4):          # (a Feb 29 may be four years back)
+        try:
+            d = date(y, month, day)
+        except ValueError:
+            continue
+        if d <= end:
+            return d
     return None
+
+
+def log_of(note):
+    """A note's habit log dates (`done Nov02 Nov03`), or None if it isn't a log."""
+    m = RE_LOG.fullmatch(note)
+    if not m:
+        return None
+    return [d for d in (resolve_past(MONTHS[x[:3]], int(x[3:])) for x in m.group(1).split()) if d]
 
 
 def fd(d):
@@ -175,12 +264,14 @@ class Task:
         self.assignees, self.reminders, self.notes, self.children = [], [], [], []
         self.start = self.end = self.loose = None
         self.parent = self.project = None
+        self.notable = False
         self.title = self._parse(text)
 
     def _parse(self, text):
         # Where each token sat in `text` (start, end), so an edit can change just that token.
-        self.at = {"assignees": [], "reminders": [], "date": None, "effort": None, "plan": None}
-        self.date_text = self.effort = self.plan = None
+        self.at = {"assignees": [], "reminders": [], "date": None, "effort": None, "plan": None, "priorities": []}
+        self.date_text = self.effort = self.plan = self.plan_end = self.plan_kind = self.plan_token = None
+        self.priorities = []                 # [(token, kind, start, end)]: ^wk45 and so on
         self.points = 0
         original, keep = text, list(range(len(text)))   # keep[i]: index in `original` of text[i]
 
@@ -207,11 +298,19 @@ class Task:
         for m in ms:
             self.reminders.append((m.group(1), next_reminder(m.group(1))))
         self.at["reminders"] = cut(ms)
-        m = RE_PLAN.search(text)             # >Oct14: the day it is planned for (first valid one only)
-        d = m and resolve(MONTHS[m.group(1)], int(m.group(2)))
-        if d:
-            self.plan = d
-            self.at["plan"] = cut([m])[0]
+        ms = []                              # ^wk45 ^Nov ^T3 ^yr: top priorities (every valid one)
+        for m in RE_PRIO.finditer(text):
+            pr = priority_of(m.group(1))
+            if pr:
+                self.priorities.append((m.group(1),) + pr)
+                ms.append(m)
+        self.at["priorities"] = cut(ms)
+        for m in RE_PLAN.finditer(text):     # >Oct14 >wk45 >Nov >T3: when it is planned for (first valid one only)
+            pl = plan_of(m)
+            if pl:
+                self.plan_kind, self.plan_token, self.plan, self.plan_end = pl
+                self.at["plan"] = cut([m])[0]
+                break
 
         m = RE_RANGE.search(text)
         if m:
@@ -235,6 +334,10 @@ class Task:
                 self.start = self.end = d
                 cut_date(m)
         return " ".join(text.split())
+
+    def log(self):
+        """The days this habit was done (from its `-- done …` notes), sorted."""
+        return sorted({d for n in self.notes for d in (log_of(n) or [])})
 
     def walk(self):
         yield self
@@ -288,19 +391,22 @@ class Project:
     def __init__(self, name, section, line=None):
         self.name, self.section, self.line = name, section, line   # line: the @ line (for "(no project)", its first line)
         self.tasks, self.notes = [], []
+        self.path = self.folder = None   # in a portfolio's All projects: its backlog's path and its project folder
 
     def all_tasks(self):
         for t in self.tasks:
             yield from t.walk()
 
 
-def parse(text):
+def parse(text, name=None):
+    """-> list[Project]. Tasks before any @ line go into a project called `name`
+    (a portfolio project's own name for its backlog), or "(no project)"."""
     projects, section, project, stack = [], None, None, []
 
     def ensure_project():
         nonlocal project
         if project is None:
-            project = Project("(no project)", section, n)
+            project = Project(name or "(no project)", section, n)
             projects.append(project)
         return project
 
@@ -322,12 +428,13 @@ def parse(text):
             target.notes.append(line[2:].strip())
             continue
 
-        m = re.match(r"^([!~]?)-\s*(.*)$", line)
+        m = RE_TASK.match(line)
         if m:
-            status = {"!": "done", "~": "doing", "": "open"}[m.group(1)]
-            t = Task(m.group(2), status, level, n)
-            t.col = len(ws) + m.start(2)
-            t.text = m.group(2)              # the task's text after the dash, as written (for the `text` edit)
+            status = {"!": "done", "~": "doing", "": "open"}[m.group(2)]
+            t = Task(m.group(3), status, level, n)
+            t.notable = bool(m.group(1))     # (!) before the mark: circled in purple
+            t.col = len(ws) + m.start(3)
+            t.text = m.group(3)              # the task's text after the dash, as written (for the `text` edit)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -582,31 +689,155 @@ def week_days(monday):
     return list(zip(heads, [[d] for d in days[:5]])) + [(f"Sat/Sun {days[5].day}-{days[6].day}", days[5:])]
 
 
-def week_groups(projects, monday):
-    """-> (columns, planned, backlog) for the week starting `monday`.
-    columns: [(heading, days, [(project, task)])]; planned: [(project, [tasks])], tasks planned this week,
-    done ones too; backlog: [(project, [(depth, task)])], every open task not planned this week, in outline order."""
-    sunday = monday + timedelta(days=6)
-    cols = [(head, days, []) for head, days in week_days(monday)]
-    planned, backlog = [], []
+# ---------- the Planner: Year / Season / Month / Week (a planner period is (kind, year, index)) ----------
+# Week: ISO year and week. Month: index 1-12. Season: index 0-2 (SEASONS). Year: index 0.
+# Its columns are the next level down: days (Sat/Sun together), weeks, months, trimesters.
+
+PLANNER_KINDS = ("year", "season", "month", "week")
+COLUMN_KIND = {"week": "day", "month": "week", "season": "month", "year": "season"}
+
+
+def planner_at(kind, d):
+    """The planner period of `kind` containing day `d`."""
+    if kind == "week":
+        y, w, _ = d.isocalendar()
+        return "week", y, w
+    if kind == "year":
+        return "year", d.year, 0
+    return period_at(kind, d)
+
+
+def planner_from(obj):
+    """A request's {kind, year, index} (only kind: the one containing TODAY; None: this week) -> a planner period."""
+    if obj is None:
+        return planner_at("week", TODAY)
+    if not isinstance(obj, dict) or obj.get("kind") not in PLANNER_KINDS:
+        raise ValueError(f"bad planner period {obj!r}")
+    kind = obj["kind"]
+    if "year" not in obj and "index" not in obj:
+        return planner_at(kind, TODAY)
+    y, i = obj.get("year"), obj.get("index", 0)
+    if type(y) is not int or type(i) is not int or not 1900 <= y <= 2999:
+        raise ValueError(f"bad planner period {obj!r}")
+    if kind == "week":
+        date.fromisocalendar(y, i, 1)                       # ValueError if there is no such week
+    elif kind in ("month", "season"):
+        return period_from(obj)
+    elif i != 0:
+        raise ValueError(f"bad planner period {obj!r}")
+    return kind, y, i
+
+
+def planner_range(kind, y, i):
+    if kind == "week":
+        m = date.fromisocalendar(y, i, 1)
+        return m, m + timedelta(days=6)
+    if kind == "year":
+        return date(y, 1, 1), date(y, 12, 31)
+    return period_range(kind, y, i)
+
+
+def planner_step(kind, y, i, step):
+    if kind == "week":
+        return planner_at("week", date.fromisocalendar(y, i, 1) + timedelta(days=7 * step))
+    if kind == "year":
+        return "year", y + step, 0
+    return period_step(kind, y, i, step)
+
+
+def planner_label(kind, y, i):
+    """"Oct 12 - 18", "Nov 2026", "Fall 2026", "2026"."""
+    if kind == "week":
+        return week_label(date.fromisocalendar(y, i, 1))
+    if kind == "year":
+        return str(y)
+    return period_label(kind, y, i, short=True)
+
+
+def planner_columns(kind, y, i):
+    """[(heading, start, end, token)]: where tasks can be planned in this period. A week's six days (Sat/Sun
+    together, planned as Saturday), a month's Mon-Sun weeks (headed by their days in the month), a
+    season's months, a year's trimesters. `token` is the plan token for the column (without the >)."""
+    ps, pe = planner_range(kind, y, i)
+    if kind == "week":
+        return [(head, ds[0], ds[-1], f"{MONTH_NAMES[ds[0].month - 1]}{ds[0].day:02d}") for head, ds in week_days(ps)]
+    if kind == "month":
+        out, m = [], ps - timedelta(days=ps.weekday())
+        while m <= pe:
+            sun = m + timedelta(days=6)
+            out.append((fspan(max(m, ps), min(sun, pe)), m, sun, f"wk{m.isocalendar()[1]}"))
+            m += timedelta(days=7)
+        return out
+    if kind == "season":
+        _, a, b = SEASONS[i]
+        return [(MONTH_NAMES[m - 1], date(y, m, 1), month_end(y, m), MONTH_NAMES[m - 1]) for m in range(a, b + 1)]
+    return [(f"{n} {MONTH_NAMES[a - 1]}-{MONTH_NAMES[b - 1]}", date(y, a, 1), month_end(y, b), f"T{k + 1}")
+            for k, (n, a, b) in enumerate(SEASONS)]
+
+
+def planner_star(kind, y, i):
+    """The ^priority token for this period, and whether it reads back as this period (a token has no year,
+    so only periods within about a year can be marked; ^yr is always this year)."""
+    ps, pe = planner_range(kind, y, i)
+    token = {"week": f"wk{i}", "month": MONTH_NAMES[i - 1] if kind == "month" else "", "season": f"T{i + 1}", "year": "yr"}[kind]
+    pr = priority_of(token)
+    return token, bool(pr) and pr == (kind, ps, pe)
+
+
+def habit_rows(projects, a, b, every=False):
+    """[(project, task, specs, due, done)]: each open task with a repeating reminder (`every`: each open task, a
+    Habits page lists those without one too), the days from `a` to `b` it is due and those it was done."""
+    out = []
+    for p in projects:
+        for t in p.all_tasks():
+            specs = [spec for spec, _ in t.reminders if repeats(spec)]
+            if t.status == "done" or not (specs or every):
+                continue
+            due = sorted({d for spec in specs for d in reminder_days(spec, a, b)})
+            out.append((p, t, specs, due, [d for d in t.log() if a <= d <= b]))
+    return out
+
+
+def planner_groups(projects, period):
+    """-> (columns, planned, backlog, priorities) for a planner period.
+    columns: [(heading, start, end, token, ok, [(project, task)])]: tasks planned for that column or a part of it
+      (ok: the token reads back as that column, so it can be planned);
+    planned: [(project, [tasks])], every task planned in this period (overlapping it and inside the columns), done ones too;
+    backlog: [(project, [(depth, task)])], every open task not planned in it, in outline order;
+    priorities: [(project, task)], tasks marked as top priorities for exactly this period."""
+    kind, y, i = period
+    ps, pe = planner_range(*period)
+    cols = []
+    for head, a, b, token in planner_columns(*period):
+        probe = Task("x >" + token)
+        ok = probe.plan_kind == COLUMN_KIND[kind] and probe.plan == a and probe.plan_end in (a, b)
+        cols.append((head, a, b, token, ok, []))
+    lo, hi = cols[0][1], cols[-1][2]
+    rank = PLAN_RANK[COLUMN_KIND[kind]]
+    planned, backlog, prios = [], [], []
     for p in projects:
         mine, rest = [], []
 
         def visit(t, depth):
-            if t.plan and monday <= t.plan <= sunday:
+            if t.plan and t.plan <= pe and t.plan_end >= ps and lo <= t.plan and t.plan_end <= hi:
                 mine.append(t)
-                cols[min(t.plan.weekday(), 5)][2].append((p, t))
+                if PLAN_RANK[t.plan_kind] <= rank:
+                    col = next((c for c in cols if c[1] <= t.plan and t.plan_end <= c[2]), None)
+                    if col:
+                        col[5].append((p, t))
             elif t.status != "done":
                 rest.append((depth, t))
+            if any(pr[1:] == (kind, ps, pe) for pr in t.priorities):
+                prios.append((p, t))
             for c in t.children:
                 visit(c, depth + 1)
         for t in p.tasks:
             visit(t, 0)
         if mine:
-            planned.append((p, sorted(mine, key=lambda t: t.plan)))   # by day
+            planned.append((p, sorted(mine, key=lambda t: (t.plan, t.plan_end))))
         if rest:
             backlog.append((p, rest))
-    return cols, planned, backlog
+    return cols, planned, backlog, prios
 
 
 def upcoming_groups(projects):
@@ -648,25 +879,33 @@ def view_upcoming(projects):
     return out
 
 
-def view_week(projects, monday=None):
+def view_week(projects, monday=None, habits=None):
     monday = monday or week_monday()
-    cols, planned, backlog = week_groups(projects, monday)
+    cols, planned, backlog, prios = planner_groups(projects, planner_at("week", monday))
+    rows = habit_rows(habits or [], monday, monday + timedelta(days=6))
     out = ["WEEK", "====", f"Week of {week_label(monday)}  (plan a task for a day with >MonDD)"]
-    for head, _, items in cols:
+    if prios:
+        out.append("\nTop priorities (^wk" + str(monday.isocalendar()[1]) + ")")
+        out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in prios)
+    for head, a, b, _, _, items in cols:
         out.append(f"\n{head}")
         out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in items)
-        if not items:
+        hab = [(d, p, t, d in done) for p, t, _, due, done in rows for d in due if a <= d <= b]
+        out.extend(f"    {'[x]' if ok else '[ ]'} @{p.name}  {t.title}  (habit" + (f", {('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[d.weekday()]})" if a != b else ")")
+                   for d, p, t, ok in sorted(hab, key=lambda x: x[0]))
+        if not items and not hab:
             out.append("    (nothing planned)")
     out.append("\nBy project")
     for p, tasks in planned:
         out.append(f"  @{p.name}   {pts(effort_points(tasks)[1])}")
-        out.extend(f"    {BOX[t.status]} {fd(t.plan):<7} {t.label()}" for t in tasks)
+        out.extend(f"    {BOX[t.status]} {plan_label(t.plan_kind, t.plan, t.plan_end):<7} {t.label()}" for t in tasks)
     if not planned:
         out.append("    (nothing planned this week)")
     out.append("\nBacklog (open tasks not planned this week)")
     for p, items in backlog:
         out.append(f"  @{p.name}")
-        out.extend(f"    {'    ' * depth}{BOX[t.status]} {t.label()}" + (f"   (planned {fd(t.plan)})" if t.plan else "")
+        out.extend(f"    {'    ' * depth}{BOX[t.status]} {t.label()}"
+                   + (f"   (planned {plan_label(t.plan_kind, t.plan, t.plan_end)})" if t.plan else "")
                    for depth, t in items)
     return out
 
@@ -686,9 +925,13 @@ def task_data(t, keep=None):
         return None
     sp = t.span()
     d = {
-        "title": t.title, "text": t.text, "status": t.status, "line": t.line, "date_text": t.date_text, "assignees": t.assignees, "notes": t.notes,
+        "title": t.title, "text": t.text, "status": t.status, "notable": t.notable, "line": t.line, "path": t.project and t.project.path,
+        "log": [iso(x) for x in t.log()],
+        "date_text": t.date_text, "assignees": t.assignees, "notes": [n for n in t.notes if log_of(n) is None],
         "effort": t.effort, "points": t.points,
-        "plan": iso(t.plan), "plan_label": fd(t.plan) if t.plan else None,
+        "plan": iso(t.plan), "plan_end": iso(t.plan_end), "plan_kind": t.plan_kind, "plan_token": t.plan_token,
+        "plan_label": plan_label(t.plan_kind, t.plan, t.plan_end) if t.plan else None,
+        "priorities": [{"token": tok, "kind": k, "start": iso(a), "end": iso(b)} for tok, k, a, b in t.priorities],
         "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
@@ -705,14 +948,16 @@ def flat(p, t):
     """A task with its project, for the flat lists (timeline, people, upcoming)."""
     d = task_data(t)
     d["project"] = p.name
+    d["folder"] = p.folder
     d["children"] = []
     return d
 
 
-def to_data(projects, period=None, monday=None):
+def to_data(projects, period=None, plan=None, habits=None, every=False):
     """Everything the five views show, as plain dicts and lists (JSON-ready).
 
-    `monday` (from week_monday) picks the Week view's week; default this week.
+    `plan` (from planner_from) picks the Planner's period; default this week. `habits` (projects from habits files)
+    adds `planner.habits` for the Planner's columns (`every`: a Habits page, listing tasks without a frequency too).
 
     With `period` (from period_from), Projects, Timeline and People show only tasks
     whose span overlaps it, and the timeline's columns are that period.
@@ -745,7 +990,7 @@ def to_data(projects, period=None, monday=None):
                          "projects": []}
             sections.append(seen[key])
         seen[key]["projects"].append({
-            "name": p.name, "line": p.line, "notes": p.notes,
+            "name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "notes": p.notes,
             "done": sum(t.status == "done" for t in tasks), "total": len(tasks),
             "points": dict(zip(("left", "total"), effort_points(tasks))),
             "tasks": shown})
@@ -757,13 +1002,14 @@ def to_data(projects, period=None, monday=None):
         unscheduled = []
     people = [(n, [(p, t) for p, t in items if not inside or inside(t)]) for n, items in people_groups(projects)]
     horizon, overdue, due, doing, reminders = upcoming_groups(projects)
-    monday = monday or week_monday()
-    wcols, wplanned, wbacklog = week_groups(projects, monday)
-    this_monday = week_monday()
+    plan = plan or planner_at("week", TODAY)
+    pcols, pplanned, pbacklog, pprios = planner_groups(projects, plan)
+    pnow = planner_at(plan[0], TODAY)
+    pstart, pend = planner_range(*plan)
+    star, star_ok = planner_star(*plan)
 
-    def wref(m):
-        y, w, _ = m.isocalendar()
-        return {"year": y, "index": w, "label": week_label(m)}
+    def pref(x):
+        return {"kind": x[0], "year": x[1], "index": x[2], "label": planner_label(*x)}
     return {
         "today": iso(TODAY), "today_label": fd(TODAY),
         "period": period and {
@@ -775,7 +1021,8 @@ def to_data(projects, period=None, monday=None):
                 ("prev", period_step(*period, -1)), ("next", period_step(*period, 1)),
                 ("now", period_at(period[0], TODAY)))}},
         "projects": sections,
-        "targets": [{"name": p.name, "line": p.line, "section": p.section.title if p.section else None} for p in projects],
+        "targets": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder,
+                     "section": p.section.title if p.section else None} for p in projects],
         "timeline": {
             "columns": [{"head": h, "start": iso(a), "end": iso(b)} for h, a, b in cols],
             "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
@@ -789,16 +1036,25 @@ def to_data(projects, period=None, monday=None):
             "due": [flat(p, t) for _, p, t in sorted(due, key=lambda r: r[0])],
             "reminders": [dict(flat(p, t), spec=spec, date=fd(d)) for d, spec, p, t in sorted(reminders, key=lambda r: r[0])],
             "doing": [flat(p, t) for p, t in doing]},
-        "week": {
-            **wref(monday), "start": iso(monday), "end": iso(monday + timedelta(days=6)),
-            "current": monday == this_monday,
-            "prev": wref(monday - timedelta(days=7)), "next": wref(monday + timedelta(days=7)), "now": wref(this_monday),
-            "days": [{"head": head, "token": f"{MONTH_NAMES[ds[0].month - 1]}{ds[0].day:02d}", "dates": [iso(x) for x in ds], "today": TODAY in ds,
-                      "tasks": [flat(p, t) for p, t in items]} for head, ds, items in wcols],
-            "projects": [{"name": p.name, "line": p.line, "points": effort_points(tasks)[1],
-                          "tasks": [flat(p, t) for t in tasks]} for p, tasks in wplanned],
-            "backlog": [{"name": p.name, "line": p.line, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
-                        for p, items in wbacklog]},
+        "planner": {
+            **pref(plan), "start": iso(pstart), "end": iso(pend), "current": plan == pnow,
+            "prev": pref(planner_step(*plan, -1)), "next": pref(planner_step(*plan, 1)), "now": pref(pnow),
+            "column_kind": COLUMN_KIND[plan[0]],
+            "star": {"token": star, "ok": star_ok, "kind": plan[0], "start": iso(pstart), "end": iso(pend)},
+            "columns": [{"head": head, "start": iso(a), "end": iso(b), "token": token, "ok": ok, "today": a <= TODAY <= b,
+                         "tasks": [flat(p, t) for p, t in items]} for head, a, b, token, ok, items in pcols],
+            "projects": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "points": effort_points(tasks)[1],
+                          "tasks": [flat(p, t) for t in tasks]} for p, tasks in pplanned],
+            "backlog": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
+                        for p, items in pbacklog],
+            "priorities": [flat(p, t) for p, t in pprios],
+            "habits": [dict(flat(p, t), every=specs, every_label=", ".join(every_label(x) for x in specs) or None,
+                            due=[iso(x) for x in due], done=[iso(x) for x in done])
+                       for p, t, specs, due, done in habit_rows(habits or [], pcols[0][1], pcols[-1][2], every)],
+            "days": [{"date": iso(x), "head": f"{('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[x.weekday()]} {x.day}",
+                      "token": f"{MONTH_NAMES[x.month - 1]}{x.day:02d}", "today": x == TODAY, "future": x > TODAY}
+                     for x in (pstart + timedelta(days=k) for k in range(7))] if plan[0] == "week" else [],
+            "log_years": sorted({x.year for p in (habits or []) for t in p.all_tasks() for x in t.log() if x.year < TODAY.year})},
     }
 
 
@@ -851,10 +1107,256 @@ def set_status(text, line, status, title=None):
     raw = lines[line - 1]
     ws = raw[:len(raw) - len(raw.lstrip())]
     body = raw[len(ws):]
+    notable = "(!)" if body.startswith("(!)") else ""
+    body = body[len(notable):]
     if body[0] in "!~":
         body = body[1:]
-    lines[line - 1] = ws + STATUS_MARK[status] + body
+    lines[line - 1] = ws + notable + STATUS_MARK[status] + body
     return "".join(lines)
+
+
+def set_every(text, line, spec, title=None):
+    """Set how often a habit repeats: `daily`, `weekdays`, `weekly Mon, Wed`, `monthly 1st` (with or without
+    the `*`), or (empty) remove it. Its repeating reminder is replaced in place; a new one goes at the end."""
+    lines, t = _task_at(text, line, title)
+    spec = " ".join(spec.strip().lstrip("*").split())
+    probe = Task("x *" + spec) if spec else None
+    if probe and (len(probe.reminders) != 1 or probe.title != "x" or not repeats(spec) or next_reminder(spec) is None):
+        raise EditError(f"{spec!r} is not a frequency (use daily, weekdays, weekly Mon, Wed or monthly 1st)")
+    raw = lines[line - 1]
+    i = next((k for k, (sp, _) in enumerate(t.reminders) if repeats(sp)), None)
+    if i is not None:
+        s, e = (t.col + x for x in t.at["reminders"][i])
+        raw = raw[:s] + "*" + spec + raw[e:] if spec else _drop(raw, s, e, t.col)
+    elif not spec:
+        return text
+    else:
+        p = _content_end(raw)
+        raw = raw[:p] + " *" + spec + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    old = [sp for sp, _ in t.reminders if not repeats(sp)]
+    want = ([spec] if spec else []) + [sp for k, (sp, _) in enumerate(t.reminders) if repeats(sp) and k != i]
+    if (n is None or n.title != t.title or [sp for sp, _ in n.reminders if not repeats(sp)] != old
+            or sorted(sp for sp, _ in n.reminders if repeats(sp)) != sorted(want)):
+        raise EditError("the line wouldn't read back with that frequency, so edit it by hand")
+    return out
+
+
+def tick_habit(text, line, value, title=None):
+    """Mark a habit done on a day (`Nov02`) or not (`-Nov02`), in its log note `-- done Nov02 Nov03`
+    (directly under the task; made if new, removed when empty). Only that note line changes."""
+    lines, t = _task_at(text, line, title)
+    value = value.strip()
+    off = value.startswith("-")
+    m = re.fullmatch("(" + MON + r")(\d{1,2})", value.lstrip("-").strip())
+    day = m and resolve_past(MONTHS[m.group(1)], int(m.group(2)))
+    if not day or (LOG_END is None and day > TODAY):
+        raise EditError(f"{value.lstrip('-')!r} is not a day so far (use Nov02)")
+    token = f"{MONTH_NAMES[day.month - 1]}{day.day:02d}"
+    end = _subtree_end(lines, line, t.level)
+    log_at = None                                   # the task's own log note: before its first subtask
+    for i in range(line, end):
+        c = lines[i].strip()
+        if c.startswith("--"):
+            if log_of(c[2:].strip()) is not None:
+                log_at = i
+                break
+        elif c and RE_TASK.match(c):
+            break
+    if off:
+        if log_at is None:
+            return text
+        raw = lines[log_at]
+        keep = []
+        for x in re.finditer(MON + r"\d{1,2}", raw):
+            if resolve_past(MONTHS[x.group()[:3]], int(x.group()[3:])) == day:
+                keep.append(x)
+        if not keep:
+            return text
+        for x in reversed(keep):
+            raw = _drop(raw, x.start(), x.end(), 0)
+        if log_of(raw.strip()[2:].strip()) is None:  # nothing left: the note goes
+            del lines[log_at]
+        else:
+            lines[log_at] = raw
+    elif log_at is not None:
+        if day in (log_of(lines[log_at].strip()[2:].strip()) or []):
+            return text
+        raw = lines[log_at]
+        p = _content_end(raw)
+        lines[log_at] = raw[:p] + " " + token + raw[p:]
+    else:
+        raw = lines[line - 1]
+        ws = raw[:len(raw) - len(raw.lstrip())]
+        ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
+        if not raw.endswith(tuple("\r\n")):
+            lines[line - 1] = raw + ending
+        lines.insert(line, ws + ("    " if ws and "\t" not in ws else "\t") + "-- done " + token + ending)
+    out = "".join(lines)
+    n = _find(out, line)
+    before = [(x.title, x.status) for p in parse(text) for x in p.all_tasks()]
+    after = [(x.title, x.status) for p in parse(out) for x in p.all_tasks()]
+    if n is None or (day in n.log()) == off or before != after:
+        raise EditError("the habit's log wouldn't read back that way, so edit it by hand")
+    return out
+
+
+def take_habit_log(text, year):
+    """For the archive: each habit's log days from `year` (taken out of its log note) -> (rest of the text,
+    [("Habits", [the habit's line, its log note for that year])])."""
+    lines = text.splitlines(keepends=True)
+    moved, cuts = [], []
+    for p in parse(text):
+        for t in p.all_tasks():
+            days = [d for d in t.log() if d.year == year]
+            if not days:
+                continue
+            end = _subtree_end(lines, t.line, t.level)
+            for i in range(t.line, end):
+                c = lines[i].strip()
+                if c.startswith("--") and log_of(c[2:].strip()) is not None:
+                    cuts.append((i, year))
+            raw = lines[t.line - 1]
+            head = raw.lstrip(" \t")
+            moved.append(("Habits", [head if head.endswith(("\n", "\r")) else head + "\n",
+                                     "\t-- done " + " ".join(f"{MONTH_NAMES[d.month - 1]}{d.day:02d}" for d in days) + "\n"]))
+    if not moved:
+        raise EditError(f"no habit was ticked in {year}")
+    for i, y in sorted(set(cuts), reverse=True):
+        raw = lines[i]
+        for x in reversed(list(re.finditer(MON + r"\d{1,2}", raw))):
+            d = resolve_past(MONTHS[x.group()[:3]], int(x.group()[3:]))
+            if d and d.year == y:
+                raw = _drop(raw, x.start(), x.end(), 0)
+        if log_of(raw.strip()[2:].strip()) is None:
+            del lines[i]
+        else:
+            lines[i] = raw
+    return "".join(lines), moved
+
+
+def set_notable(text, line, value, title=None):
+    """Circle the task in purple (`value` "on": `(!)` before its status mark) or not ("" or "off").
+    Only those three characters change."""
+    if value not in ("on", "off", ""):
+        raise EditError(f"notable is on or off, not {value!r}")
+    lines, t = _task_at(text, line, title)
+    on = value == "on"
+    if t.notable == on:
+        return text
+    raw = lines[line - 1]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    body = raw[len(ws):]
+    lines[line - 1] = ws + ("(!)" + body if on else body[3:])
+    out = "".join(lines)
+    n = _find(out, line)
+    if n is None or n.notable != on or n.title != t.title or n.status != t.status or n.level != t.level:
+        raise EditError("the line wouldn't read back as that task, so edit it by hand")
+    return out
+
+
+def _subtree_end(lines, line, level):
+    """The last non-blank line (1-based) of the task on `line` and its subtree: its subtasks and
+    notes, up to the next task at its level or above, an @ line or a heading."""
+    last = line
+    for i in range(line, len(lines)):
+        r = lines[i]
+        c = r.strip()
+        if not c:
+            continue
+        rws = r[:len(r) - len(r.lstrip())]
+        lvl = rws.count("\t") + rws.count(" ") // 4
+        if c.startswith("@") or (not c.startswith("--") and RE_TASK.match(c) and lvl <= level) \
+                or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
+            break
+        last = i + 1
+    return last
+
+
+def _cut(text, line, title=None):
+    """-> (text without the task on `line` and its subtree, the removed lines, the task). Checked:
+    exactly that task and its subtasks are gone, and every other task reads back the same."""
+    lines, t = _task_at(text, line, title)
+    last = _subtree_end(lines, line, t.level)
+    block = lines[line - 1:last]
+    out = "".join(lines[:line - 1] + lines[last:])
+    gone = {x.line for x in t.walk()}
+    before = [(x.title, x.status) for p in parse(text) for x in p.all_tasks() if x.line not in gone]
+    after = [(x.title, x.status) for p in parse(out) for x in p.all_tasks()]
+    if before != after or {x.line for x in t.walk()} != {line + i for i, r in enumerate(block) if RE_TASK.match(r.strip())
+                                                         and not r.strip().startswith("--")}:
+        raise EditError("that task's lines aren't where expected, so change it by hand")
+    return out, block, t
+
+
+def delete_task(text, line, value="", title=None):
+    """Remove the task on `line` with its subtasks and notes (whole lines; nothing else changes)."""
+    return _cut(text, line, title)[0]
+
+
+def _dedent(block):
+    """A task's lines with the task's own indentation taken off (so it sits at the top level)."""
+    raw = block[0]
+    ws = raw[:len(raw) - len(raw.lstrip())]
+    out = [r[len(ws):] if r.startswith(ws) else (r.lstrip(" \t") if r.strip() else r) for r in block]
+    while out and not out[-1].strip():
+        out.pop()
+    if out and not out[-1].endswith(("\n", "\r")):
+        out[-1] += "\n"
+    return out
+
+
+def take_task(text, line, title=None):
+    """For the archive: -> (text without the task and its subtree, its lines at the top level,
+    its @ group's name or None for the file's own project)."""
+    out, block, t = _cut(text, line, title)
+    lines = text.splitlines(keepends=True)
+    group = t.project.name if lines[t.project.line - 1].strip().startswith("@") else None
+    return out, _dedent(block), group
+
+
+def take_done(text, project_line=None):
+    """For "Archive done": every finished top-level task (done, with all its subtasks done) in the project on
+    `project_line` (or anywhere); a done subtask of an unfinished task stays with it.
+    -> (the rest of the text, [(group, lines)] in order)."""
+    picks = [t for p in parse(text) if project_line in (None, p.line) for t in p.tasks
+             if all(x.status == "done" for x in t.walk())]
+    if not picks:
+        raise EditError("there are no finished tasks to archive")
+    moved = []
+    for t in sorted(picks, key=lambda x: -x.line):           # from the bottom up, so the lines above stay put
+        text, block, group = take_task(text, t.line, t.title)
+        moved.append((group, block))
+    return text, moved[::-1]
+
+
+def put_in_archive(text, group, block):
+    """`text` (an archive file) with `block` added at the end of its `@group` (made at the end if new),
+    or of its own tasks (before the first @) when `group` is None. Existing lines don't change, except
+    that a last line with no line ending gets one."""
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+    if group is None:
+        at = next((i for i, r in enumerate(lines) if r.strip().startswith("@")), len(lines))
+    else:
+        head = next((i for i, r in enumerate(lines) if r.strip()[1:].strip() == group and r.strip().startswith("@")), None)
+        if head is None:
+            sep = ["\n"] if any(r.strip() for r in lines) else []
+            return "".join(lines + sep + ["@" + group + "\n"] + block)
+        at = next((i for i in range(head + 1, len(lines)) if lines[i].strip().startswith("@")
+                   or (lines[i][:1] not in " \t" and lines[i].strip() and not lines[i].strip().startswith("--")
+                       and not RE_TASK.match(lines[i].strip()))), len(lines))
+    while at > 0 and not lines[at - 1].strip() and (group is None or at - 1 > head):
+        at -= 1                                     # before the blank lines that end the group
+    return "".join(lines[:at] + block + lines[at:])
+
+
+def archive_today(year):
+    """The TODAY an archive file of `year` is read with, so its dates (no years written) fall in that year."""
+    return date(year, 1, 1) + timedelta(days=PAST_DAYS)
 
 
 def set_date(text, line, when, title=None):
@@ -874,8 +1376,8 @@ def set_date(text, line, when, title=None):
         raw = raw[:s] + when + raw[e:] if when else _drop(raw, s, e, t.col)
     elif not when:
         raise EditError("that task has no date to clear")
-    elif t.at["reminders"] or t.at["plan"]:                 # before >plan and reminders, so dates read in one order
-        p = t.col + min(s for s, _ in t.at["reminders"] + ([t.at["plan"]] if t.at["plan"] else []))
+    elif t.at["reminders"] or t.at["plan"] or t.at["priorities"]:   # before >plan, ^priorities and reminders: one order
+        p = t.col + min(s for s, _ in t.at["reminders"] + t.at["priorities"] + ([t.at["plan"]] if t.at["plan"] else []))
         raw = raw[:p] + when + " " + raw[p:]
     else:
         p = _content_end(raw)
@@ -889,35 +1391,82 @@ def set_date(text, line, when, title=None):
     return out
 
 
-def set_plan(text, line, when, title=None):
-    """Plan the task for a day (`Oct14`; with or without the `>`), move it, or (empty) unplan it.
+def _insert_before_tail(raw, t, token):
+    """`raw` with `token` added before the task's first ^priority or reminder, or at the end of its content."""
+    tail = t.at["priorities"] + t.at["reminders"]
+    if tail:
+        p = t.col + min(s for s, _ in tail)
+        return raw[:p] + token + " " + raw[p:]
+    p = _content_end(raw)
+    return raw[:p] + " " + token + raw[p:]
 
-    The task's `>MonDD` token is replaced in place; a new one goes before the first
+
+def set_plan(text, line, when, title=None):
+    """Plan the task for a day (`Oct14`), a week (`wk45`), a month (`Nov`) or a trimester (`T3`), with or
+    without the `>`; move it, or (empty) unplan it.
+
+    The task's plan token is replaced in place; a new one goes before the first ^priority or
     reminder, or at the end of the line. Nothing else on the line moves.
     """
     lines, t = _task_at(text, line, title)
     when = when.strip().lstrip(">").strip()
     probe = Task("x >" + when) if when else None
     if probe and (probe.plan is None or probe.title != "x"):
-        raise EditError(f"{when!r} is not a day (use Oct14)")
+        raise EditError(f"{when!r} is not a plan (use Oct14, wk45, Nov or T3)")
     token = ">" + when if when else ""
     raw = lines[line - 1]
     if t.at["plan"]:
         s, e = (t.col + i for i in t.at["plan"])
         raw = raw[:s] + token + raw[e:] if token else _drop(raw, s, e, t.col)
     elif not token:
-        raise EditError("that task isn't planned for a day")
-    elif t.at["reminders"]:
-        p = t.col + t.at["reminders"][0][0]
-        raw = raw[:p] + token + " " + raw[p:]
+        raise EditError("that task isn't planned")
     else:
-        p = _content_end(raw)
-        raw = raw[:p] + " " + token + raw[p:]
+        raw = _insert_before_tail(raw, t, token)
     lines[line - 1] = raw
     out = "".join(lines)
     n = _find(out, line)
-    if (n.plan, n.title, n.start, n.end) != (probe.plan if probe else None, t.title, t.start, t.end):
-        raise EditError("the line wouldn't read back as planned for that day, so edit it by hand")
+    want = (probe.plan_kind, probe.plan, probe.plan_end) if probe else (None, None, None)
+    if (n.plan_kind, n.plan, n.plan_end, n.title, n.start, n.end) != want + (t.title, t.start, t.end):
+        raise EditError("the line wouldn't read back as planned for that, so edit it by hand")
+    return out
+
+
+def set_priority(text, line, value, title=None):
+    """Make the task a top priority for a period (`wk45`, `Nov`, `T3`, `yr`; with or without the `^`), or
+    (`-wk45`) not any more. A new token goes before the first reminder (after any plan), or at the end;
+    removing takes the token whose period matches and the spaces before it. Already so: unchanged."""
+    lines, t = _task_at(text, line, title)
+    value = value.strip()
+    off = value.startswith("-")
+    tok = value.lstrip("-").strip().lstrip("^")
+    probe = Task("x ^" + tok)
+    if len(probe.priorities) != 1 or probe.title != "x":
+        raise EditError(f"{tok!r} is not a period (use wk45, Nov, T3 or yr)")
+    span = probe.priorities[0][1:]
+    have = [i for i, pr in enumerate(t.priorities) if pr[1:] == span]
+    raw = lines[line - 1]
+    if off:
+        if not have:
+            return text
+        for i in sorted(have, reverse=True):
+            s, e = (t.col + x for x in t.at["priorities"][i])
+            raw = _drop(raw, s, e, t.col)
+    else:
+        if have:
+            return text
+        rem = t.at["reminders"]
+        if rem:
+            p = t.col + min(s for s, _ in rem)
+            raw = raw[:p] + "^" + tok + " " + raw[p:]
+        else:
+            p = _content_end(raw)
+            raw = raw[:p] + " ^" + tok + raw[p:]
+    lines[line - 1] = raw
+    out = "".join(lines)
+    n = _find(out, line)
+    if (n is None or (span in [pr[1:] for pr in n.priorities]) == off or n.title != t.title
+            or (n.plan, n.start, n.end) != (t.plan, t.start, t.end)):
+        raise EditError("the line wouldn't read back that way, so edit it by hand")
     return out
 
 
@@ -940,7 +1489,7 @@ def add_assignees(text, line, initials, title=None):
         p = s + max(i for i, c in enumerate(raw[s:e]) if c.isupper()) + 1
         raw = raw[:p] + ", " + ", ".join(new) + raw[p:]
     else:
-        tokens = t.at["reminders"] + [t.at[k] for k in ("effort", "date", "plan") if t.at[k]]
+        tokens = t.at["reminders"] + t.at["priorities"] + [t.at[k] for k in ("effort", "date", "plan") if t.at[k]]
         group = "(" + ", ".join(new) + ")"
         if tokens:
             p = t.col + min(s for s, _ in tokens)
@@ -974,7 +1523,7 @@ def set_effort(text, line, size, title=None):
     elif not size:
         raise EditError("that task has no effort to clear")
     else:
-        tokens = t.at["reminders"] + [t.at[k] for k in ("date", "plan") if t.at[k]]
+        tokens = t.at["reminders"] + t.at["priorities"] + [t.at[k] for k in ("date", "plan") if t.at[k]]
         if tokens:
             p = t.col + min(s for s, _ in tokens)
             raw = raw[:p] + ("" if raw[p - 1].isspace() else " ") + token + " " + raw[p:]
@@ -1063,18 +1612,7 @@ def add_subtask(text, line, task_text, title=None):
     ws = raw[:len(raw) - len(raw.lstrip())]
     indent = ws + ("    " if ws and "\t" not in ws else "\t")
     ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
-    last = line                                 # last non-blank line of the task's subtree
-    for i in range(line, len(lines)):
-        r = lines[i]
-        c = r.strip()
-        if not c:
-            continue
-        rws = r[:len(r) - len(r.lstrip())]
-        lvl = rws.count("\t") + rws.count(" ") // 4
-        if c.startswith("@") or (not c.startswith("--") and re.match(r"^[!~]?-", c) and lvl <= t.level) \
-                or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
-            break
-        last = i + 1
+    last = _subtree_end(lines, line, t.level)   # last non-blank line of the task's subtree
     if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
         lines[last - 1] += ending
         new_line = indent + "- " + task_text
@@ -1097,14 +1635,25 @@ def add_task(text, line, task_text, title=None):
     final line with no line ending gets one.
     """
     lines = text.splitlines(keepends=True)
+    task_text = task_text.strip() if isinstance(task_text, str) else ""
+    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+        raise EditError("a task is one line of text")
+    if line == 0:                               # the file's own project (a portfolio backlog's tasks before any @)
+        own = next((p for p in parse(text) if not lines[p.line - 1].strip().startswith("@")), None)
+        if own is None:                         # it has none yet: the new task goes first
+            ending = next((r[_content_end(r):].lstrip(" \t") for r in lines if r[_content_end(r):].lstrip(" \t")), "\n")
+            out = "- " + task_text + ending + text
+            n = _find(out, 1)
+            if n is None or n.parent is not None:
+                raise EditError("the new task wouldn't land in that project, so add it by hand")
+            return out
+        line, title = own.line, None
     if type(line) is not int or not 1 <= line <= len(lines):
         raise EditError(f"line {line!r} is not in the text")
     p = next((p for p in parse(text) if p.line == line), None)
-    if p is None or (title is not None and p.name != title):
+    own = p is not None and not lines[line - 1].strip().startswith("@")    # tasks before any @: named by the file, not the text
+    if p is None or (title is not None and p.name != title and not own):
         raise EditError(f"line {line} is no longer that project (the text has changed)")
-    task_text = task_text.strip()
-    if not task_text or any(c in task_text for c in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
-        raise EditError("a task is one line of text")
     raw = lines[line - 1]
     first = p.tasks[0] if p.tasks else None
     fr = lines[first.line - 1] if first else ""
@@ -1118,7 +1667,7 @@ def add_task(text, line, task_text, title=None):
             continue
         rws = r[:len(r) - len(r.lstrip())]
         lvl = rws.count("\t") + rws.count(" ") // 4
-        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not re.match(r"^[!~]?-", c)):
+        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
             break
         last = i + 1
     if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
@@ -1147,7 +1696,7 @@ def add_with_fields(op, text, line, fields, title=None):
     out = EDITS[op](text, line, fields["title"], title)
     a, b = text.splitlines(), out.splitlines()
     n = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), len(a)) + 1   # the new line
-    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date)):
+    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date), ("every", set_every)):
         value = fields.get(key)
         if value in (None, ""):
             continue
@@ -1157,11 +1706,13 @@ def add_with_fields(op, text, line, fields, title=None):
     return out
 
 
-EDITS = {"text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
+EDITS = {"every": set_every, "tick": tick_habit, "priority": set_priority, "notable": set_notable, "delete": delete_task, "text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
          "subtask": add_subtask, "task": add_task}
 
 
 # ---------- the notes file (--serve notes.txt) ----------
+
+NOTE_SUFFIXES = (".kf", ".txt", ".md", ".markdown")   # files the page can open (.kf: the kafeen format)
 
 class FileConflict(Exception):
     """The file on disk is not the version the page last loaded or saved."""
@@ -1221,6 +1772,300 @@ def write_notes(path, text, version, force=False):
     return file_version(data)
 
 
+# ---------- the portfolio (--serve: the Projects folder next to planner.py) ----------
+#
+# A portfolio is a folder (PROJECTS); each sub-folder is a project:
+#   HDC/backlog.kf  quicknote.kf  habits.kf  notes/[Section/]Page.kf|.txt|.md  archive/2026.kf
+# Paths in the API are relative to the portfolio, with "/" between parts. Hidden
+# names (starting with ".") are never listed or opened; .trash/ holds what was deleted.
+
+PROJECTS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "Projects")
+PROJECT_FILES = {"backlog": "backlog.kf", "quicknote": "quicknote.kf", "habits": "habits.kf"}
+NOTES_DIR, ARCHIVE_DIR, TRASH_DIR = "notes", "archive", ".trash"
+RE_ARCHIVE = re.compile(r"\d{4}\.kf")
+
+
+class PortfolioError(ValueError):
+    """A portfolio request that can't be done (bad name or path, already exists, ...)."""
+
+
+def _clean_name(name):
+    """A project, section or page name as given, stripped; PortfolioError if it can't be a file name."""
+    name = name.strip() if isinstance(name, str) else ""
+    if (not name or name.startswith(".") or len(name) > 120 or any(c in name for c in '/\\:')
+            or any(ord(c) < 32 for c in name)):
+        raise PortfolioError("a name can't be empty, start with a dot, or contain / \\ or :")
+    return name
+
+
+def portfolio_kind(rel):
+    """What the portfolio path `rel` names: project, backlog / quicknote / habits, section, page,
+    archive; or None. Only by its shape; the file may not exist."""
+    parts = rel.split("/") if isinstance(rel, str) else []
+    if not parts or any(not x or x.startswith(".") for x in parts):
+        return None
+    n = len(parts)
+    if n == 1:
+        return "project"
+    if n == 2:
+        return next((k for k, f in PROJECT_FILES.items() if f == parts[1]), None)
+    if n == 3 and parts[1] == ARCHIVE_DIR:
+        return "archive" if RE_ARCHIVE.fullmatch(parts[2]) else None
+    if parts[1] != NOTES_DIR or n > 4:
+        return None
+    if parts[-1].lower().endswith(NOTE_SUFFIXES):
+        return "page"
+    return "section" if n == 3 else None
+
+
+def portfolio_path(root, rel):
+    """The real path of `rel` inside the portfolio `root`; PortfolioError if it isn't one
+    of the portfolio's kinds or would lead outside (.., symlinks)."""
+    if isinstance(rel, str) and ("\\" in rel or "\0" in rel):
+        rel = None
+    if portfolio_kind(rel) is None:
+        raise PortfolioError(f"{rel!r} isn't a project, page or notes file in this portfolio")
+    root = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(root, *rel.split("/")))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        raise PortfolioError(f"{rel!r} is outside the portfolio")
+    return full
+
+
+def _listing(folder):
+    """Visible entries of `folder` (none if it doesn't exist), sorted by name, folders first."""
+    try:
+        found = [e for e in os.scandir(folder) if not e.name.startswith(".")]
+    except OSError:
+        return []
+    return sorted(found, key=lambda e: (not e.is_dir(), e.name.casefold()))
+
+
+def _page(rel, filename):
+    stem, ext = os.path.splitext(filename)
+    return {"kind": "page", "name": stem, "file": filename, "type": ext[1:].lower(), "path": rel}
+
+
+def project_info(root, name):
+    """One project: {name, path, files: {backlog, quicknote, habits} (paths; `made` says which
+    exist), notes: [sections {kind, name, path, pages} and pages {kind, name, file, type, path}],
+    archive: [{year, path}] newest first}."""
+    d = os.path.join(root, name)
+    notes = []
+    for e in _listing(os.path.join(d, NOTES_DIR)):
+        rel = f"{name}/{NOTES_DIR}/{e.name}"
+        if e.is_dir():
+            pages = [_page(f"{rel}/{f.name}", f.name) for f in _listing(e.path)
+                     if f.is_file() and f.name.lower().endswith(NOTE_SUFFIXES)]
+            notes.append({"kind": "section", "name": e.name, "path": rel, "pages": pages})
+        elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
+            notes.append(_page(rel, e.name))
+    archive = sorted(({"year": int(e.name[:4]), "path": f"{name}/{ARCHIVE_DIR}/{e.name}"}
+                      for e in _listing(os.path.join(d, ARCHIVE_DIR))
+                      if e.is_file() and RE_ARCHIVE.fullmatch(e.name) and e.stat().st_size),
+                     key=lambda a: -a["year"])
+    return {"name": name, "path": name,
+            "files": {k: f"{name}/{f}" for k, f in PROJECT_FILES.items()},
+            "made": [k for k, f in PROJECT_FILES.items() if os.path.isfile(os.path.join(d, f))],
+            "notes": notes, "archive": archive}
+
+
+def portfolio_tree(root):
+    """{name, projects: [project_info]} for the portfolio folder `root`."""
+    root = os.path.realpath(root)
+    return {"name": os.path.basename(root),
+            "projects": [project_info(root, e.name) for e in _listing(root) if e.is_dir()]}
+
+
+def new_project(root, name):
+    """Make a new project: its folder, its files (empty) and its notes/ and archive/ folders; -> its path."""
+    name = _clean_name(name)
+    full = portfolio_path(root, name)
+    if os.path.lexists(full):
+        raise PortfolioError(f"there is already a project called {name}")
+    os.mkdir(full)
+    for folder in (NOTES_DIR, ARCHIVE_DIR):
+        os.mkdir(os.path.join(full, folder))
+    for filename in PROJECT_FILES.values():
+        write_notes(os.path.join(full, filename), "", None)
+    return name
+
+
+def _project_dir(root, project):
+    full = portfolio_path(root, project if isinstance(project, str) else None)
+    if not os.path.isdir(full):
+        raise PortfolioError(f"there is no project called {project}")
+    return full
+
+
+def new_section(root, project, name):
+    """Make a notes section (a folder in notes/); -> its path."""
+    _project_dir(root, project)
+    name = _clean_name(name)
+    rel = f"{project}/{NOTES_DIR}/{name}"
+    if name.lower().endswith(NOTE_SUFFIXES):
+        raise PortfolioError("a section name can't end like a file (.kf, .txt, .md)")
+    full = portfolio_path(root, rel)
+    if os.path.lexists(full):
+        raise PortfolioError(f"{name} already exists")
+    os.makedirs(full)
+    return rel
+
+
+def new_page(root, project, name, section=None):
+    """Make an empty notes page; `.kf` is added to a name without .kf, .txt or .md; -> its path."""
+    _project_dir(root, project)
+    name = _clean_name(name)
+    if not name.lower().endswith(NOTE_SUFFIXES):
+        name += ".kf"
+    folder = f"{project}/{NOTES_DIR}" + (f"/{_clean_name(section)}" if section else "")
+    rel = f"{folder}/{name}"
+    full = portfolio_path(root, rel)
+    if section and not os.path.isdir(os.path.dirname(full)):
+        raise PortfolioError(f"there is no section called {section}")
+    if os.path.lexists(full):
+        raise PortfolioError(f"{name} already exists")
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    write_notes(full, "", None)
+    return rel
+
+
+def rename_item(root, rel, name):
+    """Rename a project, section or page (a page keeps its ending unless the new name has one);
+    -> the new path."""
+    kind = portfolio_kind(rel)
+    if kind not in ("project", "section", "page"):
+        raise PortfolioError("only projects, sections and pages can be renamed")
+    full = portfolio_path(root, rel)
+    if not os.path.lexists(full):
+        raise PortfolioError(f"{rel} isn't there any more")
+    name = _clean_name(name)
+    if kind == "page" and not name.lower().endswith(NOTE_SUFFIXES):
+        name += os.path.splitext(rel)[1]
+    new = rel.rsplit("/", 1)[0] + "/" + name if "/" in rel else name
+    if portfolio_kind(new) != kind:
+        raise PortfolioError(f"{name} can't be the name of a {kind}")
+    target = portfolio_path(root, new)
+    if os.path.lexists(target) and not os.path.samefile(full, target):   # (same file: a change of case)
+        raise PortfolioError(f"{name} already exists")
+    os.rename(full, target)
+    return new
+
+
+def trash_item(root, rel):
+    """Move a project, section or page into the portfolio's .trash/ (same path inside it,
+    with " (2)" and so on if that is taken); -> the path in .trash."""
+    if portfolio_kind(rel) not in ("project", "section", "page"):
+        raise PortfolioError("only projects, sections and pages can be deleted")
+    full = portfolio_path(root, rel)
+    if not os.path.lexists(full):
+        raise PortfolioError(f"{rel} isn't there any more")
+    stem, ext = os.path.splitext(rel) if os.path.isfile(full) else (rel, "")
+    dest, n = f"{TRASH_DIR}/{rel}", 1
+    while os.path.lexists(os.path.join(os.path.realpath(root), *dest.split("/"))):
+        n += 1
+        dest = f"{TRASH_DIR}/{stem} ({n}){ext}"
+    target = os.path.join(os.path.realpath(root), *dest.split("/"))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.rename(full, target)
+    return dest
+
+
+def project_name(rel):
+    """The project a portfolio path belongs to (its first part)."""
+    return rel.split("/", 1)[0] if isinstance(rel, str) else None
+
+
+def import_notes(text, root, name, split=False):
+    """Make projects in the portfolio `root` from one notes file's `text`; -> {project: backlog text}.
+
+    Without `split`: one project called `name`, its backlog the text unchanged (its @ lines become
+    sub-groups). With `split`: each @ group becomes a project of that name (its lines unchanged,
+    without the @ line), with the section heading above it copied first; tasks outside any @ go to
+    `name`. Refused if a backlog it would write already has text.
+    """
+    if not split:
+        out = {name: text}
+    else:
+        out, heading, target, put = {}, None, name, set()
+        for raw in text.splitlines(keepends=True):
+            c = raw.strip()
+            ws = raw[:len(raw) - len(raw.lstrip())]
+            if not c:
+                if out.get(target):
+                    out[target] += raw
+                continue
+            if c.startswith("@"):
+                target = c[1:].strip().replace("/", "-").replace("\\", "-").replace(":", "-").lstrip(".") or name
+                continue
+            if not c.startswith("--") and not RE_TASK.match(c) and ws.count("\t") + ws.count(" ") // 4 == 0:
+                heading, target, put = raw, name, set()
+                continue
+            if heading is not None and target not in put:
+                body = out.get(target, "")
+                if body and not body.endswith(("\n\n", "\r\n\r\n")):
+                    body += "\n"
+                out[target] = body + (heading if heading.endswith(("\n", "\r")) else heading + "\n")
+                put.add(target)
+            out[target] = out.get(target, "") + raw
+        out = {k: v.rstrip("\r\n") + ("\r\n" if "\r\n" in v else "\n") for k, v in out.items() if v.strip()}
+    for project in out:
+        _clean_name(project)
+        backlog = os.path.join(root, project, PROJECT_FILES["backlog"])
+        if read_notes(backlog)[0].strip():
+            raise PortfolioError(f"{project} already has a backlog with text in it")
+    for project, body in out.items():
+        os.makedirs(os.path.join(root, project), exist_ok=True)
+        backlog = os.path.join(root, project, PROJECT_FILES["backlog"])
+        write_notes(backlog, body, read_notes(backlog)[1])
+    return out
+
+
+def page_data(text, name=None, period=None, plan=None, habits=False):
+    """to_data for one notes text; with `name` (a portfolio page: its project's name) the tasks before
+    any @ belong to that project, and `targets` always offers it (line 0 when it has no tasks yet)."""
+    projects = parse(text, name)
+    d = to_data(projects, period, plan, projects if habits else None, habits)
+    if name and not any(t["name"] == name and t["line"] for t in d["targets"]):
+        d["targets"].insert(0, {"name": name, "line": 0, "path": None, "folder": None, "section": None})
+    return d
+
+
+def portfolio_projects(root):
+    """Every project's backlog and habits in the portfolio `root`, parsed: -> (projects, habits, versions, own).
+    Each Project gets `path` (its file) and `folder`; sections with the same title become one; `own` lists a
+    line-0 target for each project whose backlog has no tasks of its own yet; `versions` maps each file's path
+    to its version."""
+    projects, versions, sections, own, habits = [], {}, {}, [], []
+    for info in portfolio_tree(root)["projects"]:
+        hrel = info["files"]["habits"]
+        htext, versions[hrel] = read_notes(portfolio_path(root, hrel))
+        for hp in parse(htext, info["name"]):
+            hp.path, hp.folder = hrel, info["name"]
+            habits.append(hp)
+        rel = info["files"]["backlog"]
+        text, versions[rel] = read_notes(portfolio_path(root, rel))
+        ps = parse(text, info["name"])
+        for pr in ps:
+            pr.path, pr.folder = rel, info["name"]
+            if pr.section is not None:
+                pr.section = sections.setdefault(pr.section.title, pr.section)
+        if not any(pr.name == info["name"] and pr.section is None and pr.line for pr in ps):
+            own.append({"name": info["name"], "line": 0, "path": rel, "folder": info["name"], "section": None})
+        projects += ps
+    return projects, habits, versions, own
+
+
+def portfolio_data(root, period=None, plan=None):
+    """to_data over every project's backlog (All projects; `portfolio_projects`), with the habits for the Planner,
+    `targets` led by the line-0 ones, and `versions` for edits."""
+    projects, habits, versions, own = portfolio_projects(root)
+    d = to_data(projects, period, plan, habits)
+    d["targets"] = own + d["targets"]
+    d["versions"] = versions
+    return d
+
+
 # ---------- web page ----------
 
 def set_today(val):
@@ -1230,18 +2075,26 @@ def set_today(val):
     TODAY = date(date.today().year, MONTHS[m.group(1)], int(m.group(2))) if m else date.fromisoformat(val)
 
 
-NOTE_SUFFIXES = (".txt", ".md", ".markdown")
+def apply_edit(text, req):
+    """The text after the edit `req` asks for ({op, line, title, value}); EditError if refused."""
+    op = EDITS.get(req["op"])
+    if op is None:
+        raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
+    if isinstance(req["value"], dict) and req["op"] in ("task", "subtask"):
+        return add_with_fields(req["op"], text, req["line"], req["value"], req.get("title"))
+    if not isinstance(req["value"], str):
+        raise EditError("value must be text")
+    return op(text, req["line"], req["value"], req.get("title"))
 
 
-def make_server(port, notes_path=None, browse_root=None):
+def make_server(port, notes_path=None, portfolio=None):
     """The local server (127.0.0.1 only). Port 0 picks a free port.
 
-    With `notes_path`, GET/POST /api/file read and save that one file. Without
-    it, the page can list folders under `browse_root` (default: the home folder)
-    with GET /api/browse, open .txt / .md files there with POST /api/open (several
-    at once: the page shows them as tabs and autosaves them; `create` makes a new
-    empty one), and close them with POST /api/close; /api/file then reads and saves
-    an open file, named by `path`. Only open files are ever written.
+    With `portfolio` (a folder; `--serve` passes PROJECTS), GET /api/portfolio lists its projects, POST /api/portfolio
+    makes, renames and deletes (moves to .trash) projects, sections and pages, and
+    /api/file reads and saves any file in it by its path relative to the folder.
+
+    With `notes_path`, GET/POST /api/file read and save that one file. Nothing else is ever written.
     """
     import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1249,19 +2102,16 @@ def make_server(port, notes_path=None, browse_root=None):
     from urllib.parse import parse_qs, urlsplit
 
     default_today = TODAY
-    page = Path(__file__).resolve().parent / "web" / "index.html"
-    root = os.path.realpath(browse_root or os.path.expanduser("~"))
-    opened = []                                     # files opened from the page (resolved paths), most recent last
-
-    def inside(p):
-        """`p` resolved, if it is `root` or under it; else None."""
-        p = os.path.realpath(p)
-        return p if p == root or p.startswith(root.rstrip(os.sep) + os.sep) else None
+    web = Path(__file__).resolve().parent / "web"
+    statics = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
+               "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8")}
+    folio = os.path.realpath(portfolio) if portfolio else None
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-cache")      # a new version of the page is picked up at once
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1280,76 +2130,183 @@ def make_server(port, notes_path=None, browse_root=None):
 
         def do_GET(self):
             path = self.path.split("?")[0]
-            if path in ("/", "/index.html"):
-                self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            if path in statics:
+                name, ctype = statics[path]
+                self._send(200, (web / name).read_bytes(), ctype)
+            elif path == "/api/portfolio":
+                if not self._trusted():
+                    return
+                self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
                 self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
-            elif path == "/api/browse":
-                if not self._trusted():
-                    return
-                self._browse(parse_qs(urlsplit(self.path).query).get("dir", [None])[0])
-            elif path == "/api/example":            # the sample notes, for the page's "Load the example"
-                if not self._trusted():
-                    return
-                self._json(200, {"text": (Path(__file__).resolve().parent / "example.txt").read_text(encoding="utf-8")})
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/open", "/api/close"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send JSON"})
-            global TODAY
+            global TODAY, LOG_END
+            LOG_END = None
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 if self.path == "/api/file":
                     return self._save(req)
-                if self.path == "/api/open":
-                    return self._open(req)
-                if self.path == "/api/close":
-                    return self._close(req)
+                if self.path == "/api/portfolio":
+                    return self._portfolio(req)
                 TODAY = default_today
                 if req.get("today"):
                     set_today(req["today"])
+                if req.get("year") is not None:              # an archive page: its dates fall in its year
+                    if type(req["year"]) is not int or not 1900 <= req["year"] <= 2999:
+                        raise ValueError("year must be a year, like 2026")
+                    TODAY = archive_today(req["year"])
+                    LOG_END = date(req["year"], 12, 31)
+                if self.path == "/api/archive":
+                    return self._archive(req, period_from(req.get("period")), planner_from(req.get("planner")))
                 text = req.get("text", "")
                 period = period_from(req.get("period"))
-                monday = week_monday(req.get("week"))
+                monday = planner_from(req.get("planner"))
+                name = req.get("name") if isinstance(req.get("name"), str) else None
                 if self.path == "/api/parse":
-                    return self._json(200, to_data(parse(text), period, monday))
-                op = EDITS.get(req["op"])
-                if op is None:
-                    raise EditError(f"unknown edit {req['op']!r} ({', '.join(EDITS)})")
-                if isinstance(req["value"], dict) and req["op"] in ("task", "subtask"):
-                    text = add_with_fields(req["op"], text, req["line"], req["value"], req.get("title"))
-                elif not isinstance(req["value"], str):
-                    raise EditError("value must be text")
-                else:
-                    text = op(text, req["line"], req["value"], req.get("title"))
-                self._json(200, {"text": text, "data": to_data(parse(text), period, monday)})
+                    if req.get("all"):
+                        if folio is None:
+                            return self._json(409, {"error": "no projects folder is being served (planner.py --serve)"})
+                        return self._json(200, portfolio_data(folio, period, monday))
+                    return self._json(200, page_data(text, name, period, monday, bool(req.get("habits"))))
+                if "path" in req:
+                    return self._edit_file(req, period, monday)
+                text = apply_edit(text, req)
+                self._json(200, {"text": text, "data": page_data(text, name, period, monday, bool(req.get("habits")))})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
 
+        def _edit_file(self, req, period, monday):
+            """/api/edit with `path` and `version`: the edit is made on the file itself. Refused (409
+            conflict) if the file isn't at `version` any more. -> {text, version, data}."""
+            p = self._target(req["path"])
+            if p is None:
+                return self._not_open(req["path"])
+            text, current = read_notes(p)
+            if current != req.get("version"):
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
+            name = project_name(req["path"]) if folio else None
+            hab = folio and portfolio_kind(req["path"]) == "habits"
+            before, text = text, apply_edit(text, req)
+            try:
+                version = write_notes(p, text, current)
+            except FileConflict:
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
+                                        "version": read_notes(p)[1]})
+            data = portfolio_data(folio, period, monday) if folio and req.get("all") else page_data(text, name, period, monday, hab)
+            self._json(200, {"text": text, "before": before, "version": version, "data": data})
+
+        def _archive(self, req, period, monday):
+            """POST /api/archive {path, version, year, line + title | done (+ project_line), all}: move a task and its
+            subtasks (or every finished task) from a project's .kf file into its archive/YEAR.kf. The archive is
+            written first, so a crash leaves a copy rather than losing anything. -> {text, version, data, archive,
+            moved, tree, undo: [{path, before, version}] (the source, then the archive)}."""
+            if folio is None:
+                return self._json(409, {"error": "the archive needs the projects folder (planner.py --serve)"})
+            path, year = req.get("path"), req.get("archive_year")
+            if portfolio_kind(path) in (None, "project", "section", "archive") or not path.endswith(".kf"):
+                return self._json(409, {"error": "tasks can be archived from a project's .kf pages"})
+            if type(year) is not int or not 1900 <= year <= 2999:
+                return self._json(400, {"error": "bad request: archive_year must be a year, like 2026"})
+            src = self._target(path)
+            if src is None:
+                return self._not_open(path)
+            text, current = read_notes(src)
+            if current != req.get("version"):
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True, "version": current})
+            if req.get("habit_log"):
+                if portfolio_kind(path) != "habits":
+                    return self._json(409, {"error": "habit logs are archived from a project's Habits"})
+                rest, moved = take_habit_log(text, year)
+            elif req.get("done"):
+                rest, moved = take_done(text, req.get("project_line"))
+            else:
+                rest, block, group = take_task(text, req["line"], req.get("title"))
+                moved = [(group, block)]
+            arel = f"{project_name(path)}/{ARCHIVE_DIR}/{year}.kf"
+            apath = portfolio_path(folio, arel)
+            atext, aver = read_notes(apath)
+            new = atext
+            for group, block in moved:
+                new = put_in_archive(new, group, block)
+            os.makedirs(os.path.dirname(apath), exist_ok=True)
+            aver2 = write_notes(apath, new, aver)          # the archive first: a crash leaves a copy, never a loss
+            try:
+                version = write_notes(src, rest, current)
+            except FileConflict:
+                write_notes(apath, atext, aver2)           # the source changed meanwhile: take the copy back out
+                return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
+                                        "version": read_notes(src)[1]})
+            name = project_name(path)
+            data = (portfolio_data(folio, period, monday) if req.get("all")
+                    else page_data(rest, name, period, monday, portfolio_kind(path) == "habits"))
+            self._json(200, {"text": rest, "version": version, "data": data, "archive": arel,
+                             "moved": sum(1 for _, b in moved for r in b if RE_TASK.match(r.strip()) and not r.strip().startswith("--")),
+                             "tree": portfolio_tree(folio),
+                             "undo": [{"path": path, "before": text, "version": version},
+                                      {"path": arel, "before": atext, "version": aver2}]})
+
+        def _portfolio(self, req):
+            """POST /api/portfolio {op, ...}: project {name}; section {project, name}; page {project, name,
+            section?}; rename {path, name}; trash {path}. -> {path, tree}."""
+            op = req.get("op")
+            if folio is None:
+                return self._json(409, {"error": "no projects folder is being served (planner.py --serve)"})
+            try:
+                if op == "project":
+                    path = new_project(folio, req.get("name"))
+                elif op == "section":
+                    path = new_section(folio, req.get("project"), req.get("name"))
+                elif op == "page":
+                    path = new_page(folio, req.get("project"), req.get("name"), req.get("section"))
+                elif op == "rename":
+                    path = rename_item(folio, req.get("path"), req.get("name"))
+                elif op == "trash":
+                    path = trash_item(folio, req.get("path"))
+                else:
+                    return self._json(400, {"error": f"bad request: unknown op {op!r} (project, section, page, rename, trash)"})
+            except PortfolioError as e:
+                return self._json(409, {"error": str(e)})
+            except OSError as e:
+                return self._json(500, {"error": f"can't do that: {e.strerror or e}"})
+            self._json(200, {"path": path, "tree": portfolio_tree(folio)})
+
         def _target(self, path):
-            """The file a request means: the command-line file, or `path` if it is open; else None."""
-            if notes_path is not None:
-                return notes_path if path in (None, notes_path) else None
-            p = isinstance(path, str) and os.path.realpath(path)
-            return p if p in opened else None
+            """The file a request means: the command-line file, or in a portfolio the file at `path`
+            (relative to it) if its folder exists; else None."""
+            if folio is not None:
+                if portfolio_kind(path) in (None, "project", "section"):
+                    return None
+                try:
+                    p = portfolio_path(folio, path)
+                except PortfolioError:
+                    return None
+                folder = os.path.dirname(p)
+                if portfolio_kind(path) == "archive":     # archive/ is made on the first save
+                    folder = os.path.dirname(folder)
+                return p if os.path.isdir(folder) else None
+            return notes_path if notes_path is not None and path in (None, notes_path) else None
 
         def _not_open(self, path):
-            """409 notOpen: e.g. the server was restarted; the page opens the file again and retries."""
+            """409 notOpen: `path` isn't a file this server can read or write."""
             self._json(409, {"error": f"{os.path.basename(str(path))} isn't open", "notOpen": True})
 
         def _file(self, path=None):
-            """{name, path, text, version, picked} for the command-line file or an open file;
-            {name: null} without a path and without a command-line file."""
+            """{name, path, text, version} for the command-line file or a
+            portfolio file (text "" and version null if not made yet); {name: null} without a path
+            and without a command-line file."""
             if path is None and notes_path is None:
                 return self._json(200, {"name": None})
             p = self._target(path)
@@ -1359,63 +2316,7 @@ def make_server(port, notes_path=None, browse_root=None):
                 text, version = read_notes(p)
             except (OSError, UnicodeDecodeError) as e:
                 return self._json(500, {"error": f"can't read {p}: {e}"})
-            self._json(200, {"name": os.path.basename(p), "path": p, "text": text, "version": version,
-                             "picked": notes_path is None})
-
-        def _browse(self, folder):
-            """Folders and notes files in `folder` (under the browse root): {dir, parent, entries}."""
-            if notes_path is not None:
-                return self._json(409, {"error": "a notes file was given on the command line"})
-            start = os.path.dirname(opened[-1]) if opened else (os.getcwd() if inside(os.getcwd()) else root)
-            d = inside(folder or start)
-            if d is None or not os.path.isdir(d):
-                return self._json(403, {"error": "you can only open files in your home folder"})
-            try:
-                found = list(os.scandir(d))
-            except OSError as e:
-                return self._json(403, {"error": f"can't open that folder: {e.strerror or e}"})
-            entries = []
-            for e in found:
-                if e.name.startswith("."):
-                    continue
-                try:
-                    if e.is_dir():
-                        entries.append({"name": e.name, "kind": "dir", "path": os.path.join(d, e.name)})
-                    elif e.is_file() and e.name.lower().endswith(NOTE_SUFFIXES):
-                        entries.append({"name": e.name, "kind": "file", "path": os.path.join(d, e.name)})
-                except OSError:
-                    continue
-            entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].casefold()))
-            self._json(200, {"dir": d, "home": root, "parent": None if d == root else os.path.dirname(d), "entries": entries})
-
-        def _open(self, req):
-            """Open the notes file at req["path"] (under the browse root) and return it; opening an
-            open file again is fine. With "create", make it first (empty; refused if it exists)."""
-            if notes_path is not None:
-                return self._json(409, {"error": "a notes file was given on the command line"})
-            p = isinstance(req.get("path"), str) and inside(req["path"])
-            if not p or not p.lower().endswith(NOTE_SUFFIXES) or not os.path.isdir(os.path.dirname(p)):
-                return self._json(403, {"error": "you can open .txt and .md files in your home folder"})
-            if req.get("create"):
-                if os.path.lexists(p):
-                    return self._json(409, {"error": f"{os.path.basename(p)} already exists"})
-                try:
-                    write_notes(p, "", None)
-                except (OSError, FileConflict) as e:
-                    return self._json(500, {"error": f"can't create {os.path.basename(p)}: {e}"})
-            if not os.path.isfile(p):
-                return self._json(404, {"error": f"{os.path.basename(p)} isn't there any more"})
-            if p in opened:
-                opened.remove(p)
-            opened.append(p)
-            self._file(p)
-
-        def _close(self, req):
-            """Stop serving the open file req["path"] (nothing is written)."""
-            p = isinstance(req.get("path"), str) and os.path.realpath(req["path"])
-            if p in opened:
-                opened.remove(p)
-            self._json(200, {"closed": True})
+            self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version})
 
         def _save(self, req):
             p = self._target(req.get("path"))
@@ -1424,6 +2325,8 @@ def make_server(port, notes_path=None, browse_root=None):
             if not isinstance(req.get("text"), str):
                 return self._json(400, {"error": "bad request: text must be a string"})
             try:
+                if folio is not None:
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
                 version = write_notes(p, req["text"], req.get("version"), bool(req.get("force")))
             except FileConflict as e:
                 _, current = read_notes(p)
@@ -1438,13 +2341,15 @@ def make_server(port, notes_path=None, browse_root=None):
     return HTTPServer(("127.0.0.1", port), Handler)
 
 
-def serve(port, notes_path=None):
+def serve(port, notes_path=None, portfolio=None):
     import threading
     import webbrowser
 
-    server = make_server(port, notes_path)
+    server = make_server(port, notes_path, portfolio=portfolio)
     url = f"http://localhost:{port}"
     print(f"Planner running at {url}  (Ctrl-C to stop)")
+    if portfolio:
+        print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -1478,6 +2383,25 @@ def main(argv):
             set_today(today)
         except ValueError:
             sys.exit(f"planner.py: bad --today value {today!r} (use Oct12 or 2026-10-12)")
+    if "--import" in args:
+        split = "--split" in args
+        if split:
+            args.remove("--split")
+        args.remove("--import")
+        if len(args) not in (1, 2) or not os.path.isfile(args[0]):
+            sys.exit("planner.py: use --import notes.txt [FOLDER] [--split]")
+        folder = args[1] if len(args) == 2 else PROJECTS
+        if not os.path.isdir(folder) and not os.path.isdir(os.path.dirname(os.path.abspath(folder))):
+            sys.exit(f"planner.py: can't make the portfolio {folder!r}: its parent folder doesn't exist")
+        try:
+            with open(args[0], encoding="utf-8", newline="") as f:
+                text = f.read()
+            os.makedirs(folder, exist_ok=True)
+            made = import_notes(text, folder, os.path.splitext(os.path.basename(args[0]))[0], split)
+        except (OSError, UnicodeDecodeError, PortfolioError) as e:
+            sys.exit(f"planner.py: can't import {args[0]!r}: {e}")
+        print(f"Imported into {folder}: " + ", ".join(made))
+        return
     if "--serve" in args:
         args.remove("--serve")
         port = take_option(args, "--port") or "8765"
@@ -1485,26 +2409,43 @@ def main(argv):
             sys.exit(f"planner.py: bad --port value {port!r}")
         if len(args) > 1 or any(a.lower() in VIEWS for a in args):
             sys.exit("planner.py: --serve takes at most one notes file (and no view names)")
-        notes = os.path.realpath(args[0]) if args else None    # follow a symlink to the real file
-        if notes:
-            if os.path.isdir(notes) or not os.path.isdir(os.path.dirname(notes)):
-                sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
+        if not args:                                           # the Projects folder next to planner.py
             try:
-                read_notes(notes)
-            except (OSError, UnicodeDecodeError) as e:
-                sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
+                os.makedirs(PROJECTS, exist_ok=True)
+            except OSError as e:
+                sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
+            return serve(int(port), portfolio=PROJECTS)
+        notes = os.path.realpath(args[0])                      # follow a symlink to the real file
+        if os.path.isdir(notes):
+            sys.exit(f"planner.py: --serve takes no folder: your projects live in {PROJECTS}")
+        if not os.path.isdir(os.path.dirname(notes)):
+            sys.exit(f"planner.py: can't edit {args[0]!r}: not a file in an existing folder")
+        try:
+            read_notes(notes)
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
         return serve(int(port), notes)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())
-        elif not os.path.isfile(a):
-            sys.exit(f"planner.py: {a!r} is not a file or a view ({' | '.join(VIEWS)})")
+        elif not os.path.isfile(a) and not os.path.isdir(a):
+            sys.exit(f"planner.py: {a!r} is not a file, a portfolio folder or a view ({' | '.join(VIEWS)})")
         elif path is not None:
             sys.exit(f"planner.py: only one notes file at a time (got {path!r} and {a!r})")
         else:
             path = a
 
-    if path:
+    habits = None
+    if path and os.path.isdir(path):                           # a portfolio: every project's backlog (and habits)
+        try:
+            projects, habits, _, _ = portfolio_projects(path)
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"planner.py: can't read the portfolio {path!r}: {e}")
+        for p in projects + habits:                            # a sub-group reads "HDC · Stream"
+            if p.name != p.folder:
+                p.name = f"{p.folder} · {p.name}"
+        text = None
+    elif path:
         try:
             with open(path, encoding="utf-8") as f:
                 text = f.read()
@@ -1520,12 +2461,13 @@ def main(argv):
     except AttributeError:
         pass
 
-    projects = parse(text)
+    if text is not None:
+        projects = parse(text)
     if not projects:
         print("No projects or tasks found.")
         return
     for name in chosen or list(VIEWS):
-        print("\n".join(VIEWS[name](projects)))
+        print("\n".join(view_week(projects, None, habits) if name == "week" else VIEWS[name](projects)))
         print()
 
 

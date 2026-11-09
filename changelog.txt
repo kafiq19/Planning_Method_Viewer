@@ -5,6 +5,191 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.9  2026-11-09  Fold projects in All projects; starred first; points done
+-------------------------------------------------
+- New: in All projects, each project has one heading (with its counts)
+  that folds away everything in it; its sections are small labels under
+  it, and its @ sub-groups still fold on their own. A project with no
+  tasks yet shows too, with + Add task. Archive done on the project's
+  heading archives its whole backlog.
+- New: in the Planner, a starred task (☆) comes first: in its column, in
+  the list on the right, and in the backlog (with its subtasks under it).
+- New: the Planner's list on the right shows the points done out of
+  those planned per project, like 4/16 pts.
+- Code: vAllProjects (fold key collapsedFolders), starFirst,
+  starBlocksFirst, groupsStarFirst. Page only; the data is unchanged.
+
+
+2.0.8  2026-11-06  Planner only where it belongs; file tabs removed
+-------------------------------------------------
+- Changed: Planner mode is only for a project's Backlog and Archive, and
+  Habits, whose tick boxes are drawn in it. The Quick note and notes pages
+  open in Text (.md pages in Markdown), with Planner greyed out. That
+  includes .kf notes pages.
+- Removed: the file tabs, Open file, New file, the browser-kept Quick note,
+  Load the example, dropping a file on the page, and downloading text
+  without a file. --serve notes.txt still edits one file.
+- Code: modeOf, pageHasPlanner, plannerOK replace MODE_OF. Gone from the
+  server: GET /api/browse, GET /api/example, POST /api/open, POST
+  /api/close, make_server's browse_root and `picked`. Gone from the page:
+  showTabs, switchTo, showQuickNote, closeTab, the picker, loadText,
+  download. Autosave now goes with state.folio.
+
+2.0.7  2026-11-06  One Projects folder
+-------------------------------------------------
+- Changed: python planner.py --serve is all you need. Your projects live
+  in the Projects folder next to planner.py, which the planner finds by
+  itself (and makes if it's missing).
+- Removed: --serve FOLDER, and Create a portfolio, Open a folder…, Switch
+  portfolio… and Close portfolio in the drawer. --serve notes.txt still
+  edits one file. Because --serve now always opens Projects, the file
+  tabs, Open file and the browser-kept Quick note no longer appear.
+- New: + New project makes the project's files straight away: empty
+  backlog.kf, quicknote.kf and habits.kf, and the notes/ and archive/
+  folders.
+- New: a sample project, Projects/Example. Delete it whenever you like.
+- Changed: --import notes.txt puts the project in Projects unless you give
+  another folder.
+- Changed: git ignores Projects/ except Projects/Example.
+- Code: PROJECTS; new_project writes the placeholders. Gone: POST
+  /api/portfolio ops use and leave, `root` and `can` in GET /api/portfolio,
+  and in the page state.canFolio, portfolioPath, drawNoFolio, useFolio,
+  closeFolio, openPicker("folder"). /api/browse answers 409 while a projects
+  folder is served. The file-tabs code stays, reached only through
+  make_server without a folder (the tests).
+
+2.0.6  2026-11-06  The project drawer without a portfolio folder
+-------------------------------------------------
+- Fixed: the KAFEEN logo did nothing unless the planner was started with
+  a portfolio folder (python planner.py --serve FOLDER). Now it always
+  opens the drawer (except with --serve notes.txt): with no portfolio
+  yet, it offers Create a portfolio (a new folder in your home folder,
+  Kafeen suggested) or Open a folder…
+- New: the page remembers your portfolio and opens it again next time.
+  Switch portfolio… and Close portfolio are at the bottom of the drawer.
+- Code: POST /api/portfolio ops use {path, create} and leave (use_folio);
+  GET /api/portfolio gives `root`, or `can` without one; ~ means the
+  browse root; /api/browse lists folders while a portfolio is open. In
+  the page: state.canFolio, portfolioPath, drawNoFolio, useFolio,
+  closeFolio, openPicker("folder").
+
+2.0.5  2026-11-06  Portfolio, part 6: the terminal, and polish
+-------------------------------------------------
+- New: the terminal views read a portfolio folder:
+  python planner.py ~/Kafeen  (or  ~/Kafeen week ). A project's sub-group
+  reads "HDC · Stream", and the week lists each day's habits.
+- Changed: the README's Portfolio section is complete (no more "coming
+  soon").
+- Code: portfolio_projects (shared by portfolio_data and the CLI);
+  view_week(projects, monday, habits). AGENTS.md: the portfolio plan is
+  done; the check view is next on the roadmap.
+
+2.0.4  2026-11-06  Portfolio, part 5: habits
+-------------------------------------------------
+- New: a Habits page for each project (habits.kf). A habit is a task with
+  how often it repeats (*daily, *weekdays, *weekly Mon, Wed, Fri,
+  *monthly 1st); the page shows a week of tick boxes, and ticking a day
+  writes it in a note under the habit: -- done Nov02 Nov03.
+- New: *weekdays and *weekly Mon, Wed, Fri (several days) as reminders.
+- New: habits in the Planner: on the Week level each day lists the habits
+  due that day with their tick boxes; on the other levels each column
+  says how many were done.
+- New: in January, move last year's ticks to the archive with one click.
+- Changed: the Planner's Plan column is a little wider.
+- Code: reminder_days, repeats, every_label, resolve_past, log_of,
+  LOG_END, Task.log, habit_rows; ops every and tick; take_habit_log
+  (/api/archive habit_log); planner.habits / days / log_years;
+  page_data(habits). In the page: vHabits, tickButton, habitsIn,
+  addHabitRow, isHabitsPage, state.habitWeek.
+
+2.0.3  2026-11-06  Portfolio, part 4: the Planner
+-------------------------------------------------
+- New: the Week tab is now the Planner, by Year, Season, Month or Week.
+  The columns are the next step down (trimesters, months, weeks, days);
+  drag a task onto one, or use its Plan cell. Planning writes >T3, >Nov,
+  >wk45 or >Oct14, and a task planned for a day also shows in its week,
+  month and season.
+- New: top priorities. Click the ☆ on a task to make it a top priority
+  for the period you're looking at (^wk45, ^Nov, ^T3, ^yr); they're
+  listed at the top of the Planner.
+- New: On the calendar: choose which projects are on the Planner (× takes
+  one off, + Add project puts it back).
+- New: in a portfolio there is one Planner for every project, first in
+  the drawer; the Planner tab on a project page takes you there.
+- Code: RE_PLAN (day, week, month, trimester) and RE_PRIO; plan_of,
+  priority_of, plan_label; planner_* (periods, columns, star, groups;
+  week_groups is gone); to_data's "planner" replaces "week"; requests
+  send planner {kind, year, index}; op "priority"; set_plan takes any
+  level. In the page: vPlanner, wSeg, starButton, projectChips.
+
+2.0.2  2026-11-06  Portfolio, part 3: circle, archive, delete
+-------------------------------------------------
+- New: purple circling. Mark a notable task with (!) in front of it,
+  like  (!)- send to board  or  (!)!- signed the deal ; it gets a purple
+  box in every view, the archive included.
+- New: a faint ⋯ at the end of every task row: Circle in purple,
+  Archive to 2026 (or last year), and Delete (with its subtasks; it asks
+  first if there are any). All with Undo.
+- New: the archive. Archiving moves a task and its subtasks, word for
+  word, into the project's archive/2026.kf under the same @ group (the
+  archive is written first, so nothing can be lost). Point at a project's
+  heading and click Archive done to move every finished task (done, with
+  all its subtasks done). The years show under Archive in the drawer, and
+  an archive page reads its dates in its own year.
+- Code: RE_TASK (one task pattern, with (!)); set_notable, delete_task,
+  _subtree_end, _cut, take_task, take_done, put_in_archive, archive_today;
+  POST /api/archive; `year` on /api/parse and /api/edit. In the page:
+  moreCell, archiveOp, archiveDoneButton, undo of several files.
+
+2.0.1  2026-11-06  Portfolio, part 2: the project drawer
+-------------------------------------------------
+- New: in a portfolio (--serve FOLDER), click the KAFEEN logo to open
+  the project drawer: All projects, then each project with its Quick
+  note, Backlog, Notes (pages in sections, like OneNote), Habits and
+  Archive. Find a project by name; + New project at the bottom; New
+  page, New section, Rename and Delete in each row's ⋯ menu (Delete
+  moves it to the portfolio's .trash folder).
+- New: All projects shows every project's backlog in the usual tabs.
+  Changes made there go straight into that project's backlog.kf, with
+  Undo; if the file changed meanwhile, nothing is overwritten.
+- New: the header shows where you are (HDC › Notes › Kickoff call). The
+  page you were on opens again next time; pages save themselves and
+  open in their own mode (.kf Planner, .md Markdown, .txt Text).
+- New: an empty backlog or page offers + Add task for its project.
+- Code: page_data / portfolio_data; /api/parse {name} or {all: true};
+  /api/edit with path returns `before` and, with all, All projects'
+  data; add_task line 0 (the file's own project); tasks, projects and
+  targets carry path and folder. In the page: drawer, ask, moreButton,
+  openPage, showAll, showCrumbs, folioWelcome; editTask and undo edit
+  files directly in All projects.
+
+2.0.0  2026-11-06  Portfolio, part 1: projects on disk, .kf
+-------------------------------------------------
+- New: portfolios. A portfolio is a folder with one sub-folder per
+  project: backlog.kf (the planning notes), quicknote.kf, habits.kf,
+  notes/ (pages, in sections if you like) and archive/2026.kf. Serve one
+  with  python planner.py --serve ~/Kafeen . The page's project drawer,
+  archive, habits and the new Planner come in the next releases; this
+  one adds the storage and the server side.
+- New: .kf is the KAFEEN notes format's own file ending. The notes inside
+  are unchanged, and .kf files open anywhere .txt files did.
+- New: python planner.py --import notes.txt ~/Kafeen [--split] turns a
+  notes file into a project (or one project per @ line). Lines are copied
+  exactly; the file itself isn't touched.
+- New: deleting a project, section or page moves it to the portfolio's
+  .trash folder; nothing is ever removed.
+- Changed: the sample notes are now example.kf (and the sample portfolio
+  example/). example.txt is left for your own notes; the tests no longer
+  read it.
+- Code: the page is split into web/index.html, app.css and app.js.
+  parse(text, name) names the implicit project (a backlog's tasks belong
+  to its project). Portfolio functions (portfolio_kind / portfolio_path /
+  portfolio_tree, new_project / new_section / new_page, rename_item,
+  trash_item, import_notes); GET/POST /api/portfolio; /api/file by path
+  in a portfolio; POST /api/edit with path + version edits the file on
+  the server (stale versions refused); apply_edit shared by both.
+  AGENTS.md has the agreed portfolio plan and design notes.
+
 1.5.3  2026-11-05  Faster entry: Tab, keep adding, fields, defaults
 -------------------------------------------------
 - New: Tab between a task's parts while editing: title -> Who -> Effort ->
