@@ -5,6 +5,17 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.12  2026-11-10  Fewer redraws
+-------------------------------------------------
+- Changed: the Planner views no longer redraw when the server's answer
+  is the same as what is already shown (for example after a window
+  focus or a keystroke that changes nothing), so your place, cursor and
+  any open editor stay put. A refresh that is still waiting is cancelled
+  when a newer one starts, and typing waits for a 400 ms pause (it was
+  200) before the view updates.
+- Code: render() / unchanged() / state.shown / state.ctl in web/app.js.
+
+
 2.0.11  2026-11-09  Stability: threaded server, debug log
 -------------------------------------------------
 - Fixed: the server handled one request at a time, so a browser

@@ -322,7 +322,15 @@ function goToLine(n) {
 }
 
 let timer;
-function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 200); }
+function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 400); }   // typing: wait for a pause before asking the server
+
+// Is the planner view already showing exactly this data (for this page, tab and mode)?
+const shownKey = () => [state.file && state.file.path, state.all, state.tab, state.mode, state.switched].join("|");
+function unchanged(data) {
+  const view = $("viewPane");
+  return !!state.shown && state.shown.key === shownKey() && view.children.length === 2 && view.firstChild === tabsRow
+    && JSON.stringify(state.shown.data) === JSON.stringify(data);
+}
 
 async function render(relayout) {
   if (relayout) layout();
@@ -334,20 +342,23 @@ async function render(relayout) {
     return;
   }
   const seq = ++state.seq;
+  if (state.ctl) state.ctl.abort();                          // the server needn't finish an answer nobody will read
+  const ctl = state.ctl = new AbortController();
   try {
     const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }) });
+      body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }), signal: ctl.signal });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
       if (state.period) { setPeriod(null); return; }        // e.g. a stored period the server rejects: fall back to all dates
       throw new Error(data.error || r.statusText);
     }
+    if (unchanged(data)) return;                             // same answer as the one on screen: leave the view (focus, scroll, open editors) alone
     state.data = data;
     plannerView();
   } catch (err) {
-    if (seq !== state.seq) return;
+    if (err.name === "AbortError" || seq !== state.seq) return;
     view.replaceChildren(h("div", "err", "Could not parse: " + err.message +
       ". Planner mode needs the server: run  python planner.py --serve"));
   }
@@ -781,6 +792,7 @@ function showToast() {                           // the last edit's message, wit
 }
 
 function plannerView() {
+  state.shown = null;                                // set again below once it is drawn
   if (state.switched) {                             // another file: drop a person or project filter it doesn't have
     state.switched = false;
     if (filt.who && filt.who !== "(unassigned)" && !state.data.people.some(g => g.name === filt.who)) { filt.who = ""; store.set(FKEYS.who, ""); }
@@ -825,6 +837,7 @@ function plannerView() {
   plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
   showToast();
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
+  state.shown = { key: shownKey(), data: state.data };
 }
 
 const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
