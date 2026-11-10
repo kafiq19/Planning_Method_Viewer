@@ -5,6 +5,31 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.11  2026-11-09  Stability: threaded server, debug log
+-------------------------------------------------
+- Fixed: the server handled one request at a time, so a browser
+  connection that stalled (or one slow request) froze the whole page.
+  Requests now run on their own threads; a silent connection is dropped
+  after 10 seconds, a bad Content-Length is refused with a message, and
+  an unexpected error is answered as an error instead of dropping the
+  connection. The listen queue is larger, so a burst of requests from
+  the browser is no longer reset.
+- New: open the page with ?debug=1 to see each request's time and any
+  error in a small overlay (and the console), to help track down freezes.
+- Code: ThreadingHTTPServer; request bodies are read before taking the
+  server lock, and API work takes turns under it (TODAY and LOG_END are
+  per-request globals). Tests cover a stalled connection, bad lengths
+  and parallel requests.
+
+
+2.0.10  2026-11-09  Effort S is worth 2 points
+-------------------------------------------------
+- Changed: (s) is now worth 2 points (it was 1), so the sizes are
+  1, 2, 3, 5 and 8. Point totals in the views change accordingly.
+- Code: EFFORT in planner.py, EFFORTS in web/app.js, the docs and the
+  tests that sum points.
+
+
 2.0.9  2026-11-09  Fold projects in All projects; starred first; points done
 -------------------------------------------------
 - New: in All projects, each project has one heading (with its counts)

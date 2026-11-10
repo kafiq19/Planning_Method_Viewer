@@ -7,6 +7,38 @@ const store = {
 };
 const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, seq: 0, msg: null };
 
+/* ---------- debug log: open the page with ?debug=1 (or store "debug" = 1) to see each request's time and any error ---------- */
+(function () {
+  let on = false;
+  try { on = /[?&]debug=1\b/.test(location.search) || store.get("debug", "") === "1"; } catch (e) {}
+  if (!on) return;
+  const lines = [];
+  let box = null;
+  const log = (kind, text) => {
+    lines.push(new Date().toLocaleTimeString() + " " + kind + " " + text);
+    if (lines.length > 12) lines.shift();
+    console.log("[planner]", kind, text);
+    if (!box) { box = document.createElement("pre"); box.id = "debugLog"; document.body.append(box); }
+    box.textContent = lines.join("\n");
+  };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    const t0 = performance.now(), name = String(url).split("?")[0] + (opts && opts.method ? " " + opts.method : "");
+    try {
+      const r = await realFetch(url, opts);
+      const ms = Math.round(performance.now() - t0);
+      log(ms > 1000 ? "SLOW" : "ok", name + " " + r.status + " " + ms + "ms");
+      return r;
+    } catch (e) {
+      log("FAIL", name + " " + e.message + " after " + Math.round(performance.now() - t0) + "ms");
+      throw e;
+    }
+  };
+  window.addEventListener("error", e => log("ERROR", e.message + " (" + (e.filename || "").split("/").pop() + ":" + e.lineno + ")"));
+  window.addEventListener("unhandledrejection", e => log("REJECTED", String(e.reason && e.reason.message || e.reason)));
+  log("debug", "on; turn off with localStorage.removeItem('debug') and leave ?debug=1 off the address");
+})();
+
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
   const n = document.createElement(tag);
@@ -977,7 +1009,7 @@ async function archiveOp(body, target, year) {
   plannerView();
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
-const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
+const EFFORTS = [["xs", 1], ["s", 2], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
 const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
 const tasksN = n => n + (n === 1 ? " task" : " tasks");
 

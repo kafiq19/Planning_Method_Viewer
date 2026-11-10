@@ -424,3 +424,4 @@ td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
 .sechead.fhead.shut { border-bottom-color: transparent; }
 .subsec { padding: 10px 8px 0; font-size: calc(11.5px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .subsec .when { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+#debugLog { position: fixed; right: 8px; bottom: 8px; z-index: 99; max-width: 60vw; max-height: 40vh; overflow: auto; margin: 0; padding: 6px 8px; font: 11px/1.4 ui-monospace, monospace; background: rgba(0, 0, 0, .8); color: #fff; border-radius: 6px; pointer-events: none; white-space: pre-wrap; }

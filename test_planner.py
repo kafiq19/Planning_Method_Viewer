@@ -11,6 +11,7 @@ import stat
 import subprocess
 import tempfile
 import sys
+import socket
 import threading
 import unittest
 import unittest.mock
@@ -131,7 +132,7 @@ class TestTokens(Base):
         self.assertEqual(t.title, "call (maybe)")
 
     def test_effort(self):
-        for size, points in (("xs", 1), ("s", 1), ("m", 3), ("l", 5), ("xl", 8)):
+        for size, points in (("xs", 1), ("s", 2), ("m", 3), ("l", 5), ("xl", 8)):
             with self.subTest(size=size):
                 t = self.task(f"write report (KA) ({size}) Oct24")
                 self.assertEqual((t.effort, t.points, t.title, t.assignees), (size, points, "write report", ["KA"]))
@@ -331,7 +332,7 @@ class TestSemantics(Base):
         ps = planner.parse("@P\n- parent (l)\n\t- child\n\t!- done child (m)\n- other (s)\n")
         self.assertEqual(self.find(ps, "child").points, 0)
         self.assertEqual(self.find(ps, "parent").points, 5)
-        self.assertEqual(planner.effort_points(ps[0].all_tasks()), (6, 9))
+        self.assertEqual(planner.effort_points(ps[0].all_tasks()), (7, 10))
 
     def test_assignees_not_inherited(self):
         ps = planner.parse("@A\n- parent (KA)\n\t- child\n")
@@ -375,11 +376,11 @@ class TestExample(Base):
 
     def test_effort_totals(self):
         self.assertEqual({p.name: planner.effort_points(p.all_tasks()) for p in self.ps},
-                         {"HDC": (9, 10), "MDM": (4, 4), "OPS": (8, 8)})
+                         {"HDC": (10, 12), "MDM": (4, 4), "OPS": (8, 8)})
         groups = dict(planner.people_groups(self.ps))
         self.assertEqual(planner.effort_points(t for _, t in groups["KA"])[0], 13)   # (l) + (xl)
         projects = "\n".join(planner.view_projects(self.ps))
-        self.assertIn("@HDC   2/11 done   9 of 10 pts left", projects)
+        self.assertIn("@HDC   2/11 done   10 of 12 pts left", projects)
         self.assertIn("[ ] finish proposal (KA) [L]   Oct 24", projects)
         self.assertIn("\n@OPS   0/6 done   8 of 8 pts left", projects)
         people = "\n".join(planner.view_people(self.ps))
@@ -432,12 +433,12 @@ class TestExample(Base):
         self.assertEqual(agenda["span"]["how"], "parent")
         self.assertEqual(agenda["line"], 34)
         hdc = d["projects"][0]["projects"][0]
-        self.assertEqual(hdc["points"], {"left": 9, "total": 10})
+        self.assertEqual(hdc["points"], {"left": 10, "total": 12})
         proposal = hdc["tasks"][1]
         self.assertEqual((proposal["title"], proposal["effort"], proposal["points"]), ("finish proposal", "l", 5))
         annual = hdc["tasks"][2]
         self.assertEqual((annual["title"], annual["loose"], proposal["loose"]), ("annual report", "Q1", None))
-        self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 9, "(unassigned)": 4})
+        self.assertEqual({g["name"]: g["points"] for g in d["people"]}, {"JS": 11, "KA": 13, "RT": 9, "(unassigned)": 5})
 
 
 # ---------- periods (Month / Season picker) ----------
@@ -818,7 +819,7 @@ class TestPlanner(Base):
         self.assertEqual([c[3] for c in cols], ["Oct12", "Oct13", "Oct14", "Oct15", "Oct16", "Oct17"])
         self.assertEqual(self.groups(self.ps, ("week", 2026, 42))[0], {"Mon 12": ["gather requirements"], "Wed 14": ["send to board"]})
         self.assertEqual([(p.name, [t.title for t in ts]) for p, ts in planned], [("HDC", ["gather requirements", "send to board"])])
-        self.assertEqual(planner.effort_points(planned[0][1])[1], 2)      # (s) + (s), done ones count
+        self.assertEqual(planner.effort_points(planned[0][1])[1], 4)      # (s) + (s), done ones count
         hdc = dict((p.name, items) for p, items in backlog)["HDC"]
         titles = [t.title for _, t in hdc]
         self.assertNotIn("send to board", titles)                         # planned this week
@@ -886,7 +887,7 @@ class TestPlanner(Base):
         t = w["columns"][2]["tasks"][0]
         self.assertEqual((t["plan_label"], t["plan_kind"], t["plan_token"], t["plan_end"]), ("Oct 14", "day", "Oct14", "2026-10-14"))
         self.assertEqual(w["star"], {"token": "wk42", "ok": True, "kind": "week", "start": "2026-10-12", "end": "2026-10-18"})
-        self.assertEqual([(g["name"], g["points"]) for g in w["projects"]], [("HDC", 2)])
+        self.assertEqual([(g["name"], g["points"]) for g in w["projects"]], [("HDC", 4)])
         self.assertEqual(w["backlog"][0]["tasks"][1]["depth"], 1)
         w = planner.to_data(self.ps, None, ("season", 2026, 2))["planner"]
         self.assertEqual((w["label"], w["now"]["label"], [c["head"] for c in w["columns"]]), ("Fall 2026", "Fall 2026", ["Sep", "Oct", "Nov", "Dec"]))
@@ -895,7 +896,7 @@ class TestPlanner(Base):
         out = "\n".join(planner.view_week(self.ps))
         self.assertIn("Week of Oct 12-18", out)
         self.assertIn("Wed 14\n    [ ] @HDC  send to board", out)
-        self.assertIn("  @HDC   2 pts", out)
+        self.assertIn("  @HDC   4 pts", out)
 
 
 class TestPlanLevels(EditBase):
@@ -1165,6 +1166,50 @@ class TestServer(Base):
         except urllib.error.HTTPError as e:
             with e:
                 return e.code, json.loads(e.read())
+
+    def raw(self, data):
+        """Send raw bytes on their own connection; -> the status line of the answer."""
+        host, port = self.server.server_address
+        with socket.create_connection((host, port), timeout=5) as c:
+            c.sendall(data)
+            return c.recv(4096).split(b"\r\n")[0].decode()
+
+    def test_a_stalled_connection_does_not_block_others(self):
+        host, port = self.server.server_address
+        stalled = [socket.create_connection((host, port)) for _ in range(3)]
+        try:
+            stalled[0].sendall(b"GET /api/file HTTP/1.1\r\nHost: x")           # headers never finish
+            stalled[1].sendall(b"POST /api/parse HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Type: application/json\r\n"
+                               b"Content-Length: 500\r\n\r\n{" % port)             # body never finishes
+            code, d = self.post("/api/parse", {"text": "@P\n- a\n", "today": "Oct12"})
+            self.assertEqual(code, 200)
+            self.assertEqual(d["projects"][0]["projects"][0]["name"], "P")
+        finally:
+            for c in stalled:
+                c.close()
+
+    def test_bad_lengths_and_bodies_are_refused(self):
+        head = "POST /api/parse HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Type: application/json\r\n" % self.server.server_address[1]
+        self.assertIn(" 400 ", self.raw((head + "\r\n").encode()))                                  # no Content-Length
+        self.assertIn(" 400 ", self.raw((head + "Content-Length: abc\r\n\r\n").encode()))
+        self.assertIn(" 400 ", self.raw((head + "Content-Length: 999999999999\r\n\r\n").encode()))
+        self.assertIn(" 400 ", self.raw((head + "Content-Length: 5\r\n\r\n[1,2]").encode()))            # JSON, but not an object
+        self.assertEqual(self.post("/api/parse", {"text": "- a\n"})[0], 200)                       # still serving
+
+    def test_requests_in_parallel_keep_their_own_today(self):
+        days = ("2026-10-12", "2026-11-02", "2026-12-01", "2027-01-05")
+        results = []
+
+        def ask(today):
+            results.append((today, self.post("/api/parse", {"text": "@P\n- a Oct12\n", "today": today})[1]["today"]))
+
+        threads = [threading.Thread(target=ask, args=(d,)) for d in days * 6]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(results), 24)
+        self.assertTrue(all(asked == got for asked, got in results), results)     # no request saw another's TODAY
 
     def test_other_sites_are_refused(self):
         for headers, code in [({"Origin": "https://evil.example"}, 403), ({"Host": "evil.example:80"}, 403),

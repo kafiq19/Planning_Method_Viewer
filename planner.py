@@ -35,7 +35,7 @@ NOTE FORMAT (quick reference)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
-  (xs) (s) (m) (l) (xl)         effort: 1, 1, 3, 5 or 8 points (lowercase only)
+  (xs) (s) (m) (l) (xl)         effort: 1, 2, 3, 5 or 8 points (lowercase only)
   Oct24                         due date
   Oct23--26  Oct23--Nov03       date range
   ~Q1  ~T1  ~Nov  ~wk43         loose date: sometime in that period (T1-T3: trimesters
@@ -75,7 +75,7 @@ PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue sta
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
 BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]"}
-EFFORT = {"xs": 1, "s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
+EFFORT = {"xs": 1, "s": 2, "m": 3, "l": 5, "xl": 8}   # effort size -> points
 TODAY = date.today()
 
 
@@ -2097,7 +2097,8 @@ def make_server(port, notes_path=None, portfolio=None):
     With `notes_path`, GET/POST /api/file read and save that one file. Nothing else is ever written.
     """
     import json
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
     from urllib.parse import parse_qs, urlsplit
 
@@ -2106,8 +2107,14 @@ def make_server(port, notes_path=None, portfolio=None):
     statics = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
                "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8")}
     folio = os.path.realpath(portfolio) if portfolio else None
+    # Requests run on their own threads, so a stalled browser connection can't block the others. TODAY and
+    # LOG_END are module globals set per request, and files are read-modify-written, so API work takes turns.
+    lock = threading.RLock()
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 10                                   # seconds a connection may sit silent before it is dropped
+        MAX_BODY = 32 * 1024 * 1024
+
         def _send(self, code, body, ctype):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -2136,11 +2143,13 @@ def make_server(port, notes_path=None, portfolio=None):
             elif path == "/api/portfolio":
                 if not self._trusted():
                     return
-                self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
+                with lock:
+                    self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
-                self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
+                with lock:
+                    self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -2151,10 +2160,31 @@ def make_server(port, notes_path=None, portfolio=None):
                 return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send JSON"})
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+                if not 0 <= length <= self.MAX_BODY:
+                    raise ValueError
+            except ValueError:
+                return self._json(400, {"error": "bad request: a valid Content-Length is needed"})
+            try:
+                raw = self.rfile.read(length)           # read before taking the lock: a slow client holds up only itself
+            except OSError:
+                return                                  # the connection timed out or went away
+            if len(raw) < length:
+                return self._json(400, {"error": "bad request: the body ended early"})
+            try:
+                with lock:
+                    self._post(raw)
+            except OSError:
+                pass                                    # the browser left before the answer was sent
+            except Exception as e:                      # one bad request must never take the server down
+                self._json(500, {"error": f"server error: {type(e).__name__}: {e}"})
+
+        def _post(self, raw):
             global TODAY, LOG_END
             LOG_END = None
             try:
-                req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                req = json.loads(raw)
                 if self.path == "/api/file":
                     return self._save(req)
                 if self.path == "/api/portfolio":
@@ -2338,7 +2368,11 @@ def make_server(port, notes_path=None, portfolio=None):
         def log_message(self, *args):
             pass
 
-    return HTTPServer(("127.0.0.1", port), Handler)
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True                          # a stuck request never keeps the program from exiting
+        request_queue_size = 128                       # the default 5 resets connections when a browser opens a burst
+
+    return Server(("127.0.0.1", port), Handler)
 
 
 def serve(port, notes_path=None, portfolio=None):

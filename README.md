@@ -48,6 +48,9 @@ python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
 ```
 
+If the page ever freezes or draws wrongly, open it as `http://localhost:8765/?debug=1`: a small overlay lists each request's time and any error, which helps to report the problem.
+
+
 `--serve` needs nothing else: it finds the `Projects` folder next to `planner.py` (see [Projects](#projects)) and shows your projects. Everything saves itself about a second after each change.
 
 If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows "Saved", or a **• Unsaved · Save** button when you have changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
@@ -89,7 +92,7 @@ Pick how to view it:
 | Write | Means |
 |---|---|
 | `(KA)` or `(KA, RT)` | Assignee(s), as initials |
-| `(xs)` `(s)` `(m)` `(l)` `(xl)` | Effort: extra small, small, medium, large, extra large, worth **1, 1, 3, 5 and 8 points** |
+| `(xs)` `(s)` `(m)` `(l)` `(xl)` | Effort: extra small, small, medium, large, extra large, worth **1, 2, 3, 5 and 8 points** |
 | `Oct24` | Due date |
 | `Oct23--26` or `Oct23--Nov03` | Date range: start--end |
 | `~Q1` `~T1` `~Nov` `~wk43` | Loose date: sometime in that quarter, trimester, month or week. Trimesters follow the calendar like quarters: `~T1` is Winter (Jan-Apr), `~T2` Summer (May-Aug), `~T3` Fall (Sep-Dec), the same months as the seasons |
