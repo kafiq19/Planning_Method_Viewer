@@ -222,3 +222,5 @@ __marimo__/
 # Your own projects stay out of git; only the sample project is tracked
 Projects/*
 !Projects/Example/
+.DS_Store
+.DS_Store
