@@ -5,6 +5,17 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.13  2026-11-11  --host for a network server
+-------------------------------------------------
+- New: python planner.py --serve --host 0.0.0.0 serves the page to every
+  machine on your network (for example a Linux box on your LAN), at
+  http://ADDRESS:8765. There is no login and no address check in that
+  mode, so use it only on a network you trust. It doesn't open a
+  browser. Without --host nothing changes: only this computer can connect.
+- Code: make_server / serve take host; _trusted skips the Host/Origin
+  check for a non-loopback host.
+
+
 2.0.12  2026-11-10  Fewer redraws
 -------------------------------------------------
 - Changed: the Planner views no longer redraw when the server's answer

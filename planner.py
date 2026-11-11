@@ -16,11 +16,12 @@ USAGE
   --today Oct10                        pretend today is another date (for testing)
   --import notes.txt [FOLDER] [--split]  make a project from notes.txt in Projects/, or in FOLDER
                                        (--split: one project per @ line)
-  --serve [--port 8765]                open the web page on the Projects folder next to planner.py (made if it's
+  --serve [--port 8765] [--host ADDR]  open the web page on the Projects folder next to planner.py (made if it's
                                        missing): one sub-folder per project (backlog.kf, quicknote.kf, habits.kf,
-                                       notes/, archive/YYYY.kf). Click the logo for the projects: All projects
+                                       notes/, archive/YYYY.kf). --host 0.0.0.0 serves the whole network (no
+                                       login; for a trusted LAN). Click the logo for the projects: All projects
                                        (every backlog together) and each project's pages
-  --serve notes.txt [--port 8765]      the web page on that one file instead; Save writes back to it
+  --serve notes.txt [--port 8765] [--host ADDR]  the web page on that one file instead; Save writes back to it
                                        The page: tabs Projects / Timeline / People / Upcoming / Week;
                                        click a task's box, title or Who / Effort / Date / + cells
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
@@ -2087,8 +2088,9 @@ def apply_edit(text, req):
     return op(text, req["line"], req["value"], req.get("title"))
 
 
-def make_server(port, notes_path=None, portfolio=None):
-    """The local server (127.0.0.1 only). Port 0 picks a free port.
+def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
+    """The server: 127.0.0.1 only unless `host` says otherwise (`--host 0.0.0.0`: every network interface, for a
+    trusted LAN; no Host/Origin check or login then). Port 0 picks a free port.
 
     With `portfolio` (a folder; `--serve` passes PROJECTS), GET /api/portfolio lists its projects, POST /api/portfolio
     makes, renames and deletes (moves to .trash) projects, sections and pages, and
@@ -2127,7 +2129,10 @@ def make_server(port, notes_path=None, portfolio=None):
             self._send(code, json.dumps(obj).encode(), "application/json")
 
         def _trusted(self):
-            """Only this page may use the API: blocks other sites (Origin) and DNS rebinding (Host)."""
+            """Only this page may use the API: blocks other sites (Origin) and DNS rebinding (Host).
+            Not checked when `--host` opens the server to the network: any address may then reach it."""
+            if host != "127.0.0.1":
+                return True
             hosts = {f"localhost:{self.server.server_address[1]}", f"127.0.0.1:{self.server.server_address[1]}"}
             origin = self.headers.get("Origin")
             if self.headers.get("Host") in hosts and (origin is None or origin in {"http://" + h for h in hosts}):
@@ -2372,21 +2377,23 @@ def make_server(port, notes_path=None, portfolio=None):
         daemon_threads = True                          # a stuck request never keeps the program from exiting
         request_queue_size = 128                       # the default 5 resets connections when a browser opens a burst
 
-    return Server(("127.0.0.1", port), Handler)
+    return Server((host, port), Handler)
 
 
-def serve(port, notes_path=None, portfolio=None):
+def serve(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     import threading
     import webbrowser
 
-    server = make_server(port, notes_path, portfolio=portfolio)
+    server = make_server(port, notes_path, portfolio=portfolio, host=host)
+    local = host == "127.0.0.1"
     url = f"http://localhost:{port}"
-    print(f"Planner running at {url}  (Ctrl-C to stop)")
+    print(f"Planner running at {url if local else f'http://{host}:{port}  (anyone on the network can use it and change the files)'}  (Ctrl-C to stop)")
     if portfolio:
         print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
-    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    if local:                                          # a server on the network is usually headless
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -2439,6 +2446,7 @@ def main(argv):
     if "--serve" in args:
         args.remove("--serve")
         port = take_option(args, "--port") or "8765"
+        host = take_option(args, "--host") or "127.0.0.1"
         if not port.isdigit() or not 0 < int(port) < 65536:
             sys.exit(f"planner.py: bad --port value {port!r}")
         if len(args) > 1 or any(a.lower() in VIEWS for a in args):
@@ -2448,7 +2456,7 @@ def main(argv):
                 os.makedirs(PROJECTS, exist_ok=True)
             except OSError as e:
                 sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
-            return serve(int(port), portfolio=PROJECTS)
+            return serve(int(port), portfolio=PROJECTS, host=host)
         notes = os.path.realpath(args[0])                      # follow a symlink to the real file
         if os.path.isdir(notes):
             sys.exit(f"planner.py: --serve takes no folder: your projects live in {PROJECTS}")
@@ -2458,7 +2466,7 @@ def main(argv):
             read_notes(notes)
         except (OSError, UnicodeDecodeError) as e:
             sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
-        return serve(int(port), notes)
+        return serve(int(port), notes, host=host)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())

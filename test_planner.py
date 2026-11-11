@@ -1211,6 +1211,21 @@ class TestServer(Base):
         self.assertEqual(len(results), 24)
         self.assertTrue(all(asked == got for asked, got in results), results)     # no request saw another's TODAY
 
+    def test_host_option_opens_the_server_to_the_network(self):
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")                 # the default stays loopback-only
+        self.assertEqual(self.post("/api/parse", {"text": ""}, {"Host": "lan-box:8765"})[0], 403)
+        lan = planner.make_server(0, self.notes, host="0.0.0.0")
+        threading.Thread(target=lan.serve_forever, daemon=True).start()
+        try:
+            self.assertEqual(lan.server_address[0], "0.0.0.0")
+            req = urllib.request.Request(f"http://127.0.0.1:{lan.server_address[1]}/api/parse", b'{"text": ""}',
+                                         {"Content-Type": "application/json", "Host": "lan-box:8765",
+                                          "Origin": "http://lan-box:8765"})
+            self.assertEqual(self.send(req)[0], 200)                                  # any Host or Origin is fine
+        finally:
+            lan.shutdown()
+            lan.server_close()
+
     def test_other_sites_are_refused(self):
         for headers, code in [({"Origin": "https://evil.example"}, 403), ({"Host": "evil.example:80"}, 403),
                               ({"Content-Type": "text/plain"}, 415),
@@ -1372,6 +1387,7 @@ class TestCLI(unittest.TestCase):
             ((EXAMPLE, "--today", "Feb30"), "bad --today value"),
             ((EXAMPLE, "--today", "soon"), "bad --today value"),
             (("--serve", "--port"), "--port needs a value"),
+            (("--serve", "--host"), "--host needs a value"),
             (("--serve", "--port", "abc"), "bad --port value"),
             (("--serve", "--port", "70000"), "bad --port value"),
             (("--serve", EXAMPLE, "timeline"), "at most one notes file"),
@@ -1438,8 +1454,11 @@ class TestCLI(unittest.TestCase):
                 unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")), \
                 unittest.mock.patch.object(planner, "serve") as serve:
             planner.main(["planner.py", "--serve", "--port", "9001"])          # made if it's missing
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS)
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1")
             self.assertTrue(os.path.isdir(planner.PROJECTS))
+            serve.reset_mock()
+            planner.main(["planner.py", "--serve", "--port", "9001", "--host", "0.0.0.0"])
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0")
 
     def test_import_defaults_to_the_projects_folder(self):
         with tempfile.TemporaryDirectory() as d, \
