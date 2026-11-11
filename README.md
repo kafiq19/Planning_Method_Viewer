@@ -46,7 +46,10 @@ python planner.py example.kf
 python planner.py --serve             # opens http://localhost:8765 on your Projects folder
 python planner.py --serve notes.txt   # edits notes.txt: Save writes back to it
 python planner.py --serve --port 9000 --today Oct12
+python planner.py --serve --host 0.0.0.0   # reachable from other machines on your network
 ```
+
+`--host` is an option of `--serve` and does nothing without it (`python planner.py --host 0.0.0.0` alone is an error). `--serve --host 0.0.0.0` makes the page available to every machine that can reach this one, at `http://THIS-MACHINES-ADDRESS:8765`. There is **no login and no address check** then: anyone who can open the page can read and change your notes, so use it only on a network you trust. It doesn't open a browser (the server is usually headless), and by default (without `--host`) only this computer can connect.
 
 If the page ever freezes or draws wrongly, open it as `http://localhost:8765/?debug=1`: a small overlay lists each request's time and any error, which helps to report the problem.
 
