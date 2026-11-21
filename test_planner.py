@@ -1176,6 +1176,46 @@ class TestAddTask(EditBase):
                 planner.add_task("@P\n- a\n", line, "x", title)
 
 
+
+class TestSortTasks(unittest.TestCase):                       # op "sort" (2.0.19): done, in progress, then open
+    TEXT = "Work\n@A\n\t-- about A\n\t- one Oct20\n\t\t!- sub\n\t\t-- n1\n\n\t!- two\n\t~- three\n\t!- four\n@B\n- x\n!- y"
+
+    def test_one_project(self):
+        out = planner.sort_tasks(self.TEXT, 2, "", "A")
+        self.assertEqual(out, "Work\n@A\n\t-- about A\n\t!- four\n\n\t!- two\n\t~- three\n\t- one Oct20\n\t\t!- sub\n\t\t-- n1\n"
+                              "@B\n- x\n!- y")                 # the gap stays put, B untouched, no final newline added
+        self.assertEqual(sorted(out.splitlines()), sorted(self.TEXT.splitlines()))
+
+    def test_all_and_already_sorted(self):
+        out = planner.sort_tasks(self.TEXT, 0, "all")
+        self.assertTrue(out.endswith("@B\n!- y\n- x"))
+        self.assertEqual(planner.sort_tasks(out, 0, "all"), out)          # already in order: unchanged
+        self.assertEqual(planner.sort_tasks("@P\n- a\n", 1, "", "P"), "@P\n- a\n")
+
+    def test_alphabetical_within_status(self):                # A to Z by title, ignoring case and tokens
+        text = "@P\n- pear (KA) Oct20\n!- Zebra\n- Apple >Oct14\n!- apricot\n- apple\n"
+        out = planner.sort_tasks(text, 1, "", "P")
+        self.assertEqual([t.title for t in planner.parse(out)[0].tasks], ["apricot", "Zebra", "Apple", "apple", "pear"])
+
+    def test_own_project_and_crlf(self):
+        text = "- a\r\n~- b\r\n!- c\r\n@S\r\n- d\r\n"
+        self.assertEqual(planner.sort_tasks(text, 0, ""), "!- c\r\n~- b\r\n- a\r\n@S\r\n- d\r\n")
+        self.assertEqual(planner.apply_edit(text, {"op": "sort", "line": 1, "title": "Mine", "value": ""}),
+                         "!- c\r\n~- b\r\n- a\r\n@S\r\n- d\r\n")
+
+    def test_example(self):
+        text = read_example()
+        out = planner.sort_tasks(text, 0, "all")
+        self.assertEqual(sorted(out.splitlines()), sorted(text.splitlines()))
+        for p in planner.parse(out):
+            ranks = [(planner.STATUS_ORDER[t.status], t.title.casefold()) for t in p.tasks]
+            self.assertEqual(ranks, sorted(ranks), p.name)
+
+    def test_refused(self):
+        for line, value, title in [(2, "", "B"), (99, "", None), (2, "status", "A"), (3, "", None)]:
+            with self.subTest(line=line, value=value), self.assertRaises(planner.EditError):
+                planner.sort_tasks(self.TEXT, line, value, title)
+
 class TestNotesFile(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -2014,6 +2054,15 @@ class TestServerPortfolio(Base):
         self.assertEqual(code, 200)
         self.assertNotIn("Example", names(out["data"]))
         self.assertEqual(self.post("/api/parse", {"all": True, "hide": "Example"})[0], 400)
+
+    def test_sort_over_the_api(self):                         # All projects: a folder heading sorts every group
+        self.write("HDC/backlog.kf", "- own\n!- own done\n@Stream\n- a\n~- b\n")
+        d = self.post("/api/parse", {"all": True})[1]
+        code, out = self.post("/api/edit", {"path": "HDC/backlog.kf", "version": d["versions"]["HDC/backlog.kf"], "all": True,
+                                            "line": 0, "title": None, "op": "sort", "value": "all"})
+        self.assertEqual(code, 200)
+        self.assertEqual(out["text"], "!- own done\n- own\n@Stream\n~- b\n- a\n")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/backlog.kf"))[0], out["text"])
 
     def test_all_projects_merges_sections_by_title(self):
         self.write("A/backlog.kf", "Fall\n- a\n")

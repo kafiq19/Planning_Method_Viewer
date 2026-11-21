@@ -374,7 +374,8 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
       if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
       if (seq !== state.seq) return true;
       state.data = res.data;
-      state.msg = { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
+      state.msg = res.text === res.before && op === "sort" ? { text: ALREADY_SORTED }
+        : { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
       plannerView();
       return true;
     }
@@ -385,7 +386,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
     if (!r.ok) throw new Error(res.error || r.statusText);
     replaceText(res.text);
     state.data = res.data;
-    state.msg = { text: done, undo: { before, after: res.text } };
+    state.msg = res.text === before && op === "sort" ? { text: ALREADY_SORTED } : { text: done, undo: { before, after: res.text } };
     ok = true;
   } catch (err) {
     state.msg = { text: "Not changed: " + err.message, bad: true };
@@ -799,9 +800,26 @@ function options(sel, names, current, all) {     // a chosen name stays listed e
   sel.value = current;
 }
 
+/* An edit's message hides by itself after TOAST_MS (fading out); pointing at it or focusing it holds it, so Undo stays in
+   reach. Error messages (bad) stay until dismissed. The timer belongs to the message: redraws don't restart it. */
+const TOAST_MS = 6000;
+let toastTimer = null, toastFor = null;
+function toastLater(m, ms) {
+  clearTimeout(toastTimer);
+  toastTimer = m.bad ? null : setTimeout(() => {
+    if (state.msg !== m || toast.matches(":hover, :focus-within")) return;
+    toast.classList.add("leaving");                        // fade out, then drop it (unless something replaced it meanwhile)
+    toastTimer = setTimeout(() => { if (state.msg === m) { state.msg = null; showToast(); } }, 200);
+  }, ms);
+}
+toast.addEventListener("pointerenter", () => { clearTimeout(toastTimer); toast.classList.remove("leaving"); });
+toast.addEventListener("focusin", () => { clearTimeout(toastTimer); toast.classList.remove("leaving"); });
+toast.addEventListener("pointerleave", () => { if (state.msg && !toast.matches(":focus-within")) toastLater(state.msg, 2500); });
+toast.addEventListener("focusout", e => { if (state.msg && !toast.contains(e.relatedTarget) && !toast.matches(":hover")) toastLater(state.msg, 2500); });
 function showToast() {                           // the last edit's message, with Undo while it still applies
   const m = state.msg;
   toast.classList.toggle("hidden", !m);
+  if (m !== toastFor) { toastFor = m; toast.classList.remove("leaving"); if (m) toastLater(m, TOAST_MS); else clearTimeout(toastTimer); }
   if (!m) return toast.replaceChildren();
   toast.classList.toggle("bad", !!m.bad);
   const close = h("button", "", "×"); close.setAttribute("aria-label", "Dismiss");
@@ -1126,6 +1144,8 @@ function vAllProjects(d) {
     const backlog = ps.find(p => p.path) || d.targets.find(t => t.folder === folder);
     if (canArchive() && add(ps, p => p.done) && !d.filtered && backlog)   // Archive done: the project's whole backlog
       head.firstChild.append(archiveDoneButton({ line: null, path: backlog.path }));
+    if (!d.filtered && backlog && ps.some(p => p.tasks.length > 1))     // sort every group in the backlog
+      head.firstChild.append(sortButton({ line: 0, name: null, path: backlog.path }, folder, true));
     out.append(head);
     if (shut) { head.classList.add("shut"); continue; }
     if (!items.length) {                          // no tasks yet: + Add task for the project itself
@@ -1142,6 +1162,7 @@ function vAllProjects(d) {
         const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
         const [ph, pshut] = foldHead("collapsed", key, "group", [span("at", "@"), p.name], span("count", p.done + "/" + p.total + " done" + effort));
         if (canArchive() && p.done && !d.filtered) ph.append(archiveDoneButton(p));
+        if (p.tasks.length > 1 && !d.filtered) ph.append(sortButton(p, "@" + p.name));
         out.append(ph);
         if (pshut) continue;
       }
@@ -1171,6 +1192,7 @@ function vProjects(d) {
       const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + (p.folder ? p.folder + "\n" : "") + p.name, "project", label,
         span("count", p.done + "/" + p.total + " done" + effort));
       if (canArchive() && p.done && !d.filtered) head.append(archiveDoneButton(p));
+      if (p.tasks.length > 1 && !d.filtered) head.append(sortButton(p, p.name === "(no project)" ? p.name : "@" + p.name));
       out.append(head);
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
@@ -1180,6 +1202,21 @@ function vProjects(d) {
   }
   if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
   return out;
+}
+/* a project heading's sort button (2.0.19): moves its top-level tasks in the notes, done first, then in progress, then
+   open (op "sort"; each keeps its subtasks and notes, and each group its order). `all`: every group in that backlog. */
+const SORT_ICON = "M20 11a8 8 0 0 0-14.9-4M4 4v4h4M4 13a8 8 0 0 0 14.9 4M20 20v-4h-4";
+const ALREADY_SORTED = "Already in order: done, in progress, then open.";
+function sortButton(p, label, all) {
+  const b = h("button", "ghost sorttasks", icon(SORT_ICON, 14));
+  b.title = (all ? "Sort each group's tasks" : "Sort the tasks") + ": done first, then in progress, then open (moves them in the notes)";
+  b.setAttribute("aria-label", "Sort " + label + "'s tasks by status");
+  b.onclick = e => {
+    e.stopPropagation();
+    editTask({ line: p.line, title: p.name, path: p.path }, "sort", all ? "all" : "", b,
+      `Sorted ${label}: done, in progress, then open.`);
+  };
+  return b;
 }
 function archiveDoneButton(p) {                  // a project heading's "Archive done": every finished task (and its subtasks)
   const b = h("button", "ghost archdone", "Archive done");

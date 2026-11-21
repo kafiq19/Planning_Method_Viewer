@@ -5,6 +5,28 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.19  2026-11-21  Sort a project's tasks by status
+-------------------------------------------------
+- New: point at a project or @group heading in Projects and click the
+  circular-arrows button beside it. Its tasks are moved in the notes so
+  done ones come first, then in progress, then open, and within each
+  A to Z by title (ignoring capitals and tokens like dates or initials).
+  Each task keeps its subtasks and notes.
+  Undo puts them back. In All projects, the button on a project's own
+  heading sorts each group in its backlog.
+- Code: sort_tasks (op "sort"; value "" for one project, "all" for the
+  file), _project_end (shared with add_task), STATUS_ORDER; sortButton.
+
+
+2.0.18  2026-11-21  The edit message hides by itself
+-------------------------------------------------
+- Changed: the message at the bottom after an edit (a status click, a
+  plan, a new task, ...) fades away after 6 seconds. Pointing at it or
+  tabbing into it keeps it, so Undo stays in reach. A message saying an
+  edit was refused still stays until you close it.
+- Code: TOAST_MS, toastLater; .toast.leaving.
+
+
 2.0.17  2026-11-21  Fold projects in the Planner's backlog
 -------------------------------------------------
 - New: in the Planner, click a project's name in the backlog to fold its

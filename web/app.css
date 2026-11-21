@@ -96,6 +96,8 @@ textarea { flex: 1; width: 100%; resize: none; border: 0; outline: 0; padding: 1
   max-width: calc(100% - 32px); background: var(--text); color: var(--panel); padding: 8px 10px 8px 16px; border-radius: 10px;
   font-size: 14px; box-shadow: 0 8px 24px rgba(20, 25, 40, .25); }
 .toast.bad { background: var(--bad); color: #ffffff; }
+.toast { transition: opacity .2s; }
+.toast.leaving { opacity: 0; }
 .toast button { background: none; border: 0; color: inherit; font-weight: 600; padding: 2px 8px; }
 .toast button:hover { background: rgba(255, 255, 255, .15); }
 .hidden { display: none !important; }
@@ -442,6 +444,11 @@ td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
 .sechead.fhead h2 .archdone { visibility: hidden; margin-left: 8px; padding: 0 8px; font-size: calc(12px * var(--fz)); font-weight: 400; }
 .sechead.fhead:hover h2 .archdone, .sechead.fhead h2 .archdone:focus-visible { visibility: visible; }
 @media (hover: none) { .sechead.fhead h2 .archdone { visibility: visible; } }
+.sorttasks { margin-left: 6px; padding: 0 4px; line-height: 1; vertical-align: middle; color: var(--muted); visibility: hidden; }
+.sorttasks svg { display: block; }
+.sorttasks:hover { color: var(--accent); }
+.ph:hover .sorttasks, .sechead.fhead:hover h2 .sorttasks, .sorttasks:focus-visible { visibility: visible; }
+@media (hover: none) { .sorttasks { visibility: visible; } }
 .sechead.fhead.shut { border-bottom-color: transparent; }
 .subsec { padding: 10px 8px 0; font-size: calc(11.5px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .subsec .when { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }

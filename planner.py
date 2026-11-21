@@ -26,6 +26,7 @@ USAGE
                                        click a task's box, title or Who / Effort / Date / + cells
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
                                        Date fields) to add tasks one after another, fold any level in Projects,
+                                       sort a project's tasks by status from its heading,
                                        and plan tasks for days in Week
 
 NOTE FORMAT (quick reference)
@@ -1769,6 +1770,97 @@ def add_subtask(text, line, task_text, title=None):
     return out
 
 
+def _project_end(lines, line):
+    """The last non-blank line (1-based) of the project on `line`: its tasks and notes, before blank lines,
+    the next @ line or a heading."""
+    last = line
+    for i in range(line, len(lines)):
+        r = lines[i]
+        c = r.strip()
+        if not c:
+            continue
+        rws = r[:len(r) - len(r.lstrip())]
+        lvl = rws.count("\t") + rws.count(" ") // 4
+        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
+            break
+        last = i + 1
+    return last
+
+
+STATUS_ORDER = {"done": 0, "doing": 1, "open": 2}
+_ENDS = tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def _tree_sig(t):
+    return tuple((x.title, x.status, x.level - t.level, tuple(x.notes)) for x in t.walk())
+
+
+def sort_tasks(text, line, value="", title=None):
+    """Order a project's top-level tasks done, in progress, then open, and within each A to Z by title (2.0.19;
+    ignoring case and the tokens; stable for equal titles). `line` is the project's line and `title` its name (as for `add_task`; 0 = the file's own project);
+    value "all" sorts every project in the file. Each task moves with its whole subtree (subtasks, notes) as
+    whole lines, word for word; the blank lines between tasks stay where they were, and the project's notes
+    before its first task stay first. Already in order: the text comes back unchanged."""
+    lines = text.splitlines(keepends=True)
+    projects = parse(text)
+    if value == "all":
+        picks = projects
+    elif value == "":
+        if line == 0:
+            own = next((p for p in projects if not lines[p.line - 1].strip().startswith("@")), None)
+            picks = [own] if own else []
+        else:
+            if type(line) is not int or not 1 <= line <= len(lines):
+                raise EditError(f"line {line!r} is not in the text")
+            p = next((p for p in projects if p.line == line), None)
+            own = p is not None and not lines[line - 1].strip().startswith("@")
+            if p is None or (title is not None and p.name != title and not own):
+                raise EditError(f"line {line} is no longer that project (the text has changed)")
+            picks = [p]
+    else:
+        raise EditError('sort takes "" (that project) or "all"')
+    want = {}                                    # project line -> its tasks' trees in the new order
+    for p in picks:
+        if len(p.tasks) < 2:
+            continue
+        order = sorted(p.tasks, key=lambda t: (STATUS_ORDER[t.status], t.title.casefold()))
+        if order == p.tasks:
+            continue
+        end = _project_end(lines, p.line)
+        starts = [t.line for t in p.tasks] + [end + 1]
+        blocks, gaps = [], []
+        for a, b in zip(starts, starts[1:]):
+            chunk = lines[a - 1:b - 1]
+            k = len(chunk)
+            while k > 1 and not chunk[k - 1].strip():
+                k -= 1
+            blocks.append(chunk[:k]); gaps.append(chunk[k:])
+        at_eof = end == len(lines) and not lines[end - 1].endswith(_ENDS)
+        if at_eof:                               # the file's last line has no line ending: it may move up
+            blocks[-1] = blocks[-1][:-1] + [blocks[-1][-1] + next(
+                (r[_content_end(r):].lstrip(" \t") for r in lines if r[_content_end(r):].lstrip(" \t")), "\n")]
+        new = []
+        for t, gap in zip(order, gaps):
+            new += blocks[p.tasks.index(t)] + gap
+        if at_eof:
+            r = new[-1]
+            new[-1] = r[:_content_end(r)] + r[_content_end(r):].rstrip("".join(_ENDS))
+        lines[starts[0] - 1:end] = new
+        want[p.line] = [_tree_sig(t) for t in order]
+    out = "".join(lines)
+    if out == text:
+        return text
+    after = parse(out)
+    ok = len(after) == len(projects)
+    for a, b in zip(projects, after) if ok else ():
+        ok = ok and (a.name, a.line, a.notes) == (b.name, b.line, b.notes) \
+            and [_tree_sig(t) for t in b.tasks] == want.get(a.line, [_tree_sig(t) for t in a.tasks])
+    if not ok or sorted(r.rstrip("".join(_ENDS)) for r in out.splitlines(True)) != \
+            sorted(r.rstrip("".join(_ENDS)) for r in text.splitlines(True)):
+        raise EditError("that project's lines aren't where expected, so sort it by hand")
+    return out
+
+
 def add_task(text, line, task_text, title=None):
     """Add `- task_text` as the last top-level task of the project on `line` (its @ line).
 
@@ -1802,17 +1894,7 @@ def add_task(text, line, task_text, title=None):
     fr = lines[first.line - 1] if first else ""
     indent = fr[:len(fr) - len(fr.lstrip())]
     ending = raw[_content_end(raw):].lstrip(" \t") or "\n"
-    last = line                                 # last non-blank line of the project
-    for i in range(line, len(lines)):
-        r = lines[i]
-        c = r.strip()
-        if not c:
-            continue
-        rws = r[:len(r) - len(r.lstrip())]
-        lvl = rws.count("\t") + rws.count(" ") // 4
-        if c.startswith("@") or (lvl == 0 and not c.startswith("--") and not RE_TASK.match(c)):
-            break
-        last = i + 1
+    last = _project_end(lines, line)
     if not lines[last - 1].endswith(tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")):
         lines[last - 1] += ending
         new_line = indent + "- " + task_text
@@ -1851,7 +1933,7 @@ def add_with_fields(op, text, line, fields, title=None):
 
 
 EDITS = {"every": set_every, "tick": tick_habit, "priority": set_priority, "notable": set_notable, "delete": delete_task, "text": set_text, "plan": set_plan, "status": set_status, "date": set_date, "effort": set_effort, "assign": add_assignees, "who": set_assignees,
-         "subtask": add_subtask, "task": add_task}
+         "subtask": add_subtask, "task": add_task, "sort": sort_tasks}
 
 
 # ---------- the notes file (--serve notes.txt) ----------
