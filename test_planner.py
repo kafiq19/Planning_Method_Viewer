@@ -1824,6 +1824,22 @@ class TestHabits(EditBase):
         page = planner.page_data("- stretch *daily\n- no frequency yet\n!- retired *daily\n", "HDC", None, ("week", 2026, 45), habits=True)
         self.assertEqual([(x["title"], x["every"]) for x in page["planner"]["habits"]], [("stretch", ["daily"]), ("no frequency yet", [])])
 
+    def test_habit_counts_and_effort(self):                            # 2.0.25: done of due, and effort per day
+        d, D = planner.date, lambda n: planner.date(2026, 11, n)
+        self.assertEqual(planner.habit_count([D(2), D(4), D(6)], [D(2), D(6)]), (2, 3))
+        self.assertEqual(planner.habit_count([D(2), D(4)], [D(2), D(3)]), (2, 3))          # an extra tick counts for both
+        self.assertEqual(planner.habit_count([D(2), D(4), D(6)], [D(2)], D(3), D(6)), (0, 2))
+        text = self.TEXT.replace("- gym (KA) *weekly", "- gym (KA) (m) *weekly").replace("\t-- with RT\n", "\t-- done Nov02 Nov06\n")
+        ts = planner.parse(text)[0].tasks
+        self.assertEqual((ts[1].effort, ts[1].points, ts[1].reminders[0][0]), ("m", 3, "weekly Mon, Wed, Fri"))
+        self.assertEqual(planner.set_effort(self.TEXT, 2, "s", "gym"), self.TEXT.replace("(KA) *weekly", "(KA) (s) *weekly"))
+        month = planner.to_data([], None, ("month", 2026, 11), planner.parse(text))["planner"]
+        gym = next(x for x in month["habits"] if x["title"] == "gym")
+        self.assertEqual((gym["count"], gym["points"]), ({"done": 2, "days": 13}, 3))     # Nov: 13 Mon/Wed/Fri
+        out = "\n".join(planner.view_week([], D(2), planner.parse(text)))
+        self.assertIn("Habits (done of due)\n", out)
+        self.assertIn("    2/3  @(no project)  gym  (Mon, Wed, Fri)  6/9 pts", out)
+
     def test_archive_last_years_log(self):
         planner.set_today("2027-01-05")
         rest, moved = planner.take_habit_log("- stretch *daily\n\t-- done Dec30 Dec31 Jan02\n- gym *weekly Mon\n\t-- done Dec28\n", 2026)

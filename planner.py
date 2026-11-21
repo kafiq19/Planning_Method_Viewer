@@ -46,6 +46,7 @@ NOTE FORMAT (quick reference)
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
   *weekdays  *weekly Mon, Wed, Fri                repeating: in habits.kf, a habit's frequency
   -- done Nov02 Nov03           a habit's log: the days it was done
+  - gym (m) *weekly Mon, Wed   a habit's effort counts once per day due (the Planner's totals)
   >Oct14  >wk45  >Nov  >T3      planned: when you mean to work on it (the Planner; separate from the date);
                                 several are fine: >Oct14 >Oct16
   ^wk45  ^Nov  ^T3  ^yr         a top priority for that week, month, trimester or this year
@@ -885,6 +886,14 @@ def habit_rows(projects, a, b, every=False):
     return out
 
 
+def habit_count(due, done, a=None, b=None):
+    """2.0.25: (days done, days it counts for) of a habit from `a` to `b` (default: all given): a day counts when it
+    was due or ticked (an extra tick counts for both), so a missed Wednesday reads 11/12. Its effort counts per day."""
+    inr = lambda d: (a is None or d >= a) and (b is None or d <= b)
+    ticked = {d for d in done if inr(d)}
+    return len(ticked), len(ticked | {d for d in due if inr(d)})
+
+
 def planner_groups(projects, period):
     """-> (columns, planned, backlog, priorities) for a planner period.
     columns: [(heading, start, end, token, ok, [(project, task, via)])]: tasks planned for that column or a part of it,
@@ -1014,6 +1023,14 @@ def view_week(projects, monday=None, habits=None):
         out.extend(f"    {box(t)} {where(t):<7} {t.label()}" for t in tasks)
     if not planned:
         out.append("    (nothing planned this week)")
+    if rows:                                              # 2.0.25: each habit's days done of due, and its effort per day
+        out.append("\nHabits (done of due)")
+        for p, t, specs, due, done in rows:
+            n, m = habit_count(due, done)
+            if not m:
+                continue                                  # not due this week (a monthly one)
+            out.append(f"    {n}/{m}  @{p.name}  {t.title}  ({', '.join(every_label(x) for x in specs)})"
+                       + (f"  {n * t.points}/{pts(m * t.points)}" if t.points else ""))
     out.append("\nBacklog (open tasks not planned or due this week)")
     for p, items in backlog:
         out.append(f"  @{p.name}")
@@ -1174,7 +1191,8 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
                         for p, items in pbacklog],
             "priorities": [flat(p, t) for p, t in pprios],
             "habits": [dict(flat(p, t), every=specs, every_label=", ".join(every_label(x) for x in specs) or None,
-                            due=[iso(x) for x in due], done=[iso(x) for x in done])
+                            due=[iso(x) for x in due], done=[iso(x) for x in done],
+                            count=dict(zip(("done", "days"), habit_count(due, done, max(pstart, pcols[0][1]), min(pend, pcols[-1][2])))))
                        for p, t, specs, due, done in habit_rows(habits or [], pcols[0][1], pcols[-1][2], every)],
             "days": [{"date": iso(x), "head": f"{('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[x.weekday()]} {x.day}",
                       "token": f"{MONTH_NAMES[x.month - 1]}{x.day:02d}", "today": x == TODAY, "future": x > TODAY}

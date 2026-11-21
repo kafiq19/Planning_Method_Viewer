@@ -5,6 +5,27 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.25  2026-11-21  Habits in the Planner: counts, effort, 🔁
+-------------------------------------------------
+- New: every habit in the Planner and on the Habits page is marked 🔁.
+- New: in the Month, Season and Year Planner, each column lists each habit
+  with the days done out of the days due there (gym 11/12). A month's first
+  and last weeks count only their days in the month. The panel on the
+  right has a Habits group with each habit's count for the whole period
+  (in a work week, Monday to Friday). Day and Week keep their tick boxes,
+  now with the habit's effort beside it.
+- New: habits can have an effort (the Habits page's new Effort column, or
+  (m) in the line). It counts once per day: the days due are planned
+  points, the days ticked are done points, added to each column's
+  done/planned and the period's total. A day ticked that wasn't due counts
+  as done and as a day.
+- CLI: the week view lists each habit's days done of due, with its points.
+- Code: habit_count (shared rule); planner habit dicts carry count
+  {done, days}; app.js habitCount, habitsSum, clip, habitMark; the Habits
+  table gets a heff column. The examples' gym and weekly client update
+  have an effort.
+
+
 2.0.24  2026-11-21  Held project; effort per column; copy a day
 -------------------------------------------------
 - New: the project you open stays chosen across the tabs. From HDC's

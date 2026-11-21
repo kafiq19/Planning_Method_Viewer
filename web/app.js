@@ -1474,24 +1474,39 @@ function tickButton(t, day, due) {               // one habit on one day: ticked
   };
   return b;
 }
-function habitsIn(pl, c, on) {                   // a Planner column's habits: ticks per day (Week), or how many were done
-  const hs = (pl.habits || []).filter(on).filter(t => t.due.some(x => x >= c.start && x <= c.end) || t.done.some(x => x >= c.start && x <= c.end));
+/* 2.0.25: a habit from a to b (ISO days): the days it was done, the days it counts for (due or ticked), and their
+   points (its effort per day). The same rule as planner.habit_count. */
+function habitCount(t, a, b) {
+  const inr = x => x >= a && x <= b, done = new Set(t.done.filter(inr)), days = new Set([...done, ...t.due.filter(inr)]);
+  return { done: done.size, days: days.size, pd: done.size * t.points, pt: days.size * t.points };
+}
+function habitsSum(hs, a, b) {                   // [points done, points due] of some habits from a to b
+  return hs.reduce(([d, n], t) => { const c = habitCount(t, a, b); return [d + c.pd, n + c.pt]; }, [0, 0]);
+}
+const habitMark = () => { const e = span("hmark", "🔁"); e.title = "a habit (repeats)"; e.setAttribute("aria-label", "habit"); return e; };   // 2.0.25
+const clip = (c, pl) => ({ start: c.start < pl.start ? pl.start : c.start, end: c.end > pl.end ? pl.end : c.end });   // a column inside the period
+const habitsOf = (pl, c, on) => (pl.habits || []).filter(on).filter(t => habitCount(t, c.start, c.end).days);
+function habitsIn(pl, c0, on) {                  // a Planner column's habits: ticks per day (Day, Week), or each one's count
+  const c = clip(c0, pl), hs = habitsOf(pl, c, on);   // a month's first and last weeks: only their days in the month
   if (!hs.length) return null;
   const box = h("div", "whab");
+  const effort = t => t.effort ? span("weff", t.effort.toUpperCase()) : null;
   if (pl.days.length) {
     for (const day of pl.days.filter(x => x.date >= c.start && x.date <= c.end))
       for (const t of hs) {
         const due = t.due.includes(day.date);
         if (!due && !t.done.includes(day.date)) continue;
-        const row = h("div", "whrow", tickButton(t, day, due), span("wt", t.title), c.start !== c.end ? span("wd", day.head.split(" ")[0]) : null);
-        row.title = projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "");
+        const row = h("div", "whrow" + (t.held ? " held" : ""), tickButton(t, day, due), habitMark(), span("wt", t.title),
+          c.start !== c.end ? span("wd", day.head.split(" ")[0]) : null, effort(t));
+        row.title = projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "") + (t.effort ? ` · ${pts(t.points)} a day` : "");
         box.append(row);
       }
-  } else {
-    const due = hs.reduce((n, t) => n + t.due.filter(x => x >= c.start && x <= c.end).length, 0);
-    const done = hs.reduce((n, t) => n + t.done.filter(x => x >= c.start && x <= c.end).length, 0);
-    box.append(h("div", "whsum", `Habits: ${done} of ${due} done`));
-    box.title = hs.map(t => t.title).join(", ");
+  } else {                                       // 2.0.25: Month, Season, Year: each habit, done of due here (11/12)
+    for (const t of hs) {
+      const n = habitCount(t, c.start, c.end), row = h("div", "whrow", habitMark(), span("wt", t.title), span("wd", `${n.done}/${n.days}`), effort(t));
+      row.title = `${t.title} (${t.every_label || ""}): done ${n.done} of ${n.days} days here` + (t.points ? ` · ${n.pd}/${pts(n.pt)}` : "");
+      box.append(row);
+    }
   }
   return box.children.length ? box : null;
 }
@@ -1504,12 +1519,13 @@ function vHabits(d) {
   }
   const table = h("div", "htable");
   table.style.setProperty("--ndays", pl.days.length);
-  table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"),
+  table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"), span("heff", "Effort"),
     ...pl.days.map(x => span("hday" + (x.today ? " today" : ""), x.head)), span("hcount", "Done"), span("", "")));
   for (const t of pl.habits) {
     const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : ""));
     row.dataset.line = t.line; row.title = "line " + t.line;
     const name = span("hname", t.title);
+    name.prepend(habitMark(), " ");
     name.onclick = e => {                          // the habit's text, like a task's title (Edit alongside: jump instead)
       if ($("viewPane").classList.contains("jump")) return;
       e.stopPropagation();
@@ -1519,9 +1535,14 @@ function vHabits(d) {
       [t.every.length ? span("t", t.every_label) : span("add", "Set")],
       cell => editCell(cell, "daily, weekdays, weekly Mon, Wed, monthly 1st", t.every.join(", "),
         v => { v = v.trim(); if (v !== t.every.join(", ")) editTask(t, "every", v, null, v ? `"${t.title}" repeats ${v} now.` : `"${t.title}" doesn't repeat now.`); }, true));
+    const size = cellButton("heff mid", "Set effort", t.effort ? `effort: ${pts(t.points)} each time. Click to change` : "Set effort: XS, S, M, L or XL (counts each day it's due)",
+      [t.effort ? span("eff", t.effort.toUpperCase()) : span("add", "+")],
+      cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
+        { value: "", text: "None" }], t.effort || "", v => { if (v !== (t.effort || ""))
+          editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`); }));
     const due = pl.days.filter(x => t.due.includes(x.date) && !x.future).length;
     const done = pl.days.filter(x => t.done.includes(x.date)).length;
-    row.append(name, every, ...pl.days.map(x => h("span", "hday" + (x.today ? " today" : ""), tickButton(t, x, t.due.includes(x.date)))),
+    row.append(name, every, size, ...pl.days.map(x => h("span", "hday" + (x.today ? " today" : ""), tickButton(t, x, t.due.includes(x.date)))),
       span("hcount", t.every.length ? `${done}/${due}` : ""), moreCell(t));
     table.append(row);
   }
@@ -1652,10 +1673,11 @@ function vPlanner(d) {
     for (const t of shown) col.append(weekItem("wcard", t, pl, [meta(t, c)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
-    if (shown.length) {                            // 2.0.24: effort done / planned in this column (every card shown), beside its name
-      const total = sumPts(shown), done = sumPts(shown.filter(t => t.status === "done"));
+    const cc = clip(c, pl), [hd, ht] = habitsSum(habitsOf(pl, cc, on), cc.start, cc.end);
+    if (shown.length || ht) {                      // 2.0.24: effort done / planned in this column (every card shown, and
+      const total = sumPts(shown) + ht, done = sumPts(shown.filter(t => t.status === "done")) + hd;   // 2.0.25: habits per day)
       head.append(span("wpts", `${done}/${pts(total)}`));
-      head.title += ` · ${pts(done)} done of ${pts(total)} here`;
+      head.title += ` · ${pts(done)} done of ${pts(total)} here` + (ht ? ` (habits ${hd}/${pts(ht)})` : "");
     }
     if (c.ok && d.targets.length) col.append(addTaskRow(null, "", c));   // a new task, planned for this column
     if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, d.due ? "copy" : !d.via ? "plan" : copy ? "copy" : "move", d.via));
@@ -1673,10 +1695,27 @@ function vPlanner(d) {
       sum));
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
-  else {
-    const all = groups.flatMap(g => g.tasks), total = sumPts(all), done = sumPts(all.filter(t => t.status === "done"));
+  // 2.0.25: the habits over the columns shown (a work week: Mon-Fri), each one's days done of due, and their effort
+  const span0 = pl.columns.length ? clip({ start: pl.columns[0].start, end: pl.columns[pl.columns.length - 1].end }, pl) : null;
+  const habs = span0 ? habitsOf(pl, span0, on) : [];
+  const [hd, ht] = habitsSum(habs, span0 && span0.start, span0 && span0.end);
+  if (habs.length) {
+    const box = h("div", "wproj whabs", h("div", "wpname", "Habits"));
+    for (const t of habs) {
+      const n = habitCount(t, span0.start, span0.end);
+      const row = h("div", "whrow" + (t.held ? " held" : ""), habitMark(), span("wt", t.title), span("wd", `${n.done}/${n.days}`),
+        t.effort ? span("weff", t.effort.toUpperCase()) : null);
+      row.title = `${projLabel({ name: t.project, folder: t.folder })} · ${t.every_label || ""}: done ${n.done} of ${n.days} days`
+        + (t.points ? ` · ${n.pd}/${pts(n.pt)}` : "");
+      box.append(row);
+    }
+    if (ht) { const sum = h("div", "wsum", `${hd}/${pts(ht)}`); sum.title = `${pts(hd)} done of ${pts(ht)} in habits`; box.append(sum); }
+    side.append(box);
+  }
+  if (groups.length || ht) {
+    const all = groups.flatMap(g => g.tasks), total = sumPts(all) + ht, done = sumPts(all.filter(t => t.status === "done")) + hd;
     const e = span("wtotal", `${done}/${pts(total)}`);
-    e.title = `${pts(done)} done of ${pts(total)} planned for ${where}`;
+    e.title = `${pts(done)} done of ${pts(total)} planned for ${where}` + (ht ? ` (habits ${hd}/${pts(ht)})` : "");
     sideTotal.append(e);
   }
   out.append(h("div", "wtop", days, side));
