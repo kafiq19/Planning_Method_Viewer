@@ -1453,6 +1453,17 @@ class TestServer(Base):
                 self.assertEqual(r.headers["Cache-Control"], "no-cache")
                 self.assertIn(inside, r.read())
 
+    def test_page_prints_the_planner(self):
+        # 2.0.27: the Planner prints on one landscape page (built by the page, printed through @media print)
+        with urllib.request.urlopen(self.url + "/app.js") as r:
+            js = r.read()
+        for name in (b"function printPlanner", b"function printSheet", b"function fitSheet", b"printBtn"):
+            self.assertIn(name, js)
+        with urllib.request.urlopen(self.url + "/app.css") as r:
+            css = r.read()
+        self.assertIn(b"@media print", css)
+        self.assertIn(b"size: landscape", css)
+
     def test_no_portfolio(self):
         with urllib.request.urlopen(self.url + "/api/portfolio") as r:
             self.assertEqual(json.loads(r.read()), {"name": None})

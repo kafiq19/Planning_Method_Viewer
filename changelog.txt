@@ -5,6 +5,25 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.27  2026-11-21  Print the Planner on one page
+-------------------------------------------------
+- New: a printer button next to the Planner's week control prints the
+  period shown on one landscape page, or saves it as a PDF. Day columns
+  with big day names; a Habits row with a tick box per habit due that
+  day; a row per project with its tasks (tick box, effort, ★ for a top
+  priority, done ones struck out); an empty Other row to write in. On the
+  right: the week's number and dates, Top priorities with lines to add
+  more, tasks planned for the week without a day, each habit's days,
+  effort per project to fill in, and lines for notes. At the foot: Top
+  lesson of last week and Top priority this week. Works on every level
+  (a month prints its weeks). Follows the filters, the projects on the
+  calendar, the work week and Show on hold. A busy week gets less room to
+  write, then smaller type, so it always fits on one page.
+- Code: page only (web/app.js printPlanner, printSheet, fitSheet;
+  plannerShown shared with vPlanner; web/app.css .psheet and @media
+  print). The sheet is built off screen, fitted, printed, then removed.
+
+
 2.0.26  2026-11-21  Habits in Upcoming
 -------------------------------------------------
 - New: Upcoming has a Habits group (marked 🔁): each habit due in the

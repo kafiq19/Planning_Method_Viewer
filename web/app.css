@@ -499,3 +499,69 @@ table.tl td.w.plan { color: var(--muted); }
 .urow .weff { flex: none; font-size: calc(10px * var(--fz)); font-weight: 700; padding: 0 4px; border-radius: 3px; background: var(--effort); color: var(--effort-text); }
 .urow .unext { flex: none; width: calc(80px * var(--fz)); text-align: right; color: var(--muted); font-size: calc(12.5px * var(--fz)); }
 .urow .unext.now { color: var(--accent); font-weight: 600; }
+
+/* ---------- Print the Planner (2.0.27): one landscape page. Built off screen (so it can be measured and fitted),
+   and the only thing printed. Its own colours, light in any theme. ---------- */
+.printbtn { padding: 5px 7px; display: inline-flex; align-items: center; }
+.psheet { position: fixed; left: -30000px; top: 0; width: 10.2in; height: 7.35in; box-sizing: border-box; overflow: hidden;
+  display: flex; flex-direction: column; gap: 0.08in; background: #fff; color: #1a1a1a; font: 9pt/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.psheet * { box-sizing: border-box; }
+.phdr { display: flex; align-items: baseline; gap: 0.15in; border-bottom: 2px solid #1a1a1a; padding-bottom: 3px; font-size: 0.95em; }
+.pbrand b { letter-spacing: 0.12em; }
+.pbrand { color: #555; }
+.pscope { font-weight: 600; }
+.pprinted { margin-left: auto; color: #777; }
+.pmain { flex: 1; min-height: 0; display: flex; gap: 0.1in; }
+.pgrid { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: 0.28in repeat(var(--n), minmax(0, 1fr));
+  border: 1.5px solid #1a1a1a; overflow: hidden; }
+.pcell { border-right: 1px solid #b8b8b8; border-bottom: 1px solid #b8b8b8; padding: 3px 4px; min-width: 0; }
+.pcell.today { background: #f2f5ff; }
+.pcorner, .phead { border-bottom: 1.5px solid #1a1a1a; }
+.phead { padding: 2px 5px 3px; display: flex; flex-direction: column; }
+.pday { font-size: 1.55em; font-weight: 600; line-height: 1.15; }
+.pdate { color: #666; font-size: 0.9em; }
+.phead.today .pday { color: #2f55c8; }
+.plabel { display: flex; align-items: center; justify-content: center; padding: 3px 0; background: #f4f4f4; }
+.plabel span { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  font-size: 0.85em; white-space: nowrap; overflow: hidden; max-height: 100%; }
+.plabel.pother span, .plabel.phab span { color: #666; }
+.phabs { background: #fafafa; border-bottom: 1.5px solid #1a1a1a; }
+.phabs.today { background: #eef2fd; }
+.plabel.phab { border-bottom: 1.5px solid #1a1a1a; }
+.pitem { display: flex; align-items: baseline; gap: 4px; padding: 1px 0; break-inside: avoid; }
+.pitem .pt { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pitem .pm { color: #666; font-size: 0.85em; }
+.pitem .pt .pm { display: block; text-decoration: none; }
+.pitem > .pm { white-space: nowrap; }
+.pitem.done .pt { color: #777; text-decoration: line-through; }
+.pitem.held .pt { color: #888; font-style: italic; }
+.pitem.notable { outline: 1.2px solid #7c3aed; outline-offset: 1px; border-radius: 3px; margin: 2px 1px; }
+.pbox { flex: none; width: 0.85em; height: 0.85em; border: 1.2px solid #333; border-radius: 2px; position: relative; top: 0.1em; }
+.pbox.on { background: #333; }
+.pbox.on::after { content: ""; position: absolute; left: 0.22em; top: 0.04em; width: 0.2em; height: 0.42em; border: solid #fff; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.pbox.half { background: linear-gradient(135deg, transparent 50%, #333 50%); }
+.pmark { flex: none; font-size: 0.8em; }
+.pstar { color: #b7791f; }
+.peff { flex: none; font-size: 0.75em; font-weight: 700; border: 1px solid #5b21b6; color: #5b21b6; border-radius: 3px; padding: 0 3px; line-height: 1.3; }
+.pside { width: 2.35in; flex: none; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 0.08in; }
+.ptitle { border: 1.5px solid #1a1a1a; padding: 4px 8px 5px; display: flex; flex-direction: column; }
+.pbig { font-size: 1.9em; font-weight: 700; line-height: 1.1; }
+.psub { color: #555; }
+.psec { border: 1px solid #b8b8b8; padding: 3px 7px 5px; }
+.psh { font-weight: 700; font-size: 0.82em; text-transform: uppercase; letter-spacing: 0.06em; color: #444; margin-bottom: 2px; }
+.pline { height: 1.45em; border-bottom: 1px solid #ccc; }
+.prow { display: flex; justify-content: space-between; gap: 6px; }
+.prow .pn { color: #444; font-variant-numeric: tabular-nums; }
+.prow.ptot { border-top: 1px solid #b8b8b8; margin-top: 2px; padding-top: 2px; font-weight: 600; }
+.pnotes { flex: 1 1 0; min-height: 0.6in; overflow: hidden; }
+.pfoot { display: flex; align-items: baseline; gap: 0.25in; font-size: 0.9em; font-weight: 600; }
+.pq { display: flex; align-items: baseline; gap: 6px; flex: 1; }
+.pfill { flex: 1; border-bottom: 1px solid #555; min-width: 1in; }
+.pkey { font-weight: 400; color: #666; font-size: 0.85em; white-space: nowrap; }
+@media print {
+  @page { size: landscape; margin: 0.4in; }
+  html, body { background: #fff !important; height: auto; overflow: visible; }
+  body > *:not(.psheet) { display: none !important; }
+  .psheet { position: static; left: auto; }
+}

@@ -27,7 +27,7 @@ USAGE
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
                                        Date fields) to add tasks one after another, fold any level in Projects,
                                        sort a project's tasks by status from its heading,
-                                       and plan tasks for days in Week
+                                       and plan tasks for days in Week (and print the plan on one page)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates

@@ -766,6 +766,7 @@ wMid.onclick = () => { if (!state.data.planner.current) setPlan(state.data.plann
 function showPlan(pl, on) {
   wbox.classList.toggle("hidden", !on); pctl.classList.toggle("hidden", on);
   wSeg.classList.toggle("hidden", isHabitsPage());          // Habits: one week at a time
+  printBtn.classList.toggle("hidden", isHabitsPage());      // 2.0.27: print the Planner (not the Habits page)
   if (!on) return;
   const unit = PLAN_UNIT[pl.kind];
   for (const b of wSeg.children) { const sel = b.dataset.kind === pl.kind; b.classList.toggle("on", sel); b.setAttribute("aria-checked", String(sel)); }
@@ -1654,11 +1655,14 @@ function heldToggle(n) {
   b.onclick = () => { store.set("showHeld", on ? "0" : "1"); plannerView(); };
   return b;
 }
-function vPlanner(d) {
-  if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
+function plannerShown(d) {                      // the Planner as shown: hold, the work week; -> [planner data, held left out]
   const [pl0, nHeld] = showHeld() ? [d.planner, (d.planner.backlog.flatMap(g => g.tasks).concat(d.planner.projects.flatMap(g => g.tasks)))
     .filter(t => t.held).length] : withoutHeld(d.planner);
-  const pl = pl0.kind === "week" && workWeek() ? { ...pl0, columns: pl0.columns.filter(c => !weekend(c)) } : pl0;   // work week: no Sat/Sun
+  return [pl0.kind === "week" && workWeek() ? { ...pl0, columns: pl0.columns.filter(c => !weekend(c)) } : pl0, nHeld];   // work week: no Sat/Sun
+}
+function vPlanner(d) {
+  if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
+  const [pl, nHeld] = plannerShown(d);
   const out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
   const unit = PLAN_UNIT[pl.kind], where = pl.kind === "day" ? (pl.current ? "today" : pl.label) : pl.current ? "this " + unit : pl.label;
   const starWhere = pl.star.kind === pl.kind ? where : pl.current ? "this week" : "the week of " + pl.star.label;   // a day's are its week's
@@ -1762,6 +1766,132 @@ function vPlanner(d) {
   dropZone(back, d => d.via && planTask(d.t, d.via, pl, "remove"));   // drop a card here: take that plan off
   out.append(back);
   return out;
+}
+
+/* ---------- Print the Planner (2.0.27): the period shown on one landscape page, to print or save as a PDF.
+   It follows what the Planner shows (filters, the projects on the calendar, the work week, on hold) and only reads
+   the data; the notes in the app stay the truth, the paper is a copy to keep beside you. ---------- */
+const printBtn = h("button", "ghost printbtn", icon("M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2M7 14h10v7H7z"));
+printBtn.title = "Print this plan on one page (or save it as a PDF)"; printBtn.setAttribute("aria-label", printBtn.title);
+printBtn.onclick = () => printPlanner();
+wbox.append(printBtn);
+const DAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const isoDay = iso => new Date(iso + "T12:00:00");
+function printHead(c, pl) {                      // -> [name, dates] of a column: Monday / Oct 12, Sat/Sun / Oct 17-18
+  if (pl.kind !== "week" && pl.kind !== "day") return [c.head, ""];
+  const a = isoDay(c.start), b = isoDay(c.end);
+  if (c.start === c.end) return [DAY_LONG[a.getDay()], `${MON3[a.getMonth()]} ${a.getDate()}`];
+  return ["Sat/Sun", `${MON3[a.getMonth()]} ${a.getDate()}-` + (b.getMonth() !== a.getMonth() ? MON3[b.getMonth()] + " " : "") + b.getDate()];
+}
+function printSheet(d) {
+  const [pl] = plannerShown(d), hidden = planHidden(), on = t => !hidden.has(projKey(t));
+  const unit = PLAN_UNIT[pl.kind], cols = pl.columns, n = cols.length;
+  const title = pl.kind === "week" ? `Week ${pl.index}` : pl.kind === "day" ? DAY_LONG[isoDay(pl.start).getDay()] : pl.label;
+  const sub = pl.kind === "week" ? `${pl.label}, ${pl.year}` + (workWeek() ? " · work week" : "") : pl.kind === "day" ? pl.label.replace(/^\w+ /, "") + ", " + pl.year : "";
+  const box = t => span("pbox" + (t.status === "done" ? " on" : t.status === "doing" ? " half" : ""));
+  const eff = t => t.effort ? span("peff", t.effort.toUpperCase()) : null;
+  const item = (t, meta, mark) => h("div", "pitem" + (t.status === "done" ? " done" : "") + (t.held ? " held" : "") + (t.notable ? " notable" : ""),
+    box(t), mark || null, h("span", "pt", t.title, meta ? span("pm", meta) : ""), eff(t));   // the note goes under the title
+  const cell = (cls, ...kids) => h("div", "pcell " + cls, ...kids.filter(Boolean));
+  const grid = h("div", "pgrid");
+  grid.style.setProperty("--n", n);
+  // heading row: the columns, today's tinted
+  grid.append(cell("pcorner"), ...cols.map(c => { const [a, b] = printHead(c, pl);
+    return cell("phead" + (c.today ? " today" : ""), span("pday", a), b ? span("pdate", b) : null); }));
+  const rows = [];                               // [label, kind] per body row, for the grid's row sizes
+  // habits: a tick box per day it's due (Week, Day), or each one's days in the column (Month, Season, Year)
+  const anyHabits = cols.some(c => habitsOf(pl, clip(c, pl), on).length);
+  if (anyHabits) {
+    grid.append(cell("plabel phab", span("", "Habits")));
+    for (const c0 of cols) {
+      const c = clip(c0, pl), hs = habitsOf(pl, c, on), out = cell("phabs" + (c0.today ? " today" : ""));
+      if (pl.days.length) {
+        for (const day of pl.days.filter(x => x.date >= c.start && x.date <= c.end))
+          for (const t of hs) {
+            const due = t.due.includes(day.date);
+            if (due || t.done.includes(day.date))
+              out.append(item({ ...t, status: t.done.includes(day.date) ? "done" : "open" }, c.start !== c.end ? day.head.split(" ")[0] : "", span("pmark", "🔁")));
+          }
+      } else for (const t of hs) { const k = habitCount(t, c.start, c.end);
+        out.append(h("div", "pitem", span("pmark", "🔁"), span("pt", t.title), span("pm", `__/${k.days}`), eff(t))); }
+      grid.append(out);
+    }
+    rows.push("auto");
+  }
+  // a row per project on the calendar with something planned or due here
+  const keys = [...new Set([...pl.projects.map(projKey), ...cols.flatMap(c => c.tasks.map(projKey))])].filter(k => !hidden.has(k));
+  const sideGroups = [];
+  for (const k of keys) {
+    grid.append(cell("plabel", span("", k)));
+    for (const c of cols) {
+      const ts = starFirst(c.tasks.filter(t => projKey(t) === k), pl), out = cell(c.today ? "today" : "");
+      for (const t of ts) {
+        const p = (t.plans || []).find(x => x.token === t.via);
+        const meta = [t.folder && t.project !== t.folder ? "@" + t.project : "", p && p.kind !== pl.column_kind ? p.label : "",
+          t.due ? "due" + (c.start === c.end && t.span && t.span.start === t.span.end ? "" : " " + t.when) : ""].filter(Boolean).join(" · ");
+        out.append(item(t, meta, starred(t, pl) ? span("pstar", "★") : null));
+      }
+      grid.append(out);
+    }
+    rows.push("P");                              // a project row: its room to write in is set by fitSheet
+    const gs = pl.projects.filter(g => projKey(g) === k), all = gs.flatMap(g => g.tasks);
+    const inCol = new Set(cols.flatMap(c => c.tasks).map(t => t.path + ":" + t.line));
+    sideGroups.push([k, all.filter(t => !inCol.has(t.path + ":" + t.line)), sumPts(all.filter(t => t.status === "done")), sumPts(all)]);
+  }
+  // a free row to write in
+  grid.append(cell("plabel pother", span("", "Other")), ...cols.map(c => cell(c.today ? "today" : "")));
+  rows.push("minmax(0.55in, 1fr)");
+  grid.dataset.rows = ["auto", ...rows].join(" ");
+  // the side panel: the period, top priorities, what's planned for the whole period, habits, effort, notes
+  const side = h("div", "pside");
+  side.append(h("div", "ptitle", span("pbig", title), sub ? span("psub", sub) : null));
+  const prios = pl.priorities.filter(on), proj = t => keys.length > 1 ? projKey(t) : "";
+  side.append(h("div", "psec", h("div", "psh", "Top priorities ", span("pstar", "★")),   // and lines to add a few by hand
+    ...prios.map(t => item(t, proj(t))), ...Array.from({ length: Math.max(1, 3 - prios.length) }, () => h("div", "pline"))));
+  const loose = sideGroups.flatMap(g => g[1]);    // planned for the whole period, not one column (>wk42 in a week)
+  if (loose.length) side.append(h("div", "psec", h("div", "psh", "Any time " + (pl.kind === "day" ? "today" : "this " + unit)),
+    ...loose.map(t => item(t, proj(t)))));
+  const span0 = cols.length ? clip({ start: cols[0].start, end: cols[n - 1].end }, pl) : null;
+  const habs = span0 ? habitsOf(pl, span0, on) : [];
+  const [, ht] = habitsSum(habs, span0 && span0.start, span0 && span0.end);
+  if (habs.length) side.append(h("div", "psec", h("div", "psh", "Habits"),
+    ...habs.map(t => { const k = habitCount(t, span0.start, span0.end);
+      return h("div", "pitem", span("pmark", "🔁"), span("pt", t.title), span("pm", `__/${k.days}`), eff(t)); })));
+  const effort = h("div", "psec peffort", h("div", "psh", "Effort"));
+  for (const [k, , , total] of sideGroups) if (total) effort.append(h("div", "prow", span("", k), span("pn", `___/${total}`)));
+  if (ht) effort.append(h("div", "prow", span("", "Habits"), span("pn", `___/${ht}`)));
+  const total = sideGroups.reduce((s, g) => s + g[3], 0) + ht;
+  effort.append(h("div", "prow ptot", span("", "Done of planned"), span("pn", `___/${pts(total)}`)));
+  side.append(effort, h("div", "psec pnotes", h("div", "psh", "Notes"), ...Array.from({ length: 40 }, () => h("div", "pline"))));   // clipped to the room left
+  // the top and the foot
+  const scope = state.folio ? (scopeName() || "All projects") : (state.file && state.file.name) || "";
+  const head = h("div", "phdr", h("span", "pbrand", h("b", "", "KAFEEN"), " Planner"), scope ? span("pscope", scope) : null,
+    span("pprinted", "Printed " + (d.today ? fmtIso(d.today) : "")));
+  const foot = h("div", "pfoot",
+    h("div", "pq", span("", "Top lesson of last " + unit + ":"), h("span", "pfill")),
+    h("div", "pq", span("", "Top priority this " + unit + ":"), h("span", "pfill")),
+    span("pkey", "Effort: XL 8 · L 5 · M 3 · S 1 · XS 1 pts   ☐ open  ◪ in progress  ☑ done  ★ top priority"));
+  return h("div", "psheet", head, h("div", "pmain", grid, side), foot);
+}
+const fmtIso = iso => { const a = isoDay(iso); return `${DAY_LONG[a.getDay()].slice(0, 3)} ${MON3[a.getMonth()]} ${a.getDate()}`; };
+function fitSheet(sheet) {                       // fit on the page: first less room to write in each project row, then smaller type
+  const grid = sheet.querySelector(".pgrid"), over = () => [sheet, grid, sheet.querySelector(".pside")].some(e => e.scrollHeight > e.clientHeight + 1);
+  let room = 1.4, fz = 9;
+  const set = () => { grid.style.gridTemplateRows = grid.dataset.rows.replace(/\bP\b/g, `minmax(${room.toFixed(2)}in, auto)`); sheet.style.fontSize = fz + "pt"; };
+  set();
+  while (over() && room > 0.45) { room -= 0.1; set(); }
+  while (over() && fz > 5) { fz -= 0.25; set(); }
+}
+function printPlanner() {
+  if (!state.data || !state.data.planner) return;
+  document.querySelectorAll(".psheet").forEach(e => e.remove());
+  const sheet = printSheet(filtered(state.data)), was = document.title;
+  document.body.append(sheet);
+  fitSheet(sheet);
+  document.title = "Plan " + state.data.planner.label.replace(/\s+/g, " ");   // the PDF's file name
+  const done = () => { sheet.remove(); document.title = was; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
 }
 
 /* ---------- markdown (small, safe: everything is escaped before any tag is added) ---------- */
