@@ -224,7 +224,7 @@ Pair your first computer while the hub's folder is still empty: its projects fil
 
 - A change on one computer appears on the others within a second or two, in the open pages too.
 - **Offline is fine.** Keep working; the header says `Offline · 3 waiting`, and everything is sent when the hub is reachable again. Changes to different lines merge by themselves.
-- **A clash** (the same line changed differently on two devices while apart) never loses anything: the version that reached the hub first is shown everywhere, and the other is kept aside in `Projects/.kafeen/conflicts/`. The header says `1 clash`. (Choosing between them on the page comes next.)
+- **A clash** (the same line changed differently on two devices while apart) never loses anything: the version that reached the hub first is shown everywhere, and the other is kept aside on the device that made it. That device shows a red bar under the header (and `1 clash` in the pill): click **Review** to see the two versions of each line side by side and choose **Keep theirs**, **Keep yours** or **Keep both**, then **Apply**. The choice syncs to every device like any edit, with Undo. If the two devices had different copies of a whole file from the start, you choose between the files instead (**Keep both** saves yours beside it as `Backlog (from Desktop)`).
 - Deleted pages and projects go to `.trash` on every device; nothing is removed.
 - The pill in the header shows where you stand: **Synced**, **Syncing…**, **Offline · N waiting**, or **Hub** on the hub itself. Point at it for details.
 

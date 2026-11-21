@@ -5,6 +5,26 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.3  2026-11-21  Choose what to keep when devices clash
+-------------------------------------------------
+- New: when a change made on this device clashed with another device's
+  (the same line changed on both while apart), a red bar under the header
+  says so, and the sync pill shows "1 clash". Review opens the clashes:
+  for each line, the version on the hub now and yours, side by side, with
+  Keep theirs / Keep yours / Keep both; Apply writes it (and it syncs to
+  every device like any edit), with Undo. The lines are found again by
+  their text, so edits made since elsewhere in the file don't matter; if
+  the line itself changed since, it says so (edit it by hand, then keep
+  theirs).
+- Two different whole files (a device paired with its own copy): Keep
+  what's there, Use yours instead, or Keep both (yours saved beside it as
+  "NAME (from DEVICE)").
+- Code: list_clashes, resolve_clash, _find_block, RE_CLASH_ID;
+  GET/POST /api/clashes; resolved records move to conflicts/resolved/;
+  SyncClient.recount. Page: showClashBar, reviewClashes, pathParts
+  (shared with showCrumbs).
+
+
 2.1.2  2026-11-21  Pair your devices
 -------------------------------------------------
 - New: python3 planner.py --pair http://kafeen-hub:8765 CODE pairs this

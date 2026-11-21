@@ -2670,7 +2670,7 @@ class TestHub(Base):                                          # 2.1.1: the sync 
             planner.main(["planner.py", "--serve", "--hub", "notes.txt"])  # a hub serves the Projects folder
 
 
-class TestDeviceSync(Base):                                   # 2.1.2: devices paired with a hub
+class SyncBase(Base):                                         # a hub and two paired devices, A and B (2.1.2)
     def setUp(self):
         super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
@@ -2710,6 +2710,9 @@ class TestDeviceSync(Base):                                   # 2.1.2: devices p
         with open(p, encoding="utf-8", newline="") as f:
             return f.read()
 
+
+
+class TestDeviceSync(SyncBase):                               # 2.1.2: devices paired with a hub
     def test_pair(self):
         with open(os.path.join(self.a, ".kafeen", "device.json")) as f:
             conf = json.load(f)
@@ -2838,3 +2841,95 @@ class TestDeviceSync(Base):                                   # 2.1.2: devices p
         with urllib.request.urlopen(f"http://127.0.0.1:{sb.server_address[1]}/api/sync") as r:
             st = json.loads(r.read())
         self.assertEqual((st["state"], st["name"]), ("synced", "B"))
+
+
+class TestClashes(SyncBase):                            # 2.1.3: choosing between the two versions of a clash
+    def clash(self, mine, theirs, base="- a\n- b\n- c\n"):
+        """A on the hub with `theirs`, B with `mine` while apart: B's round sets its version aside."""
+        self.put(self.hubdir, "HDC/backlog.kf", base)
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", theirs)
+        self.put(self.b, "HDC/backlog.kf", mine)
+        self.ca.round()
+        self.assertEqual(self.cb.round()["conflicts"], 1)
+        [c] = planner.list_clashes(self.b)
+        return c
+
+    def test_list(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.assertEqual((c["path"], c["device"], c["whole"]), ("HDC/backlog.kf", "B", False))
+        self.assertEqual(c["clashes"], [{"line": 1, "base": ["- a\n"], "mine": ["~- a\n"], "theirs": ["!- a\n"]}])
+        self.assertEqual(planner.list_clashes(self.a), [])
+
+    def test_keep_mine_theirs_or_both(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "!- a\n- b\n- c\n- d\n")           # edited since, elsewhere in the file
+        out = planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "~- a\n- b\n- c\n- d\n")
+        self.assertEqual(out["before"], "!- a\n- b\n- c\n- d\n")              # for Undo
+        self.assertEqual(planner.list_clashes(self.b), [])
+        self.assertTrue(os.listdir(os.path.join(self.b, ".kafeen", "conflicts", "resolved")))
+        with self.assertRaises(ValueError):
+            planner.resolve_clash(self.b, c["id"], ["mine"])                   # done already
+
+    def test_keep_both(self):
+        c = self.clash("- a (KA)\n- b\n- c\n", "- a (RT)\n- b\n- c\n")
+        planner.resolve_clash(self.b, c["id"], ["both"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a (RT)\n- a (KA)\n- b\n- c\n")
+
+    def test_keep_theirs_writes_nothing(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        before = os.stat(os.path.join(self.b, "HDC", "backlog.kf")).st_mtime_ns
+        planner.resolve_clash(self.b, c["id"], ["theirs"])
+        self.assertEqual(os.stat(os.path.join(self.b, "HDC", "backlog.kf")).st_mtime_ns, before)
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_changed_since_is_refused(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "!- a, renamed\n- b\n- c\n")        # the kept line itself changed
+        with self.assertRaises(ValueError):
+            planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(len(planner.list_clashes(self.b)), 1)                 # still there to choose
+        planner.resolve_clash(self.b, c["id"], ["dismiss"])
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_a_deleted_line(self):
+        c = self.clash("- a\n- c\n", "!- b\n- a\n- c\n", base="- b\n- a\n- c\n")
+        self.assertEqual((c["clashes"][0]["mine"], c["clashes"][0]["theirs"]), ([], ["!- b\n"]))
+        planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n- c\n")
+
+    def test_whole_files(self):
+        self.put(self.a, "HDC/backlog.kf", "- mine\n")                        # different from the start
+        self.ca.round()
+        [c] = planner.list_clashes(self.a)
+        self.assertEqual((c["whole"], c["mine"]), (True, "- mine\n"))
+        out = planner.resolve_clash(self.a, c["id"], ["both"])
+        self.assertEqual(out["copy"], "HDC/backlog (from A).kf")
+        self.assertEqual(self.get(self.a, "HDC/backlog (from A).kf"), "- mine\n")
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+
+    def test_bad_requests(self):
+        for cid in ("../x", "", None, "20260101-000000-1"):
+            with self.assertRaises(ValueError):
+                planner.resolve_clash(self.b, cid, ["mine"])
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        for choices in (["nope"], "mine", ["mine", "mine"]):
+            with self.assertRaises(ValueError):
+                planner.resolve_clash(self.b, c["id"], choices)
+
+    def test_api(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        sb = planner.make_server(0, None, portfolio=self.b, sync=False)
+        threading.Thread(target=sb.serve_forever, daemon=True).start()
+        self.addCleanup(sb.server_close)
+        self.addCleanup(sb.shutdown)
+        url = f"http://127.0.0.1:{sb.server_address[1]}"
+        with urllib.request.urlopen(url + "/api/clashes") as r:
+            self.assertEqual([x["id"] for x in json.loads(r.read())["clashes"]], [c["id"]])
+        req = urllib.request.Request(url + "/api/clashes", json.dumps({"id": c["id"], "choices": ["mine"]}).encode(),
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read())["path"], "HDC/backlog.kf")
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "~- a\n- b\n- c\n")
+        self.assertEqual(sb.sync.status["conflicts"], 0)

@@ -2927,6 +2927,10 @@ class SyncClient:
         except OSError:
             return 0
 
+    def recount(self):
+        """The clashes kept aside changed (one was resolved): tell the pages."""
+        self._set(conflicts=self._conflict_count())
+
     def _set(self, **kw):
         self.status.update(kw)
         if self.on_status:
@@ -3122,6 +3126,136 @@ class SyncClient:
                 self.stop.wait(5)
 
 
+# ---- clashes (2.1.3): a device's change that the hub couldn't merge, kept aside until the user chooses ----
+
+RE_CLASH_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9]+")
+
+
+def _clash_dir(root):
+    return os.path.join(root, SYNC_DIR, "conflicts")
+
+
+def list_clashes(root):
+    """[{id, path, device, time, whole, clashes: [{line, base, mine, theirs}]}] of the clashes kept aside on this
+    device, oldest first. `whole`: the files couldn't be merged line by line (different from the start, or not text):
+    the choice is between the two whole files."""
+    import json
+    folder, out = _clash_dir(root), []
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".json"))
+    except OSError:
+        return []
+    for n in names:
+        try:
+            with open(os.path.join(folder, n), encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        out.append({"id": n[:-5], "path": rec["path"], "device": rec.get("device"), "time": rec.get("time"),
+                    "whole": not rec.get("clashes"), "clashes": rec.get("clashes") or [],
+                    "mine": None if rec.get("clashes") else _blob_text(root, rec.get("mine"))})
+    return out
+
+
+def _blob_text(root, h):
+    try:
+        with open(os.path.join(root, SYNC_DIR, "blobs", h), "rb") as f:
+            return f.read().decode("utf-8")
+    except (OSError, TypeError, UnicodeDecodeError):
+        return None
+
+
+def _blob_bytes(root, h):
+    try:
+        with open(os.path.join(root, SYNC_DIR, "blobs", h), "rb") as f:
+            return f.read()
+    except (OSError, TypeError):
+        return None
+
+
+def _find_block(lines, block, near):
+    """Where the lines `block` stand in `lines` (ignoring line endings), the place nearest to `near`; None if not."""
+    key = [x.rstrip("\r\n") for x in block]
+    flat = [x.rstrip("\r\n") for x in lines]
+    if not key:
+        return min(max(near, 0), len(lines))
+    spots = [i for i in range(len(flat) - len(key) + 1) if flat[i:i + len(key)] == key]
+    return min(spots, key=lambda i: abs(i - near)) if spots else None
+
+
+def resolve_clash(root, cid, choices):
+    """Apply the user's choice for a clash kept aside (2.1.3) and file it under conflicts/resolved/.
+
+    Line clashes: `choices` has one of "theirs" (keep what's there now), "mine" (this device's lines instead) or
+    "both" (theirs, then this device's) per clash, applied to the file as it is now: the lines kept are found again
+    by their text, so later edits elsewhere in the file don't matter. A whole-file clash takes one choice: "theirs",
+    "mine" (this device's file instead) or "both" (this device's file saved beside it, as "NAME (from DEVICE)").
+    -> {path, before, version, copy} (before/version: for Undo; copy: the new file's path for "both"), or
+    ValueError if it can't be applied (the lines changed since: edit them by hand, then dismiss)."""
+    import json
+    if not isinstance(cid, str) or not RE_CLASH_ID.fullmatch(cid):
+        raise ValueError("no such clash")
+    rec_path = os.path.join(_clash_dir(root), cid + ".json")
+    try:
+        with open(rec_path, encoding="utf-8") as f:
+            rec = json.load(f)
+    except OSError:
+        raise ValueError("no such clash (resolved already?)")
+    rel, clashes = rec["path"], rec.get("clashes") or []
+    full = sync_path(root, rel)
+    text, version = read_notes(full) if os.path.isfile(full) else ("", None)
+    out = {"path": rel, "before": text, "version": version, "copy": None}
+    allowed = {"theirs", "mine", "both", "dismiss"}
+    if not isinstance(choices, list) or not all(c in allowed for c in choices):
+        raise ValueError("choose theirs, mine or both")
+    if choices == ["dismiss"] or all(c in ("theirs", "dismiss") for c in choices):
+        pass                                            # keep what's there: nothing to write
+    elif not clashes:                                   # the whole file
+        mine = _blob_bytes(root, rec.get("mine"))
+        if mine is None:
+            raise ValueError("this device's version is missing")
+        if choices[0] == "mine":
+            write_bytes(full, mine)
+        else:
+            stem, ext = os.path.splitext(rel)
+            copy, n = f"{stem} (from {rec.get('device') or 'another device'}){ext}", 1
+            while os.path.exists(sync_path(root, copy)):
+                n += 1
+                copy = f"{stem} (from {rec.get('device') or 'another device'} {n}){ext}"
+            write_bytes(sync_path(root, copy), mine)
+            out["copy"] = copy
+    else:
+        if len(choices) != len(clashes):
+            raise ValueError("one choice per clash")
+        lines = text.splitlines(keepends=True)
+        eol = "\r\n" if "\r\n" in text else "\n"
+        shift = 0
+        for c, k in sorted(zip(choices, clashes), key=lambda x: x[1]["line"]):
+            if c == "theirs":
+                continue
+            at = _find_block(lines, k["theirs"], k["line"] - 1 + shift)
+            if at is None:
+                raise ValueError(f"line {k['line']} of {rel} changed since; edit it by hand, then choose \"Keep what's there\"")
+            mine = [x.rstrip("\r\n") + eol for x in k["mine"]]
+            if at + len(k["theirs"]) == len(lines) and lines and not lines[-1].endswith(("\n", "\r")) and mine:
+                mine[-1] = mine[-1].rstrip("\r\n")    # the file had no line ending at the end: still none
+                if c == "both":
+                    lines[-1] += eol
+            new = (lines[at:at + len(k["theirs"])] if c == "both" else []) + mine
+            lines[at:at + len(k["theirs"])] = new
+            shift += len(new) - len(k["theirs"])
+        try:
+            out["version"] = write_notes(full, "".join(lines), version)
+        except FileConflict:
+            raise ValueError(f"{rel} changed just now; try again")
+    done = os.path.join(_clash_dir(root), "resolved")
+    os.makedirs(done, exist_ok=True)
+    rec["resolved"] = {"choices": choices, "time": datetime.now().isoformat(timespec="seconds")}
+    write_bytes(os.path.join(done, cid + ".json"), json.dumps(rec, indent=1).encode())
+    os.remove(rec_path)
+    return out
+
+
 class Changes:
     """2.1.0: what changed on disk, for the pages listening on /api/events: a counter and the last changes."""
 
@@ -3305,6 +3439,9 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
             elif path == "/api/events":
                 if self._trusted():
                     self._events()
+            elif path == "/api/clashes":               # 2.1.3: the clashes kept aside on this device
+                if self._trusted():
+                    self._json(200, {"clashes": list_clashes(folio) if client is not None else []})
             elif path == "/api/sync":                  # 2.1.2: where sync stands ({state: "unpaired"} if not paired)
                 if self._trusted():
                     self._json(200, changes.status or {"state": "hub" if hub is not None else "unpaired"})
@@ -3378,7 +3515,7 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
         def do_POST(self):
             if self.path.startswith("/sync/"):
                 return self._sync_post()
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive", "/api/clashes"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -3415,6 +3552,15 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
                     return self._save(req)
                 if self.path == "/api/portfolio":
                     return self._portfolio(req)
+                if self.path == "/api/clashes":            # 2.1.3: {id, choices}
+                    if client is None:
+                        return self._json(409, {"error": "this folder isn't paired with a hub"})
+                    try:
+                        out = resolve_clash(folio, req.get("id"), req.get("choices"))
+                    except ValueError as e:
+                        return self._json(409, {"error": str(e)})
+                    client.recount()
+                    return self._json(200, out)
                 TODAY = default_today or date.today()
                 if req.get("today"):
                     set_today(req["today"])
