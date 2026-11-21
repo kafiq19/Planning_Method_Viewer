@@ -13,6 +13,7 @@ import tempfile
 import sys
 import socket
 import threading
+import time
 import unittest
 import unittest.mock
 import urllib.error
@@ -2352,3 +2353,142 @@ class TestServerPortfolio(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMerge3(unittest.TestCase):                          # 2.1.0: two changes to one file, line by line
+    def m(self, base, mine, theirs):
+        return planner.merge3(base, mine, theirs)
+
+    def test_one_side_or_the_same(self):
+        b = "- a\n- b\n"
+        self.assertEqual(self.m(b, b, "!- a\n- b\n"), ("!- a\n- b\n", []))
+        self.assertEqual(self.m(b, "!- a\n- b\n", b), ("!- a\n- b\n", []))
+        self.assertEqual(self.m(b, "x\n", "x\n"), ("x\n", []))
+
+    def test_different_lines_are_both_kept(self):
+        b = "- a\n- b\n- c\n- d\n"
+        self.assertEqual(self.m(b, "!- a\n- b\n- c\n- d\n", "- a\n- b\n- c\n~- d\n"), ("!- a\n- b\n- c\n~- d\n", []))
+        # next to each other: a status on one side, a new subtask under it on the other
+        self.assertEqual(self.m(b, "- a\n!- b\n- c\n- d\n", "- a\n- b\n\t- sub\n- c\n- d\n"), ("- a\n!- b\n\t- sub\n- c\n- d\n", []))
+        self.assertEqual(self.m(b, "- a\n- b\n\t- sub\n- c\n- d\n", "- a\n!- b\n- c\n- d\n"), ("- a\n!- b\n\t- sub\n- c\n- d\n", []))
+        # a line deleted on one side, another changed on the other
+        self.assertEqual(self.m(b, "- a\n- c\n- d\n", "- a\n- b\n- c\n!- d\n"), ("- a\n- c\n!- d\n", []))
+
+    def test_lines_added_at_the_same_place_are_both_kept(self):
+        b = "@HDC\n- a\n"
+        self.assertEqual(self.m(b, b + "- mine\n", b + "- theirs\n"), (b + "- theirs\n- mine\n", []))
+        self.assertEqual(self.m(b, b + "- same\n", b + "- same\n"), (b + "- same\n", []))
+
+    def test_the_same_line_changed_twice_is_a_conflict(self):
+        text, clashes = self.m("- a\n- b\n", "!- a\n- b\n", "- a (KA)\n- b\n")
+        self.assertEqual(text, "- a (KA)\n- b\n")               # theirs kept; mine reported, never lost
+        self.assertEqual(clashes, [{"line": 1, "base": ["- a\n"], "mine": ["!- a\n"], "theirs": ["- a (KA)\n"]}])
+        text, clashes = self.m("- a\n- b\n", "- a\n- b\n", "- a\n- b\n")
+        self.assertEqual(clashes, [])
+        text, clashes = self.m("- a\n- b\n", "- b\n", "!- a\n- b\n")   # deleted here, changed there
+        self.assertEqual((text, clashes[0]["mine"], clashes[0]["theirs"]), ("!- a\n- b\n", [], ["!- a\n"]))
+
+    def test_line_endings_stay(self):
+        self.assertEqual(self.m("a\r\nb\r\n", "a\r\nB\r\n", "A\r\nb\r\n"), ("A\r\nB\r\n", []))
+        self.assertEqual(self.m("a\nb", "a\nb\nc", "A\nb"), ("A\nb\nc", []))     # no line ending at the end
+        self.assertEqual(self.m("a\nb", "a\nB", "a\nb\n- c"), ("a\nB\n- c", []))
+
+
+class TestLive(Base):                                         # 2.1.0: /api/events and saves that merge
+    write = TestPortfolio.write
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.write("HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.server = planner.make_server(0, None, portfolio=self.root)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+        super().tearDown()
+
+    post, send = TestServer.post, TestServer.send
+
+    def events(self):
+        """Open /api/events; -> a function returning the next `changed` event's data (or None after `wait` s)."""
+        r = urllib.request.urlopen(self.url + "/api/events", timeout=20)
+        self.addCleanup(r.close)
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream")
+        self.assertEqual(r.readline(), b"retry: 2000\n")
+
+        def next_change():
+            event = None
+            while True:
+                line = r.readline()
+                if not line:
+                    return None
+                if line.startswith(b"event: "):
+                    event = line[7:].strip()
+                elif line.startswith(b"data: ") and event == b"changed":
+                    return json.loads(line[6:])
+        return next_change
+
+    def test_a_change_on_disk_reaches_the_page(self):
+        nxt = self.events()
+        time.sleep(0.1)
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # edited by hand (or by sync)
+            f.write("- d\n")
+        t0 = time.time()
+        self.assertEqual(nxt(), {"paths": ["HDC/backlog.kf"], "tree": False})
+        self.assertLess(time.time() - t0, planner.SCAN_SECONDS + 1.5)
+        os.makedirs(os.path.join(self.root, "MDM"))                          # a new project: the drawer's tree
+        self.assertEqual(nxt(), {"paths": ["MDM"], "tree": True})
+
+    def test_an_edit_through_the_server_is_told_at_once(self):
+        nxt = self.events()
+        _, ver = planner.read_notes(os.path.join(self.root, "HDC", "backlog.kf"))
+        t0 = time.time()
+        self.assertEqual(self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n- c\n", "version": ver})[0], 200)
+        self.assertEqual(nxt()["paths"], ["HDC/backlog.kf"])
+        self.assertLess(time.time() - t0, 1)
+
+    def test_hidden_files_are_not_watched(self):
+        before = planner.scan_files(self.root)
+        self.write(".kafeen/state.json", "{}")
+        self.write("HDC/.DS_Store", "x")
+        self.assertEqual(planner.scan_files(self.root), before)
+
+    def test_a_save_on_an_old_version_merges(self):
+        path = os.path.join(self.root, "HDC", "backlog.kf")
+        base, ver = planner.read_notes(path)
+        with open(path, "w") as f:                                           # another device ticked c meanwhile
+            f.write("- a\n- b\n!- c\n")
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n- c\n", "version": ver, "base": base})
+        self.assertEqual((code, d["merged"], d["text"]), (200, True, "!- a\n- b\n!- c\n"))
+        self.assertEqual(planner.read_notes(path), ("!- a\n- b\n!- c\n", d["version"]))
+        # a clash on the same line is refused as before (the page asks)
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "~- a\n- b\n!- c\n", "version": ver, "base": base})
+        self.assertEqual((code, d["conflict"]), (409, True))
+        self.assertEqual(planner.read_notes(path)[0], "!- a\n- b\n!- c\n")
+        # without a base (an older page): refused as before
+        self.assertEqual(self.post("/api/file", {"path": "HDC/backlog.kf", "text": "x\n", "version": ver})[0], 409)
+
+    def test_a_merge_keeps_crlf(self):
+        path = os.path.join(self.root, "HDC", "backlog.kf")
+        with open(path, "wb") as f:
+            f.write(b"- a\r\n- b\r\n")
+        base, ver = planner.read_notes(path)
+        with open(path, "wb") as f:
+            f.write(b"- a\r\n!- b\r\n")
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n", "version": ver, "base": base.replace("\r\n", "\n")})
+        self.assertEqual(code, 200)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"!- a\r\n!- b\r\n")
+
+    def test_closing_the_server_ends_the_stream(self):
+        nxt = self.events()
+        self.server.shutdown()
+        self.server.server_close()
+        self.assertIsNone(nxt())
+        self.server = planner.make_server(0, None)                           # for tearDown
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()

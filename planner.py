@@ -29,6 +29,7 @@ USAGE
                                        Date fields) to add tasks one after another, fold any level in Projects,
                                        sort a project's tasks by status from its heading,
                                        and plan tasks for days in Week (and print the plan on one page)
+                                       The page is live: notes changed on disk show at once (2.1.0)
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -80,6 +81,7 @@ RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
 PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue stays overdue);
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
+SCAN_SECONDS = 2    # 2.1.0: how often the server looks for notes changed on disk (by hand, or by sync)
 BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]", "hold": "[/]"}
 
 
@@ -2103,6 +2105,70 @@ def write_notes(path, text, version, force=False):
     return file_version(data)
 
 
+def _hunks(base, other):
+    """[(start, end, lines)]: where `other` replaces base[start:end] with `lines` (lists of lines)."""
+    import difflib
+    sm = difflib.SequenceMatcher(None, base, other, autojunk=False)
+    return [(i1, i2, other[j1:j2]) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
+
+
+def merge3(base, mine, theirs):
+    """2.1.0: merge two texts that both started from `base`, line by line; -> (text, conflicts).
+
+    Changes to different lines are both kept. Lines added at the same place on both sides are both kept
+    (theirs first). Where both sides changed the same lines differently, theirs is kept and the clash is
+    listed in `conflicts` as {line (1-based, in the result), base, mine, theirs} (each a list of lines). The
+    result is made only of whole lines from the three texts, with their line endings, so nothing is reworded.
+    """
+    if mine == theirs or base == mine:
+        return theirs, []
+    if base == theirs:
+        return mine, []
+    # a missing line ending at the very end doesn't make the last line a change: compare as if every text had
+    # one, and put back what the side that changed the end did (both sides agree, or one kept the base's)
+    eol = "\r\n" if "\r\n" in base + mine + theirs else "\n"
+    bare = [x != "" and not x.endswith(("\n", "\r")) for x in (base, mine, theirs)]
+    end_bare = bare[1] if bare[1] == bare[2] else bare[1] if bare[2] == bare[0] else bare[2]
+    b, m, t = ((x + eol if nb else x).splitlines(keepends=True) for x, nb in zip((base, mine, theirs), bare))
+    hunks = sorted([(s0, e0, ls, 0) for s0, e0, ls in _hunks(b, m)] + [(s0, e0, ls, 1) for s0, e0, ls in _hunks(b, t)],
+                   key=lambda h: (h[0], h[1]))
+    out, conflicts, pos, i = [], [], 0, 0
+    while i < len(hunks):
+        lo, hi, group = hunks[i][0], hunks[i][1], [hunks[i]]
+        i += 1
+        while i < len(hunks):                         # hunks that overlap, or lines added at the same place, form one group
+            s0, e0 = hunks[i][0], hunks[i][1]
+            if s0 < hi or (s0 == e0 == lo == hi):
+                group.append(hunks[i]); hi = max(hi, e0); i += 1
+            else:
+                break
+        out += b[pos:lo]
+        sides = [[h for h in group if h[3] == k] for k in (0, 1)]
+
+        def apply(hs):                                # one side's text for base[lo:hi]
+            res, at = [], lo
+            for s0, e0, ls, _ in hs:
+                res += b[at:s0] + ls; at = e0
+            return res + b[at:hi]
+        if not sides[0] or not sides[1]:
+            out += apply(group)                       # only one side changed here
+        else:
+            mm, tt = apply(sides[0]), apply(sides[1])
+            if mm == tt:
+                out += tt
+            elif lo == hi:                            # both only added lines at the same place: keep both
+                out += tt + [x for x in mm if x not in tt]
+            else:
+                conflicts.append({"line": len(out) + 1, "base": b[lo:hi], "mine": mm, "theirs": tt})
+                out += tt
+        pos = hi
+    out += b[pos:]
+    text = "".join(out)
+    if end_bare and text.endswith(eol):
+        text = text[:-len(eol)]
+    return text, conflicts
+
+
 # ---------- the portfolio (--serve: the Projects folder next to planner.py) ----------
 #
 # A portfolio is a folder (PROJECTS); each sub-folder is a project:
@@ -2455,6 +2521,65 @@ def _hide(req):
     return tuple(hide)
 
 
+class Changes:
+    """2.1.0: what changed on disk, for the pages listening on /api/events: a counter and the last changes."""
+
+    def __init__(self):
+        import threading
+        self.cond, self.seq, self.log, self.closed = threading.Condition(), 0, [], False
+
+    def publish(self, paths, tree=False):
+        with self.cond:
+            self.seq += 1
+            self.log = self.log[-199:] + [(self.seq, sorted(paths), tree)]
+            self.cond.notify_all()
+
+    def since(self, n, wait):
+        """-> (the newest number, [(number, paths, tree)] after `n`), waiting up to `wait` seconds for one."""
+        with self.cond:
+            self.cond.wait_for(lambda: self.seq > n or self.closed, wait)
+            return self.seq, [e for e in self.log if e[0] > n]
+
+    def close(self):
+        with self.cond:
+            self.closed = True
+            self.cond.notify_all()
+
+
+def scan_files(root=None, path=None):
+    """{name: (size, mtime_ns)} of the notes the page can show: every file and folder under `root` (a portfolio;
+    names relative to it, folders ending in "/", hidden ones skipped), or the one file `path`."""
+    out = {}
+    if path is not None:
+        try:
+            st = os.stat(path)
+            out[path] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            pass
+        return out
+    for here, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        rel = os.path.relpath(here, root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel + "/"
+        for d in dirs:
+            out[rel + d + "/"] = (0, 0)
+        for f in files:
+            if f.startswith("."):
+                continue
+            try:
+                st = os.stat(os.path.join(here, f))
+            except OSError:
+                continue
+            out[rel + f] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def changed_files(old, new):
+    """-> (names added, removed or changed, whether files or folders came or went)."""
+    paths = {k for k in old.keys() | new.keys() if old.get(k) != new.get(k)}
+    return {k.rstrip("/") for k in paths}, old.keys() != new.keys()
+
+
 def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     """The server: 127.0.0.1 only unless `host` says otherwise (`--host 0.0.0.0`: every network interface, for a
     trusted LAN; no Host/Origin check or login then). Port 0 picks a free port.
@@ -2481,6 +2606,30 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     # Requests run on their own threads, so a stalled browser connection can't block the others. TODAY and
     # LOG_END are module globals set per request, and files are read-modify-written, so API work takes turns.
     lock = threading.RLock()
+    # 2.1.0: watch the notes on disk (every SCAN_SECONDS, and right after each POST) and tell the open pages
+    changes, stop, watched = Changes(), threading.Event(), (folio is not None or notes_path is not None)
+    seen = {"files": scan_files(folio) if folio is not None else scan_files(path=notes_path) if notes_path else {}}
+    scan_lock = threading.Lock()
+
+    def rescan():
+        if not watched:
+            return
+        with scan_lock:
+            try:
+                now = scan_files(folio) if folio is not None else scan_files(path=notes_path)
+            except OSError:                            # a folder that vanished mid-scan: try again next time
+                return
+            paths, tree = changed_files(seen["files"], now)
+            seen["files"] = now
+        if paths:
+            changes.publish(paths, tree)
+
+    def watch():
+        while not stop.wait(SCAN_SECONDS):
+            try:
+                rescan()
+            except Exception:                          # a folder that vanished mid-scan: try again next time
+                pass
 
     class Handler(BaseHTTPRequestHandler):
         timeout = 10                                   # seconds a connection may sit silent before it is dropped
@@ -2524,6 +2673,9 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                     return
                 with lock:
                     self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
+            elif path == "/api/events":
+                if self._trusted():
+                    self._events()
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -2553,6 +2705,8 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                 pass                                    # the browser left before the answer was sent
             except Exception as e:                      # one bad request must never take the server down
                 self._json(500, {"error": f"server error: {type(e).__name__}: {e}"})
+            finally:
+                rescan()                                # tell the other open pages at once, not at the next scan
 
         def _post(self, raw):
             global TODAY, LOG_END
@@ -2724,6 +2878,33 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                 return self._json(500, {"error": f"can't read {p}: {e}"})
             self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version})
 
+        def _events(self):
+            """2.1.0: a stream of Server-Sent Events: `changed` {paths, tree} whenever notes change on disk (paths as
+            the page names them: portfolio paths, or the command-line file's path), and a comment every
+            15 s so the connection stays open. The page's EventSource reconnects by itself."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            n = changes.seq
+            try:
+                self.wfile.write(b"retry: 2000\n\n")
+                self.wfile.flush()
+                while not stop.is_set():
+                    n2, entries = changes.since(n, 15)
+                    if stop.is_set():
+                        break
+                    if entries:
+                        paths = sorted({p for e in entries for p in e[1]})
+                        msg = json.dumps({"paths": paths, "tree": any(e[2] for e in entries)})
+                        self.wfile.write(f"event: changed\ndata: {msg}\n\n".encode())
+                    else:
+                        self.wfile.write(b": still here\n\n")
+                    self.wfile.flush()
+                    n = n2
+            except OSError:
+                pass                                    # the page went away
+
         def _save(self, req):
             p = self._target(req.get("path"))
             if p is None:
@@ -2735,7 +2916,17 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                     os.makedirs(os.path.dirname(p), exist_ok=True)
                 version = write_notes(p, req["text"], req.get("version"), bool(req.get("force")))
             except FileConflict as e:
-                _, current = read_notes(p)
+                disk, current = read_notes(p)
+                base = req.get("base")
+                if isinstance(base, str) and current is not None:   # 2.1.0: changed on disk meanwhile: merge if the
+                    crlf = "\r\n" in disk and disk.count("\r\n") == disk.count("\n")   # changes don't clash
+                    merged, clashes = merge3(base, req["text"], disk.replace("\r\n", "\n") if crlf else disk)
+                    if not clashes:
+                        try:
+                            version = write_notes(p, merged, current)
+                        except (FileConflict, OSError) as e2:
+                            return self._json(409, {"error": str(e2), "conflict": True, "version": read_notes(p)[1]})
+                        return self._json(200, {"version": version, "text": merged, "merged": True})
                 return self._json(409, {"error": str(e), "conflict": True, "version": current})
             except OSError as e:
                 return self._json(500, {"error": f"can't save {p}: {e}"})
@@ -2748,7 +2939,16 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
         daemon_threads = True                          # a stuck request never keeps the program from exiting
         request_queue_size = 128                       # the default 5 resets connections when a browser opens a burst
 
-    return Server((host, port), Handler)
+        def server_close(self):
+            stop.set()
+            changes.close()                            # wakes the event streams, which then end
+            super().server_close()
+
+    server = Server((host, port), Handler)
+    server.changes, server.rescan = changes, rescan
+    if watched:
+        threading.Thread(target=watch, daemon=True).start()
+    return server
 
 
 def serve(port, notes_path=None, portfolio=None, host="127.0.0.1"):

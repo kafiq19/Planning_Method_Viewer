@@ -5,6 +5,23 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.0  2026-11-21  The page is live
+-------------------------------------------------
+- New: when a notes file changes on disk (by hand in another editor, from
+  another browser tab, and soon by sync from your other devices), every
+  open page shows it within about two seconds, with no reload: the open
+  page, All projects, the Planner and the drawer's list of projects.
+- New: if you were typing in the text box when the file changed, the two
+  are merged line by line and both kept. Only a change to the same line
+  on both sides asks which to keep, as before.
+- This is the first step of syncing your notes across devices (2.1.x).
+- Code: Changes, scan_files, changed_files, SCAN_SECONDS; make_server
+  watches the folder (every 2 s and after each POST) and streams
+  GET /api/events (Server-Sent Events); merge3 (line-based, 3-way);
+  POST /api/file takes base and merges. Page: listen, onDiskChange,
+  checkDisk (also on focus); save sends base and takes merged text.
+
+
 2.0.28  2026-11-21  Merged main: S is 2 points, threaded server, --host
 -------------------------------------------------
 - The changes made on main (listed below as "on main") join the rest:

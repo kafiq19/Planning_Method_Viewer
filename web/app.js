@@ -196,6 +196,7 @@ async function leaveFile() {                                // before showing an
 }
 
 async function startFileMode() {
+  listen();
   let r, d;
   try { [r, d] = await fileApi(); } catch (e) { return showFile(); }   // page opened without the server
   if (!r.ok) return showFile();
@@ -216,11 +217,15 @@ async function save(force) {
   f.saving = true;
   showFile(["Saving…"]);
   try {
-    const body = { path: f.path, text, version: f.version, force: !!force };
+    const body = { path: f.path, text, version: f.version, force: !!force, base: f.saved };   // base: the server merges (2.1.0)
     const [r, d] = await fileApi(body);
     if (r.status === 409 && d.conflict) return conflict();
     if (!r.ok) throw new Error(d.error || r.statusText);
-    f.version = d.version; f.saved = text; f.blocked = false;
+    f.blocked = false;
+    if (d.merged && state.file === f && editor.value === text) {   // changed on disk meanwhile (another device, another
+      f.version = d.version; f.saved = nl(d.text); replaceText(f.saved); schedule();   // editor): both changes kept
+    } else if (d.merged) { f.version = ""; f.saved = text; }   // typed on since: the next save merges again from here
+    else { f.version = d.version; f.saved = text; }
     if (state.file === f) remember();
     showFile();
   } catch (e) {
@@ -244,15 +249,39 @@ function conflict() {                                       // the file changed 
     b("Keep mine and overwrite", () => save(true))]);
 }
 
-window.addEventListener("focus", async () => {              // pick up edits made in another editor
+async function checkDisk() {                                 // pick up edits made elsewhere (another editor, another device)
   if (state.all) return render(false);                      // All projects: read the backlogs again
   if (!state.file || state.file.saving) return;
   const f = state.file;
   let r, d;
   try { [r, d] = await fetchFile(f); } catch (e) { return; }
   if (!r.ok || state.file !== f || f.saving || d.version === f.version) return;
-  if (unsaved()) conflict(); else setFile(d.text, d.version);
-});
+  if (!unsaved()) setFile(d.text, d.version);
+  else if (!f.blocked) save();                              // 2.1.0: the server merges both changes, or says they clash
+  else conflict();
+}
+window.addEventListener("focus", checkDisk);
+/* 2.1.0: live. The server says when notes change on disk (/api/events); the page shown follows at once:
+   the open file is read again (or merged with what is being typed), the views redrawn, the drawer refreshed. */
+let liveTimer = null;
+function onDiskChange(ch) {
+  if (ch.tree && state.folio) refreshFolio().then(() => drawDrawer());
+  const f = state.file;
+  if (f && ch.paths.includes(f.path)) checkDisk();
+  if (state.mode !== "planner" || state.all || !f || !ch.paths.includes(f.path)) {
+    clearTimeout(liveTimer);                                // views over other files (All projects, a page's habits)
+    const redraw = () => {
+      if (document.querySelector("#viewPane input:focus, #viewPane textarea:focus, #viewPane .pickbox")) return void (liveTimer = setTimeout(redraw, 1000));
+      if (state.mode === "planner") render(false);           // an open editor in the views waits until it's closed
+    };
+    redraw();
+  }
+}
+function listen() {
+  if (!window.EventSource || location.protocol === "file:") return;
+  const es = new EventSource("/api/events");
+  es.addEventListener("changed", e => { try { onDiskChange(JSON.parse(e.data)); } catch (err) {} });
+}
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }

@@ -58,6 +58,8 @@ If the page ever freezes or draws wrongly, open it as `http://localhost:8765/?de
 
 If you start it with a file (`--serve notes.txt`), the page opens that file and **Save** (or Ctrl/⌘-S) writes straight back to it. The header shows "Saved", or a **• Unsaved · Save** button when you have changes. If the file was changed somewhere else in the meantime, nothing is overwritten: you choose between loading the version on disk and keeping yours. Come back to the page after editing the file elsewhere and it picks up the change. Nothing is saved until you press Save.
 
+**The page stays live (2.1.0).** When a notes file changes on disk (edited by hand in another editor, from another browser tab, or later by sync from another device), every open page shows the change within about two seconds, without a reload. If you were typing in the text box at that moment, your change and the other one are merged line by line, so both are kept. Only when both changed the *same* line does it ask you which to keep.
+
 Pick how to view it:
 
 | Mode | Shows |
