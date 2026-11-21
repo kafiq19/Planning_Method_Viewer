@@ -5,6 +5,28 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.4  2026-11-21  Install on every device
+-------------------------------------------------
+- New: python3 planner.py --autostart on starts KAFEEN when you log in
+  (and now): a systemd user service on Linux, a LaunchAgent on macOS, the
+  Startup folder on Windows. --hub does the same for the hub. off undoes
+  it. --serve --no-browser runs without opening a browser.
+- New: hidden projects, My initials and Default effort follow you: they
+  live in Projects/settings.json and sync like your notes (setting by
+  setting, never a clash). A choice this browser made before is shared
+  the first time.
+- New: the hub zips your notes once a day into Projects/.kafeen/backups/
+  (the last 30 kept) and clears versions older than 90 days that no file
+  uses.
+- The README has the full setup guide: Tailscale, the hub, each
+  computer, your phone.
+- Code: autostart_plan, autostart; read_settings, write_settings,
+  settings_text, merge_settings (Hub.put merges settings.json by
+  setting); GET/POST /api/settings; hub_backup, backup_due, prune_blobs,
+  BACKUPS_KEPT, BLOB_DAYS (a thread on the hub). Page: putSetting,
+  pullSettings.
+
+
 2.1.3  2026-11-21  Choose what to keep when devices clash
 -------------------------------------------------
 - New: when a change made on this device clashed with another device's

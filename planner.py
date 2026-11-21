@@ -32,6 +32,8 @@ USAGE
                                        The page is live: notes changed on disk show at once (2.1.0)
   --setup-hub [FOLDER] [--new-code]    make the Projects folder (or FOLDER) the sync hub; prints the pairing code
   --serve --hub [--host ADDR]          serve the hub: paired devices keep their Projects folder in step (2.1.1)
+  --autostart on|off [--hub]           start KAFEEN (or the hub) when you log in: systemd (Linux), LaunchAgent
+                                       (macOS), Startup folder (Windows) (2.1.4). --no-browser: --serve opens none
   --pair HUB CODE [--name NAME]        pair this computer's Projects folder with the hub (2.1.2); then --serve
                                        keeps it in step, live, and catches up after being offline. --unpair stops
 
@@ -2764,6 +2766,12 @@ class Hub:
                 write_bytes(full, data)
                 self.refresh(device)
                 return {"status": "ok", "hash": self.files.get(rel)}
+            if rel == SETTINGS_FILE:                    # 2.1.4: settings merge setting by setting
+                merged = merge_settings(None if base is None else self.blob(base), data, self.blob(cur))
+                if merged is not None:
+                    write_bytes(full, merged)
+                    self.refresh(device)
+                    return {"status": "merged", "hash": self.files.get(rel), "data": merged}
             if base is None:                            # two different files that never had a common version
                 return {"status": "conflict", "hash": cur}
             old, theirs = self.blob(base), self.blob(cur)
@@ -3256,6 +3264,218 @@ def resolve_clash(root, cid, choices):
     return out
 
 
+# ---- settings that follow you across devices (2.1.4): Projects/settings.json, an ordinary synced file ----
+
+SETTINGS_FILE = "settings.json"
+SETTINGS = {"hiddenProjects": [], "defWho": "", "defEffort": ""}
+
+
+def _setting_ok(key, value):
+    if key == "hiddenProjects":
+        return isinstance(value, list) and len(value) <= 500 and all(isinstance(x, str) and 0 < len(x) <= 120 for x in value)
+    if key == "defWho":
+        return isinstance(value, str) and len(value) <= 14
+    if key == "defEffort":
+        return value in ("", *EFFORT)
+    return False
+
+
+def read_settings(root):
+    """-> ({setting: value} for the settings in Projects/settings.json, its version); bad or unknown ones left out."""
+    import json
+    text, version = read_notes(os.path.join(root, SETTINGS_FILE))
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {k: v for k, v in data.items() if k in SETTINGS and _setting_ok(k, v)}, version
+
+
+def write_settings(root, changes):
+    """Set some settings (ValueError for an unknown setting or a bad value); -> the settings now. One setting per line
+    (sorted), so two devices changing different settings merge line by line like any notes file."""
+    import json
+    if not isinstance(changes, dict) or not all(k in SETTINGS and _setting_ok(k, v) for k, v in changes.items()):
+        raise ValueError("unknown setting or bad value")
+    current, version = read_settings(root)
+    new = dict(current, **changes)
+    if new != current or version is None:
+        write_notes(os.path.join(root, SETTINGS_FILE), settings_text(new), version)
+    return new
+
+
+def settings_text(settings):
+    import json
+    lines = [f"  {json.dumps(k)}: {json.dumps(settings[k], ensure_ascii=False)}" for k in sorted(settings)]
+    return "{\n" + ",\n".join(lines) + "\n}\n"
+
+
+def merge_settings(base, mine, theirs):
+    """settings.json changed on two devices (bytes; base None: both made it): setting by setting, never a clash.
+    A setting this device changed is its; otherwise the hub's. -> the merged bytes, or None if not settings."""
+    import json
+    try:
+        b, m, t = (json.loads(x.decode("utf-8")) if x and x.strip() else {} for x in (base, mine, theirs))
+    except ValueError:
+        return None
+    if not all(isinstance(x, dict) for x in (b, m, t)):
+        return None
+    out = dict(t)
+    for k, v in m.items():
+        if b.get(k) != v:
+            out[k] = v
+    for k in b:
+        if k not in m and t.get(k) == b[k]:
+            out.pop(k, None)
+    return settings_text(out).encode("utf-8")
+
+
+# ---- backups on the hub (2.1.4): a zip of the notes once a day, the newest BACKUPS_KEPT kept ----
+
+BACKUPS_KEPT, BLOB_DAYS = 30, 90
+
+
+def hub_backup(root, now=None):
+    """Zip every visible file under `root` into .kafeen/backups/YYYY-MM-DD-HHMM.zip, keep the newest BACKUPS_KEPT;
+    -> the zip's path."""
+    import zipfile
+    now = now or datetime.now()
+    folder = os.path.join(root, SYNC_DIR, "backups")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, now.strftime("%Y-%m-%d-%H%M") + ".zip")
+    tmp = path + ".part"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for here, ds, fs in os.walk(root):
+            ds[:] = sorted(d for d in ds if not d.startswith("."))
+            for name in sorted(fs):
+                if not name.startswith("."):
+                    full = os.path.join(here, name)
+                    z.write(full, os.path.relpath(full, root).replace(os.sep, "/"))
+    os.replace(tmp, path)
+    for old in sorted(n for n in os.listdir(folder) if n.endswith(".zip"))[:-BACKUPS_KEPT]:
+        os.remove(os.path.join(folder, old))
+    return path
+
+
+def backup_due(root, now=None, hours=20):
+    """Whether the newest backup is older than `hours` (or there is none)."""
+    folder = os.path.join(root, SYNC_DIR, "backups")
+    try:
+        newest = max((n for n in os.listdir(folder) if n.endswith(".zip")), default=None)
+    except OSError:
+        newest = None
+    if newest is None:
+        return True
+    try:
+        made = datetime.strptime(newest[:15], "%Y-%m-%d-%H%M")
+    except ValueError:
+        return True
+    return ((now or datetime.now()) - made).total_seconds() > hours * 3600
+
+
+def prune_blobs(hub, days=BLOB_DAYS):
+    """Old versions on the hub: remove those older than `days` that no file is at now; -> how many went.
+    (A device away longer than that merges a clash as a whole-file choice instead.)"""
+    import time
+    limit, keep, n = time.time() - days * 86400, set(hub.files.values()), 0
+    for name in os.listdir(hub.blobs):
+        p = os.path.join(hub.blobs, name)
+        try:
+            if name not in keep and os.stat(p).st_mtime < limit:
+                os.remove(p)
+                n += 1
+        except OSError:
+            pass
+    return n
+
+
+# ---- start at login (2.1.4): --autostart on|off ----
+
+def autostart_plan(system, hub=False, port=8765, python=None, script=None, home=None, uid=None):
+    """-> (the file to write, its content, [commands to start it now], [commands to stop it]) for `system` ("Linux",
+    "Darwin" or "Windows"); ValueError for another."""
+    import shlex
+    python = python or sys.executable
+    script = script or os.path.abspath(__file__)
+    home = home or os.path.expanduser("~")
+    args = [python, script, "--serve", "--no-browser", "--port", str(port)] + (["--hub", "--host", "0.0.0.0"] if hub else [])
+    name = "kafeen-hub" if hub else "kafeen"
+    if system == "Linux":
+        path = os.path.join(home, ".config", "systemd", "user", name + ".service")
+        content = (f"[Unit]\nDescription=KAFEEN Planner{' sync hub' if hub else ''}\nAfter=network-online.target\n\n"
+                   f"[Service]\nExecStart={shlex.join(args)}\nWorkingDirectory={os.path.dirname(script)}\n"
+                   "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n")
+        return (path, content, [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", name + ".service"]],
+                [["systemctl", "--user", "disable", "--now", name + ".service"]])
+    if system == "Darwin":
+        label = "com.kafeen." + name
+        path = os.path.join(home, "Library", "LaunchAgents", label + ".plist")
+        log = os.path.join(home, "Library", "Logs", name + ".log")
+        x = lambda v: v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        content = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                   '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n'
+                   f"\t<key>Label</key>\n\t<string>{x(label)}</string>\n\t<key>ProgramArguments</key>\n\t<array>\n"
+                   + "".join(f"\t\t<string>{x(a)}</string>\n" for a in args)
+                   + "\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n"
+                   f"\t<key>WorkingDirectory</key>\n\t<string>{x(os.path.dirname(script))}</string>\n"
+                   f"\t<key>StandardOutPath</key>\n\t<string>{x(log)}</string>\n"
+                   f"\t<key>StandardErrorPath</key>\n\t<string>{x(log)}</string>\n</dict>\n</plist>\n")
+        target = f"gui/{os.getuid() if uid is None else uid}"
+        return path, content, [["launchctl", "bootstrap", target, path]], [["launchctl", "bootout", target, path]]
+    if system == "Windows":
+        appdata = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        path = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+                            "KAFEEN Planner" + (" hub" if hub else "") + ".cmd")
+        w = os.path.join(os.path.dirname(python), "pythonw.exe")
+        runner = w if os.path.exists(w) else python
+        quoted = " ".join([f'"{runner}"', f'"{script}"'] + args[2:])
+        return path, f'@echo off\r\nstart "" {quoted}\r\n', [["cmd", "/c", path]], []
+    raise ValueError(f"--autostart doesn't know {system} yet")
+
+
+def autostart(on, hub=False, port=8765):
+    """Turn starting at login on or off for this computer; -> lines to print."""
+    import platform
+    import subprocess
+    path, content, start, stop = autostart_plan(platform.system(), hub, port)
+    out = []
+    run = lambda cmd: subprocess.run(cmd, capture_output=True, text=True)
+    if on:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):
+            for cmd in stop:
+                run(cmd)                                # replace a running one
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        out.append(f"KAFEEN{' (the sync hub)' if hub else ''} now starts when you log in ({path}).")
+        for cmd in start:
+            try:
+                r = run(cmd)
+                if r.returncode:
+                    out.append(f"Couldn't start it now ({' '.join(cmd)}: {(r.stderr or r.stdout).strip()}); it starts at the next login.")
+                    break
+            except OSError as e:
+                out.append(f"Couldn't start it now ({e}); it starts at the next login.")
+                break
+        else:
+            out.append(f"It's running: open http://localhost:{port}")
+        if hub and platform.system() == "Linux":
+            out.append("So the hub runs even before you log in (after a power cut), run once:  loginctl enable-linger $USER")
+    else:
+        if not os.path.exists(path):
+            return ["KAFEEN wasn't set to start at login."]
+        for cmd in stop:
+            try:
+                run(cmd)
+            except OSError:
+                pass
+        os.remove(path)
+        out.append("KAFEEN no longer starts at login (it stopped now too).")
+    return out
+
+
 class Changes:
     """2.1.0: what changed on disk, for the pages listening on /api/events: a counter and the last changes."""
 
@@ -3439,6 +3659,12 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
             elif path == "/api/events":
                 if self._trusted():
                     self._events()
+            elif path == "/api/settings":              # 2.1.4: settings that follow you across devices
+                if self._trusted():
+                    if folio is None:
+                        return self._json(200, {"settings": None})
+                    with lock:
+                        self._json(200, {"settings": read_settings(folio)[0]})
             elif path == "/api/clashes":               # 2.1.3: the clashes kept aside on this device
                 if self._trusted():
                     self._json(200, {"clashes": list_clashes(folio) if client is not None else []})
@@ -3515,7 +3741,7 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
         def do_POST(self):
             if self.path.startswith("/sync/"):
                 return self._sync_post()
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive", "/api/clashes"):
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive", "/api/clashes", "/api/settings"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -3552,6 +3778,13 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
                     return self._save(req)
                 if self.path == "/api/portfolio":
                     return self._portfolio(req)
+                if self.path == "/api/settings":           # 2.1.4: {set: {setting: value}}
+                    if folio is None:
+                        return self._json(409, {"error": "settings are kept in a Projects folder"})
+                    try:
+                        return self._json(200, {"settings": write_settings(folio, req.get("set"))})
+                    except (ValueError, FileConflict) as e:
+                        return self._json(409, {"error": str(e)})
                 if self.path == "/api/clashes":            # 2.1.3: {id, choices}
                     if client is None:
                         return self._json(409, {"error": "this folder isn't paired with a hub"})
@@ -3804,12 +4037,25 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
     server.changes, server.rescan, server.hub, server.sync = changes, rescan, hub, client
     if watched:
         threading.Thread(target=watch, daemon=True).start()
+    if hub is not None and sync:                       # 2.1.4: a backup a day, old versions pruned
+        def backups():
+            while True:
+                try:
+                    if backup_due(folio):
+                        with lock:
+                            hub_backup(folio)
+                            prune_blobs(hub)
+                except OSError:
+                    pass
+                if stop.wait(3600):
+                    break
+        threading.Thread(target=backups, daemon=True).start()
     if client is not None and sync:
         client.start()
     return server
 
 
-def serve(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False):
+def serve(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False, browser=True):
     import threading
     import webbrowser
 
@@ -3826,7 +4072,7 @@ def serve(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False):
         print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
-    if local:                                          # a server on the network is usually headless
+    if local and browser:                              # a server on the network is usually headless
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
@@ -3932,11 +4178,29 @@ Then, on each computer:
         os.remove(conf)
         print("Unpaired: the files stay as they are and no longer sync. Pair again with --pair.")
         return
+    if "--autostart" in args:                                  # 2.1.4: start KAFEEN (or the hub) at login
+        args.remove("--autostart")
+        hub = "--hub" in args
+        if hub:
+            args.remove("--hub")
+        port = take_option(args, "--port") or "8765"
+        if len(args) != 1 or args[0] not in ("on", "off") or not port.isdigit():
+            sys.exit("planner.py: use --autostart on|off [--hub] [--port N]")
+        if hub and args[0] == "on" and not os.path.exists(os.path.join(PROJECTS, SYNC_DIR, "hub.json")):
+            sys.exit("planner.py: make this computer the hub first: python3 planner.py --setup-hub")
+        try:
+            print("\n".join(autostart(args[0] == "on", hub, int(port))))
+        except (OSError, ValueError) as e:
+            sys.exit(f"planner.py: {e}")
+        return
     if "--serve" in args:
         args.remove("--serve")
         hub = "--hub" in args
         if hub:
             args.remove("--hub")
+        browser = "--no-browser" not in args
+        if not browser:
+            args.remove("--no-browser")
         port = take_option(args, "--port") or "8765"
         host = take_option(args, "--host") or "127.0.0.1"
         if not port.isdigit() or not 0 < int(port) < 65536:
@@ -3948,7 +4212,7 @@ Then, on each computer:
                 os.makedirs(PROJECTS, exist_ok=True)
             except OSError as e:
                 sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
-            return serve(int(port), portfolio=PROJECTS, host=host, hub=hub)
+            return serve(int(port), portfolio=PROJECTS, host=host, hub=hub, browser=browser)
         if hub:
             sys.exit("planner.py: --hub serves the Projects folder, not one notes file")
         notes = os.path.realpath(args[0])                      # follow a symlink to the real file
@@ -3960,7 +4224,7 @@ Then, on each computer:
             read_notes(notes)
         except (OSError, UnicodeDecodeError) as e:
             sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
-        return serve(int(port), notes, host=host)
+        return serve(int(port), notes, host=host, browser=browser)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())

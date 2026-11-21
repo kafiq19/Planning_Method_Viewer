@@ -12,6 +12,7 @@ import stat
 import subprocess
 import tempfile
 import sys
+import shutil
 import socket
 import threading
 import time
@@ -20,7 +21,7 @@ import unittest.mock
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import planner
 
@@ -1730,11 +1731,14 @@ class TestCLI(unittest.TestCase):
                 unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")), \
                 unittest.mock.patch.object(planner, "serve") as serve:
             planner.main(["planner.py", "--serve", "--port", "9001"])          # made if it's missing
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1", hub=False)
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1", hub=False, browser=True)
             self.assertTrue(os.path.isdir(planner.PROJECTS))
             serve.reset_mock()
             planner.main(["planner.py", "--serve", "--port", "9001", "--host", "0.0.0.0"])
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0", hub=False)
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0", hub=False, browser=True)
+            serve.reset_mock()
+            planner.main(["planner.py", "--serve", "--hub", "--no-browser"])              # 2.1.4: as --autostart runs it
+            serve.assert_called_once_with(8765, portfolio=planner.PROJECTS, host="127.0.0.1", hub=True, browser=False)
 
     def test_import_defaults_to_the_projects_folder(self):
         with tempfile.TemporaryDirectory() as d, \
@@ -2933,3 +2937,121 @@ class TestClashes(SyncBase):                            # 2.1.3: choosing betwee
             self.assertEqual(json.loads(r.read())["path"], "HDC/backlog.kf")
         self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "~- a\n- b\n- c\n")
         self.assertEqual(sb.sync.status["conflicts"], 0)
+
+
+class TestInstall(SyncBase):                                  # 2.1.4: synced settings, backups, start at login
+    def test_settings(self):
+        self.assertEqual(planner.read_settings(self.a), ({}, None))
+        self.assertEqual(planner.write_settings(self.a, {"defWho": "KA", "hiddenProjects": ["Example"]}),
+                         {"defWho": "KA", "hiddenProjects": ["Example"]})
+        self.assertEqual(self.get(self.a, "settings.json"), '{\n  "defWho": "KA",\n  "hiddenProjects": ["Example"]\n}\n')
+        for bad in ({"theme": "dark"}, {"defEffort": "huge"}, {"defWho": 3}, {"hiddenProjects": "Example"}, "x"):
+            with self.assertRaises(ValueError):
+                planner.write_settings(self.a, bad)
+        self.put(self.a, "settings.json", '{"defWho": "KA", "evil": 1, "defEffort": 7}')   # edited by hand: the good ones
+        self.assertEqual(planner.read_settings(self.a)[0], {"defWho": "KA"})
+
+    def test_settings_follow_you(self):
+        self.ca.round(); self.cb.round()
+        planner.write_settings(self.a, {"defWho": "KA"})
+        planner.write_settings(self.b, {"defEffort": "m"})       # another setting, on another device, while apart
+        self.ca.round(); self.cb.round(); self.ca.round()
+        for d in (self.a, self.b):
+            self.assertEqual(planner.read_settings(d)[0], {"defWho": "KA", "defEffort": "m"})
+        planner.write_settings(self.a, {"defWho": "RT"})         # then both change the same setting: the device that
+        planner.write_settings(self.b, {"defWho": "JS", "hiddenProjects": ["Example"]})   # syncs later wins; no clash
+        self.ca.round(); self.cb.round(); self.ca.round()
+        for d in (self.a, self.b):
+            self.assertEqual(planner.read_settings(d)[0], {"defWho": "JS", "defEffort": "m", "hiddenProjects": ["Example"]})
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_settings_api(self):
+        sa = planner.make_server(0, None, portfolio=self.a, sync=False)
+        threading.Thread(target=sa.serve_forever, daemon=True).start()
+        self.addCleanup(sa.server_close)
+        self.addCleanup(sa.shutdown)
+        url = f"http://127.0.0.1:{sa.server_address[1]}/api/settings"
+        req = urllib.request.Request(url, json.dumps({"set": {"defEffort": "s"}}).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read()), {"settings": {"defEffort": "s"}})
+        with urllib.request.urlopen(url) as r:
+            self.assertEqual(json.loads(r.read()), {"settings": {"defEffort": "s"}})
+        bad = urllib.request.Request(url, json.dumps({"set": {"x": 1}}).encode(), {"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(bad)
+        e.exception.close()
+        self.assertEqual(e.exception.code, 409)
+        with urllib.request.urlopen(f"http://127.0.0.1:{sa.server_address[1]}/api/portfolio") as r:
+            self.assertNotIn("settings.json", json.dumps(json.loads(r.read())))   # not a project
+
+    def test_backups(self):
+        import zipfile
+        self.put(self.hubdir, ".trash/old.kf", "gone\n")
+        shutil.rmtree(os.path.join(self.hubdir, ".kafeen", "backups"), ignore_errors=True)   # the hub's own, at start
+        self.assertTrue(planner.backup_due(self.hubdir))
+        p = planner.hub_backup(self.hubdir, datetime(2026, 11, 21, 3, 0))
+        with zipfile.ZipFile(p) as z:
+            self.assertEqual(z.namelist(), ["HDC/backlog.kf"])            # the notes, not .kafeen or .trash
+            self.assertEqual(z.read("HDC/backlog.kf"), b"- a\n- b\n- c\n")
+        self.assertFalse(planner.backup_due(self.hubdir, datetime(2026, 11, 21, 20, 0)))
+        self.assertTrue(planner.backup_due(self.hubdir, datetime(2026, 11, 22, 3, 0)))
+        for day in range(1, 35):                                         # only the newest 30 stay
+            planner.hub_backup(self.hubdir, datetime(2026, 10, 1) + timedelta(days=day))
+        names = sorted(os.listdir(os.path.join(self.hubdir, ".kafeen", "backups")))
+        self.assertEqual((len(names), names[-1]), (30, "2026-11-21-0300.zip"))
+
+    def test_old_versions_are_pruned(self):
+        hub = self.hub.hub
+        self.ca.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        self.ca.round()
+        old = planner._sha(b"- a\n- b\n- c\n")
+        self.assertIsNotNone(hub.blob(old))
+        self.assertEqual(planner.prune_blobs(hub), 0)                    # not old yet
+        past = time.time() - 100 * 86400
+        for n in os.listdir(hub.blobs):
+            os.utime(os.path.join(hub.blobs, n), (past, past))
+        self.assertEqual(planner.prune_blobs(hub), 1)                    # the old version; the current one stays
+        self.assertIsNone(hub.blob(old))
+        self.assertIsNotNone(hub.blob(planner._sha(b"!- a\n- b\n- c\n")))
+
+    def test_autostart_files(self):
+        py, script, home = "/usr/bin/python3", "/opt/kafeen/planner.py", "/home/k"
+        path, unit, start, stop = planner.autostart_plan("Linux", True, 8765, py, script, home)
+        self.assertEqual(path, "/home/k/.config/systemd/user/kafeen-hub.service")
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/kafeen/planner.py --serve --no-browser --port 8765 --hub --host 0.0.0.0\n", unit)
+        self.assertIn("WantedBy=default.target", unit)
+        self.assertEqual(start[-1], ["systemctl", "--user", "enable", "--now", "kafeen-hub.service"])
+        path, plist, start, stop = planner.autostart_plan("Darwin", False, 8765, py, script, "/Users/k", uid=501)
+        self.assertEqual(path, "/Users/k/Library/LaunchAgents/com.kafeen.kafeen.plist")
+        self.assertIn("<array>\n\t\t<string>/usr/bin/python3</string>\n\t\t<string>/opt/kafeen/planner.py</string>\n"
+                      "\t\t<string>--serve</string>\n\t\t<string>--no-browser</string>\n\t\t<string>--port</string>\n"
+                      "\t\t<string>8765</string>\n\t</array>", plist)
+        self.assertIn("<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>", plist)
+        try:
+            import plistlib                                              # where the XML library works: a valid plist
+            self.assertEqual(plistlib.loads(plist.encode())["Label"], "com.kafeen.kafeen")
+        except ImportError:
+            pass
+        self.assertEqual(start, [["launchctl", "bootstrap", "gui/501", path]])
+        with unittest.mock.patch.dict(os.environ, {"APPDATA": r"C:\Users\k\AppData\Roaming"}):
+            path, cmd, start, stop = planner.autostart_plan("Windows", False, 8765, r"C:\Python\python.exe", r"C:\KAFEEN Planner\planner.py", r"C:\Users\k")
+        self.assertTrue(path.endswith("KAFEEN Planner.cmd") and "Startup" in path)
+        self.assertIn('"C:\\KAFEEN Planner\\planner.py" --serve --no-browser --port 8765', cmd)
+        with self.assertRaises(ValueError):
+            planner.autostart_plan("Plan9")
+
+    def test_autostart_on_and_off(self):
+        with tempfile.TemporaryDirectory() as home, \
+                unittest.mock.patch("os.path.expanduser", return_value=home), \
+                unittest.mock.patch("platform.system", return_value="Linux"), \
+                unittest.mock.patch("subprocess.run") as run:
+            run.return_value = unittest.mock.Mock(returncode=0, stdout="", stderr="")
+            out = planner.autostart(True)
+            unit = os.path.join(home, ".config", "systemd", "user", "kafeen.service")
+            self.assertTrue(os.path.exists(unit))
+            self.assertIn("http://localhost:8765", out[-1])
+            self.assertEqual(run.call_args_list[-1].args[0], ["systemctl", "--user", "enable", "--now", "kafeen.service"])
+            planner.autostart(False)
+            self.assertFalse(os.path.exists(unit))
+            self.assertEqual(planner.autostart(False), ["KAFEEN wasn't set to start at login."])

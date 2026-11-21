@@ -200,35 +200,58 @@ The header shows where you are (`HDC › Notes › Kickoff call`); click it to o
 
 **Habits.** Each project has a **Habits** page (`habits.kf`) for repeating tasks. Every habit is a task with how often it repeats: `- stretch *daily`, `- gym (KA) *weekly Mon, Wed, Fri`, `- standup *weekdays`, `- rent *monthly 1st`. The page shows this week with a tick box per day; click one when you've done it (days that haven't come yet can't be ticked). Ticks are written in a note under the habit, `-- done Nov02 Nov03`. Click **Every** to change how often, and **+ Add habit** to add one (a name and how often). **‹ ›** steps through the weeks. Your habits also show in the **Planner**, each marked 🔁: on the Day and Week levels, each day lists the habits due that day, with the same tick boxes; on the Month, Season and Year levels, each column lists every habit with the days done out of those due there (`gym 11/12`), and the panel on the right lists them for the whole period. A day you tick that wasn't due counts too (as done and as a day). **Upcoming** lists them too, under **Habits**: each habit due in the next 14 days with its next day, and a tick box when it's due today (on All projects, and on a project's Backlog page with that project's habits). Give a habit an effort in the Habits page's **Effort** column (or write it, `- gym (KA) (m) *weekly Mon, Wed, Fri`): it counts once per day, so it adds to each column's `done/planned` points and the period's total. In January, the page offers to move last year's ticks to the archive. To retire a habit, mark it done (or delete it from its **⋯**).
 
-## Sync across your devices (being built)
+## Sync across your devices
 
-KAFEEN is learning to keep your notes the same on every device: your computers each run KAFEEN on their own copy, and a **hub** on an always-on home computer keeps them in step, live, over [Tailscale](https://tailscale.com) (free) so it works at home and away. Your notes never leave your own machines. Phones open the hub's page.
+Your computers each run KAFEEN on their own copy of `Projects`, and a **hub** (an always-on computer at home) keeps every copy the same, live: tick a task on the laptop and it is ticked on the desktop and your phone a second later. It works at home and away, through [Tailscale](https://tailscale.com), a free private network between your own devices. Your notes never go to anyone else's server. A device that is offline keeps working and catches up when it's back.
 
-**1. The hub**, on the home computer (once):
+### Set it up (once)
 
-```
-python3 planner.py --setup-hub          # makes the pairing code (shown once; keep it)
-python3 planner.py --serve --hub --host 0.0.0.0
-```
+You need Python 3.8 or newer on each computer, and this folder (`planner.py`, `web/`) on each.
 
-The hub keeps a numbered log of every change and every version of every file in `Projects/.kafeen/` (hidden). `--setup-hub --new-code` replaces a lost code (every device then pairs again).
+**1. Tailscale on every device.** Install it from tailscale.com on the home server, each computer and your phone, and sign in with the same account (the free Personal plan is enough). Give the home server a short name in the Tailscale admin page, for example `kafeen-hub`. From now on every device reaches it as `http://kafeen-hub:8765`, at home or away.
 
-**2. Each computer** (once), then run KAFEEN as usual:
+**2. The hub (the home server, Linux).**
 
 ```
-python3 planner.py --pair http://kafeen-hub:8765 kfn-…   # the hub's Tailscale name and the pairing code
-python3 planner.py --serve
+python3 planner.py --setup-hub              # shows the pairing code once: write it down
+python3 planner.py --autostart on --hub     # runs the hub now and whenever the server starts
+loginctl enable-linger $USER                # so it starts after a power cut, before anyone logs in
 ```
 
-Pair your first computer while the hub's folder is still empty: its projects fill the hub. Later computers should start with an empty `Projects` folder (or just the Example) and receive everything. From then on:
+If this server already has your projects, they are what the hub starts with. Otherwise it starts empty and your first computer fills it (next step).
 
-- A change on one computer appears on the others within a second or two, in the open pages too.
-- **Offline is fine.** Keep working; the header says `Offline · 3 waiting`, and everything is sent when the hub is reachable again. Changes to different lines merge by themselves.
+**3. Each computer (Mac, Windows, Linux).**
+
+```
+python3 planner.py --pair http://kafeen-hub:8765 kfn-…   # the pairing code from step 2
+python3 planner.py --autostart on                           # KAFEEN runs at login: open http://localhost:8765
+```
+
+Pair the computer that has your projects first: an empty hub takes them. Any computer paired after that should start with an empty `Projects` folder (or just the Example): it receives everything. If it has its own different copy of a file, the hub's version wins and yours is set aside as a clash to look at, never lost.
+
+**4. Your phone.** With Tailscale on, open `http://kafeen-hub:8765` and add it to the home screen. It is the hub's own page, so it is always up to date.
+
+### Day to day
+
+- The pill in the header says where you stand: **Synced**, **Syncing…**, **Offline · 3 waiting** (kept here, sent when the hub is reachable), or **Hub** on the hub. Point at it for details.
+- Changes to different lines merge by themselves, even after days apart.
 - **A clash** (the same line changed differently on two devices while apart) never loses anything: the version that reached the hub first is shown everywhere, and the other is kept aside on the device that made it. That device shows a red bar under the header (and `1 clash` in the pill): click **Review** to see the two versions of each line side by side and choose **Keep theirs**, **Keep yours** or **Keep both**, then **Apply**. The choice syncs to every device like any edit, with Undo. If the two devices had different copies of a whole file from the start, you choose between the files instead (**Keep both** saves yours beside it as `Backlog (from Desktop)`).
 - Deleted pages and projects go to `.trash` on every device; nothing is removed.
-- The pill in the header shows where you stand: **Synced**, **Syncing…**, **Offline · N waiting**, or **Hub** on the hub itself. Point at it for details.
+- **Settings that follow you:** hidden projects, My initials and Default effort are kept in `Projects/settings.json` and sync like your notes. Theme, text size, font, folds and the page you had open stay per device.
+- **Backups:** the hub zips your notes once a day into `Projects/.kafeen/backups/` and keeps the last 30. Copy that folder elsewhere now and then for a second copy.
 
-`--unpair` stops syncing (the files stay).
+### Commands
+
+| Command | What it does |
+|---|---|
+| `--setup-hub [--new-code]` | Make this computer's `Projects` the hub; `--new-code` replaces a lost code (every device then pairs again) |
+| `--serve --hub --host 0.0.0.0` | Run the hub by hand (what `--autostart on --hub` runs) |
+| `--pair URL CODE [--name NAME]` | Pair this computer (its name in the hub's log is the computer's name unless you give one) |
+| `--unpair` | Stop syncing; the files stay as they are |
+| `--autostart on` / `off` (`--hub`) | Start KAFEEN (or the hub) at login, or stop that: a systemd user service on Linux, a LaunchAgent on macOS, the Startup folder on Windows |
+| `--serve --no-browser` | Run without opening a browser window |
+
+The hub keeps a numbered log of every change and every version of every file in `Projects/.kafeen/` (hidden; versions older than 90 days that no file uses are cleared away). A device's pairing code is in its `Projects/.kafeen/device.json`, readable only by you; keep it out of shared folders.
 
 ---
 

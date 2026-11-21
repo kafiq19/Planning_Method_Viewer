@@ -266,6 +266,7 @@ window.addEventListener("focus", checkDisk);
 let liveTimer = null;
 function onDiskChange(ch) {
   if (ch.tree && state.folio) refreshFolio().then(() => drawDrawer());
+  if (state.folio && ch.paths.includes("settings.json")) pullSettings();   // 2.1.4: changed on another device
   const f = state.file;
   if (f && ch.paths.includes(f.path)) checkDisk();
   if (state.mode !== "planner" || state.all || !f || !ch.paths.includes(f.path)) {
@@ -380,10 +381,39 @@ $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "drop"]) document.body.addEventListener(ev, e => e.preventDefault());   // a dropped file must not replace the page
 store.del("today");                                         // a pinned Today used to be kept for good; now the page follows the date
 $("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
-$("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
+$("defWho").onchange = () => { store.set("defWho", $("defWho").value.trim()); putSetting("defWho", $("defWho").value.trim()); };
 for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
 $("defEffort").value = store.get("defEffort", "");
-$("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
+$("defEffort").onchange = () => { store.set("defEffort", $("defEffort").value); putSetting("defEffort", $("defEffort").value); };
+/* 2.1.4: settings that follow you across devices: hidden projects, My initials and Default effort live in
+   Projects/settings.json (synced like the notes). The browser keeps a copy; the file wins, and a choice this
+   browser made before the file had it is shared once. */
+const SYNCED_SETTINGS = { hiddenProjects: "[]", defWho: "", defEffort: "" };
+function putSetting(key, value) {
+  if (!state.folioAll) return;
+  fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ set: { [key]: value } }) }).catch(() => {});
+}
+async function pullSettings() {
+  if (!state.folioAll) return;
+  let d;
+  try { d = (await (await fetch("/api/settings")).json()).settings; } catch (e) { return; }
+  if (!d) return;
+  const share = {};
+  let changed = false;
+  for (const [k, empty] of Object.entries(SYNCED_SETTINGS)) {
+    const mine = store.get(k, empty);
+    if (k in d) {
+      const v = k === "hiddenProjects" ? JSON.stringify(d[k]) : d[k];
+      if (mine !== v) { store.set(k, v); changed = true; }
+    } else if (mine !== empty) {
+      try { share[k] = k === "hiddenProjects" ? JSON.parse(mine) : mine; } catch (e) {}
+    }
+  }
+  if (Object.keys(share).length)
+    fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ set: share }) }).catch(() => {});
+  $("defWho").value = store.get("defWho", ""); $("defEffort").value = store.get("defEffort", "");
+  if (changed) { setFolio(state.folioAll); drawDrawer(); if (state.all) render(false); }
+}
 $("today").onchange = () => { showToday(); render(true); };
 $("todayReset").onclick = e => { e.preventDefault(); $("today").value = ""; showToday(); render(true); };
 const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -2376,6 +2406,7 @@ async function hideProject(name, hide) {             // hide (true) or show a pr
   const set = hiddenSet();
   set[hide ? "add" : "delete"](name);
   store.set("hiddenProjects", JSON.stringify([...set]));
+  putSetting("hiddenProjects", [...set]);
   if (!state.folioAll) return;
   setFolio(state.folioAll);
   if (hide && state.file && state.file.path && state.file.path.split("/")[0] === name) await showAll();   // its page was open
@@ -2384,6 +2415,7 @@ async function hideProject(name, hide) {             // hide (true) or show a pr
 }
 async function startPortfolio(tree) {
   setFolio(tree);
+  await pullSettings();
   $("brand").disabled = false; $("brand").title = "Projects and pages";
   const last = store.get("folioActive", "");
   if (last && inTree(last)) await openPage(last); else await showAll();
