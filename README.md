@@ -204,14 +204,31 @@ The header shows where you are (`HDC › Notes › Kickoff call`); click it to o
 
 KAFEEN is learning to keep your notes the same on every device: your computers each run KAFEEN on their own copy, and a **hub** on an always-on home computer keeps them in step, live, over [Tailscale](https://tailscale.com) (free) so it works at home and away. Your notes never leave your own machines. Phones open the hub's page.
 
-Ready now (2.1.1): the hub. On the home computer:
+**1. The hub**, on the home computer (once):
 
 ```
-python3 planner.py --setup-hub          # once: makes the pairing code (shown once; keep it)
+python3 planner.py --setup-hub          # makes the pairing code (shown once; keep it)
 python3 planner.py --serve --hub --host 0.0.0.0
 ```
 
-The hub keeps a numbered log of every change and every version of every file in `Projects/.kafeen/` (hidden). Pairing your other computers (`--pair`) comes next, then the full setup guide. `--setup-hub --new-code` replaces a lost code (every device then pairs again).
+The hub keeps a numbered log of every change and every version of every file in `Projects/.kafeen/` (hidden). `--setup-hub --new-code` replaces a lost code (every device then pairs again).
+
+**2. Each computer** (once), then run KAFEEN as usual:
+
+```
+python3 planner.py --pair http://kafeen-hub:8765 kfn-…   # the hub's Tailscale name and the pairing code
+python3 planner.py --serve
+```
+
+Pair your first computer while the hub's folder is still empty: its projects fill the hub. Later computers should start with an empty `Projects` folder (or just the Example) and receive everything. From then on:
+
+- A change on one computer appears on the others within a second or two, in the open pages too.
+- **Offline is fine.** Keep working; the header says `Offline · 3 waiting`, and everything is sent when the hub is reachable again. Changes to different lines merge by themselves.
+- **A clash** (the same line changed differently on two devices while apart) never loses anything: the version that reached the hub first is shown everywhere, and the other is kept aside in `Projects/.kafeen/conflicts/`. The header says `1 clash`. (Choosing between them on the page comes next.)
+- Deleted pages and projects go to `.trash` on every device; nothing is removed.
+- The pill in the header shows where you stand: **Synced**, **Syncing…**, **Offline · N waiting**, or **Hub** on the hub itself. Point at it for details.
+
+`--unpair` stops syncing (the files stay).
 
 ---
 

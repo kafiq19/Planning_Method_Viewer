@@ -32,6 +32,8 @@ USAGE
                                        The page is live: notes changed on disk show at once (2.1.0)
   --setup-hub [FOLDER] [--new-code]    make the Projects folder (or FOLDER) the sync hub; prints the pairing code
   --serve --hub [--host ADDR]          serve the hub: paired devices keep their Projects folder in step (2.1.1)
+  --pair HUB CODE [--name NAME]        pair this computer's Projects folder with the hub (2.1.2); then --serve
+                                       keeps it in step, live, and catches up after being offline. --unpair stops
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -2593,6 +2595,37 @@ def to_trash(root, rel):
     return dest
 
 
+def scan_tree(root, cache, keep):
+    """-> ({file: sha256}, {folder}, new cache) of everything under `root` but hidden names; `cache` {file: ((size,
+    mtime_ns), sha256)} saves reading files that didn't change; `keep(data)` stores a new version, -> its hash."""
+    files, dirs, stats = {}, set(), {}
+    for here, ds, fs in os.walk(root):
+        ds[:] = sorted(d for d in ds if not d.startswith("."))
+        rel = os.path.relpath(here, root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel + "/"
+        dirs.update(rel + d for d in ds)
+        for name in fs:
+            if name.startswith("."):
+                continue
+            p, key = os.path.join(here, name), rel + name
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            sig = (st.st_size, st.st_mtime_ns)
+            old = cache.get(key)
+            if old and old[0] == sig:
+                h = old[1]
+            else:
+                try:
+                    with open(p, "rb") as f:
+                        h = keep(f.read())
+                except OSError:
+                    continue
+            files[key], stats[key] = h, (sig, h)
+    return files, dirs, stats
+
+
 def setup_hub(root, new=False):
     """Make this Projects folder a hub (2.1.1); -> the pairing code, shown once (only its hash is kept).
     ValueError if it is one already, unless `new` (a new code: every device must pair again)."""
@@ -2686,32 +2719,7 @@ class Hub:
     def refresh(self, device="hub"):
         """Log what differs between the record and the disk (files by content); -> the new entries."""
         with self.cond:
-            files, dirs, stats = {}, set(), {}
-            for here, ds, fs in os.walk(self.root):
-                ds[:] = sorted(d for d in ds if not d.startswith("."))
-                rel = os.path.relpath(here, self.root).replace(os.sep, "/")
-                rel = "" if rel == "." else rel + "/"
-                dirs.update(rel + d for d in ds)
-                for name in fs:
-                    if name.startswith("."):
-                        continue
-                    p, key = os.path.join(here, name), rel + name
-                    try:
-                        st = os.stat(p)
-                    except OSError:
-                        continue
-                    sig = (st.st_size, st.st_mtime_ns)
-                    old = self.stats.get(key)
-                    if old and old[0] == sig:
-                        h = old[1]
-                    else:
-                        try:
-                            with open(p, "rb") as f:
-                                h = self.keep(f.read())
-                        except OSError:
-                            continue
-                    files[key], stats[key] = h, (sig, h)
-            self.stats = stats
+            files, dirs, self.stats = scan_tree(self.root, self.stats, self.keep)
             new = []
             for d in sorted(dirs - self.dirs):
                 new.append(self._record("mkdir", d, None, device))
@@ -2728,6 +2736,7 @@ class Hub:
 
     def state(self):
         with self.cond:
+            self.refresh("hub")                         # what's on disk now, edits on the hub included
             return {"seq": self.seq, "files": dict(self.files), "dirs": sorted(self.dirs)}
 
     def changes(self, since, wait):
@@ -2755,7 +2764,9 @@ class Hub:
                 write_bytes(full, data)
                 self.refresh(device)
                 return {"status": "ok", "hash": self.files.get(rel)}
-            old, theirs = (b"" if base is None else self.blob(base)), self.blob(cur)
+            if base is None:                            # two different files that never had a common version
+                return {"status": "conflict", "hash": cur}
+            old, theirs = self.blob(base), self.blob(cur)
             try:
                 if old is None or theirs is None:
                     raise ValueError
@@ -2807,17 +2818,331 @@ class Hub:
             return {"status": "ok"}
 
 
+def _sync_request(hub, code, name, method, path, payload=None, timeout=15):
+    """One request to the hub; -> parsed JSON (or bytes for a blob). ValueError("unauthorized") for a wrong code;
+    OSError when the hub can't be reached (offline)."""
+    import json
+    import urllib.error
+    import urllib.request
+    headers = {"Authorization": "Bearer " + code, "X-Kafeen-Device": name}
+    data = None
+    if payload is not None:
+        data, headers["Content-Type"] = json.dumps(payload).encode(), "application/json"
+    req = urllib.request.Request(hub + path, data, headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+            return json.loads(body) if r.headers.get("Content-Type") == "application/json" else body
+    except urllib.error.HTTPError as e:
+        with e:
+            if e.code == 401:
+                raise ValueError("unauthorized: the pairing code is wrong (pair again with the hub's code)")
+            raise OSError(f"the hub answered {e.code}")
+
+
+def pair(root, hub, code, name=None):
+    """Pair the Projects folder `root` with the hub at `hub` (2.1.2): checks the code, writes .kafeen/device.json
+    (readable only by you: it holds the code); -> the hub's state. ValueError if refused or unreachable."""
+    import json
+    import socket
+    from urllib.parse import urlsplit
+    if os.path.exists(os.path.join(root, SYNC_DIR, "hub.json")):
+        raise ValueError("this folder is the hub itself")
+    hub = hub.strip().rstrip("/")
+    if "://" not in hub:
+        hub = "http://" + hub
+    u = urlsplit(hub)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError(f"{hub!r} isn't a hub address (like http://kafeen-hub:8765)")
+    if u.port is None and u.scheme == "http":
+        hub += ":8765"
+    name = (name or socket.gethostname().split(".")[0] or "a device")[:60]
+    try:
+        state = _sync_request(hub, code, name, "GET", "/sync/state")
+    except OSError as e:
+        raise ValueError(f"can't reach the hub at {hub} ({e}); is it running, and is Tailscale on?")
+    os.makedirs(os.path.join(root, SYNC_DIR), exist_ok=True)
+    path = os.path.join(root, SYNC_DIR, "device.json")
+    write_bytes(path, json.dumps({"hub": hub, "code": code, "name": name, "seq": 0, "base": {}, "dirs": []}, indent=1).encode())
+    os.chmod(path, 0o600)
+    return state
+
+
+class SyncClient:
+    """A paired device's sync (2.1.2): keeps `root` equal to the hub's folder. Each round compares, per path, the
+    file here (L), the version last agreed with the hub (B, the base) and the hub's (H): L = H agree; L = B: only the
+    hub changed (pull, or a delete goes to .trash here); else this device changed it (put, which the hub merges, or
+    delete). A clash keeps the hub's version here and saves this device's in .kafeen/conflicts/. Rounds run when
+    the hub says something changed (a long-poll), when a file here changes (`kick`), and every minute."""
+
+    BACKOFF = (1, 2, 5, 10, 30)
+
+    def __init__(self, root, lock=None, on_change=None, on_status=None):
+        import json
+        import threading
+        self.root = os.path.realpath(root)
+        self.dir = os.path.join(self.root, SYNC_DIR)
+        self.conf_path = os.path.join(self.dir, "device.json")
+        with open(self.conf_path) as f:
+            self.conf = json.load(f)
+        self.hub, self.code, self.name = self.conf["hub"], self.conf["code"], self.conf["name"]
+        self.base, self.bdirs = dict(self.conf.get("base", {})), set(self.conf.get("dirs", []))
+        self.seq = self.conf.get("seq", 0)
+        self.lock = lock or threading.RLock()
+        self.on_change, self.on_status = on_change, on_status
+        self.blobs = os.path.join(self.dir, "blobs")
+        self.conflicts = os.path.join(self.dir, "conflicts")
+        os.makedirs(self.blobs, exist_ok=True)
+        self.cache, self.wake, self.stop = {}, threading.Event(), threading.Event()
+        self.status = {"state": "syncing", "waiting": 0, "conflicts": self._conflict_count(), "hub": self.hub,
+                       "name": self.name, "last": None, "error": None}
+
+    @staticmethod
+    def paired(root):
+        return os.path.exists(os.path.join(root, SYNC_DIR, "device.json"))
+
+    # ---- storage ----
+    def keep(self, data):
+        h = _sha(data)
+        p = os.path.join(self.blobs, h)
+        if not os.path.exists(p):
+            write_bytes(p, data)
+        return h
+
+    def blob(self, h):
+        try:
+            with open(os.path.join(self.blobs, h), "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def _save(self):
+        import json
+        self.conf.update(seq=self.seq, base=self.base, dirs=sorted(self.bdirs))
+        write_bytes(self.conf_path, json.dumps(self.conf, indent=1).encode())
+
+    def _conflict_count(self):
+        try:
+            return len([n for n in os.listdir(self.conflicts) if n.endswith(".json")])
+        except OSError:
+            return 0
+
+    def _set(self, **kw):
+        self.status.update(kw)
+        if self.on_status:
+            self.on_status(dict(self.status))
+
+    # ---- the hub ----
+    def _req(self, method, path, payload=None, timeout=15):
+        return _sync_request(self.hub, self.code, self.name, method, path, payload, timeout)
+
+    def _local(self, rel):
+        return os.path.join(self.root, *rel.split("/"))
+
+    def _hash_now(self, rel):
+        try:
+            with open(self._local(rel), "rb") as f:
+                return _sha(f.read())
+        except OSError:
+            return None
+
+    def _write(self, rel, data, expect):
+        """Write the hub's version here, unless the file changed since this round looked (then the next round
+        sees it); -> whether it was written."""
+        with self.lock:
+            if self._hash_now(rel) != expect:
+                return False
+            write_bytes(self._local(rel), data)
+            return True
+
+    def _pull(self, rel, h, expect):
+        data = self.blob(h)
+        if data is None:
+            data = self._req("GET", "/sync/blob/" + h)
+            self.keep(data)
+        if self._write(rel, data, expect):
+            self.base[rel] = h
+            return True
+        return False
+
+    def _clash(self, rel, mine, base, theirs, clashes):
+        import json
+        os.makedirs(self.conflicts, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        n = len(os.listdir(self.conflicts)) + 1
+        rec = {"path": rel, "device": self.name, "time": datetime.now().isoformat(timespec="seconds"),
+               "base": base, "theirs": theirs, "mine": self.keep(mine), "clashes": clashes or []}
+        write_bytes(os.path.join(self.conflicts, f"{stamp}-{n}.json"), json.dumps(rec, indent=1).encode())
+
+    def round(self):
+        """Bring this folder and the hub's into step once; -> {pulled, pushed, merged, conflicts}."""
+        import base64
+        st = self._req("GET", "/sync/state")
+        with self.lock:
+            files, dirs, self.cache = scan_tree(self.root, self.cache, self.keep)
+        H, HD = st["files"], set(st["dirs"])
+        n = {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0}
+        for d in sorted(HD | dirs):                    # folders first (a new section, an empty archive/)
+            here, there, known = d in dirs, d in HD, d in self.bdirs
+            if here and there:
+                self.bdirs.add(d)
+            elif there and not known:
+                with self.lock:
+                    os.makedirs(self._local(d), exist_ok=True)
+                self.bdirs.add(d)
+                n["pulled"] += 1
+            elif here and not known:
+                self._req("POST", "/sync/mkdir", {"path": d})
+                self.bdirs.add(d)
+                n["pushed"] += 1
+        for rel in sorted(set(files) | set(H) | set(self.base)):
+            L, B, Hh = files.get(rel), self.base.get(rel), H.get(rel)
+            if L == Hh:
+                if L is None:
+                    self.base.pop(rel, None)
+                else:
+                    self.base[rel] = L
+                continue
+            if L == B:                                  # only the hub changed it
+                if Hh is None:
+                    with self.lock:
+                        if self._hash_now(rel) == L:
+                            to_trash(self.root, rel)
+                            self.base.pop(rel, None)
+                            n["pulled"] += 1
+                elif self._pull(rel, Hh, L):
+                    n["pulled"] += 1
+                continue
+            if L is None:                               # deleted here
+                r = self._req("POST", "/sync/delete", {"path": rel, "base": B})
+                if r["status"] == "ok":
+                    self.base.pop(rel, None)
+                    n["pushed"] += 1
+                elif self._pull(rel, r["hash"], None):  # changed on another device meanwhile: it comes back
+                    n["pulled"] += 1
+                continue
+            mine = self.blob(L)
+            r = self._req("POST", "/sync/put", {"path": rel, "base": B, "data": base64.b64encode(mine).decode()})
+            if r["status"] == "ok":
+                self.base[rel] = r["hash"]
+                n["pushed"] += 1
+            elif r["status"] == "merged":
+                merged = base64.b64decode(r["data"])
+                self.keep(merged)
+                if self._write(rel, merged, L):
+                    self.base[rel] = r["hash"]
+                n["merged"] += 1
+            else:                                       # a clash: the hub's version here, this one kept aside
+                self._clash(rel, mine, B, r["hash"], r.get("clashes"))
+                if r["hash"] is None or self._pull(rel, r["hash"], L):
+                    n["conflicts"] += 1
+        for d in sorted(self.bdirs - (HD & dirs), reverse=True):   # folders gone on one side
+            if d in dirs and d not in HD:               # removed on the hub: here too, if nothing visible is left
+                with self.lock:
+                    full = self._local(d)
+                    if not any(not x.startswith(".") for _, _, fs in os.walk(full) for x in fs):
+                        to_trash(self.root, d)
+                        self.bdirs.discard(d)
+            elif d in HD and d not in dirs:             # removed here
+                if self._req("POST", "/sync/rmdir", {"path": d})["status"] == "ok":
+                    self.bdirs.discard(d)
+                else:
+                    with self.lock:
+                        os.makedirs(self._local(d), exist_ok=True)
+            else:
+                self.bdirs.discard(d)
+        self.seq = max(self.seq, st["seq"])
+        self._save()
+        if any(n.values()) and self.on_change:
+            self.on_change()
+        self._set(state="synced", waiting=0, conflicts=self._conflict_count(), error=None,
+                  last=datetime.now().isoformat(timespec="seconds"))
+        return n
+
+    def waiting(self):
+        """How many files and folders here differ from the last version agreed with the hub (to send)."""
+        with self.lock:
+            files, dirs, self.cache = scan_tree(self.root, self.cache, self.keep)
+        return (sum(files.get(k) != self.base.get(k) for k in set(files) | set(self.base))
+                + len(dirs ^ self.bdirs))
+
+    # ---- the threads ----
+    def kick(self):
+        self.wake.set()
+
+    def start(self):
+        import threading
+        threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=self._poll, daemon=True).start()
+        self.kick()
+
+    def close(self):
+        self.stop.set()
+        self.wake.set()
+
+    def _run(self):
+        import time
+        fails = 0
+        while not self.stop.is_set():
+            self.wake.wait(self.BACKOFF[min(fails, len(self.BACKOFF)) - 1] if fails else 60)
+            if self.stop.is_set():
+                break
+            self.wake.clear()
+            time.sleep(0.3)                             # a burst of edits goes in one round
+            self._set(state="syncing")
+            try:
+                self.round()
+                fails = 0
+            except ValueError as e:                     # refused (a wrong code): wait for the user
+                self._set(state="error", error=str(e))
+                fails = len(self.BACKOFF)
+            except (OSError, KeyError) as e:
+                fails += 1
+                try:
+                    waiting = self.waiting()
+                except OSError:
+                    waiting = self.status.get("waiting", 0)
+                self._set(state="offline", waiting=waiting, error=str(e))
+
+    def _poll(self):
+        seq = self.seq
+        while not self.stop.is_set():
+            try:
+                d = self._req("GET", f"/sync/changes?since={seq}&wait=25", timeout=35)
+                if d.get("reset"):
+                    seq = 0
+                    self.kick()
+                    continue
+                if any(e.get("device") != self.name for e in d["changes"]):
+                    self.kick()                         # another device (or the hub) changed something
+                seq = d["seq"]
+            except (OSError, ValueError, KeyError):
+                if self.status.get("state") not in ("offline", "error"):
+                    self.kick()                         # let a round find out what's wrong and say so
+                self.stop.wait(5)
+
+
 class Changes:
     """2.1.0: what changed on disk, for the pages listening on /api/events: a counter and the last changes."""
 
     def __init__(self):
         import threading
         self.cond, self.seq, self.log, self.closed = threading.Condition(), 0, [], False
+        self.status = None                              # 2.1.2: the sync status, for the pages ({state, waiting, ...})
 
     def publish(self, paths, tree=False):
         with self.cond:
             self.seq += 1
             self.log = self.log[-199:] + [(self.seq, sorted(paths), tree)]
+            self.cond.notify_all()
+
+    def publish_status(self, status):
+        """2.1.2: a new sync status (an entry with no paths: the pages get the latest status)."""
+        with self.cond:
+            if status == self.status:
+                return
+            self.status, self.seq = status, self.seq + 1
+            self.log = self.log[-199:] + [(self.seq, None, False)]
             self.cond.notify_all()
 
     def since(self, n, wait):
@@ -2866,7 +3191,7 @@ def changed_files(old, new):
     return {k.rstrip("/") for k in paths}, old.keys() != new.keys()
 
 
-def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False):
+def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False, sync=True):
     """The server: 127.0.0.1 only unless `host` says otherwise (`--host 0.0.0.0`: every network interface, for a
     trusted LAN; no Host/Origin check or login then). Port 0 picks a free port.
 
@@ -2899,6 +3224,8 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
     if hub and folio is None:
         raise ValueError("a hub serves a Projects folder, not one notes file")
     hub = Hub(folio) if hub else None
+    # 2.1.2: a paired folder keeps itself in step with the hub (sync=False: built but not started, for the tests)
+    client = SyncClient(folio, lock) if folio is not None and hub is None and SyncClient.paired(folio) else None
     # 2.1.0: watch the notes on disk (every SCAN_SECONDS, and right after each POST) and tell the open pages
     changes, stop, watched = Changes(), threading.Event(), (folio is not None or notes_path is not None)
     seen = {"files": scan_files(folio) if folio is not None else scan_files(path=notes_path) if notes_path else {}}
@@ -2921,6 +3248,8 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
             seen["files"] = now
         if paths:
             changes.publish(paths, tree)
+            if client is not None:
+                client.kick()                          # 2.1.2: send it to the hub
 
     def watch():
         while not stop.wait(SCAN_SECONDS):
@@ -2976,6 +3305,9 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
             elif path == "/api/events":
                 if self._trusted():
                     self._events()
+            elif path == "/api/sync":                  # 2.1.2: where sync stands ({state: "unpaired"} if not paired)
+                if self._trusted():
+                    self._json(200, changes.status or {"state": "hub" if hub is not None else "unpaired"})
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -3255,15 +3587,20 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
             n = changes.seq
             try:
                 self.wfile.write(b"retry: 2000\n\n")
+                if changes.status:                      # 2.1.2: where sync stands, at once
+                    self.wfile.write(f"event: sync\ndata: {json.dumps(changes.status)}\n\n".encode())
                 self.wfile.flush()
                 while not stop.is_set():
                     n2, entries = changes.since(n, 15)
                     if stop.is_set():
                         break
                     if entries:
-                        paths = sorted({p for e in entries for p in e[1]})
-                        msg = json.dumps({"paths": paths, "tree": any(e[2] for e in entries)})
-                        self.wfile.write(f"event: changed\ndata: {msg}\n\n".encode())
+                        paths = sorted({p for e in entries if e[1] is not None for p in e[1]})
+                        if paths:
+                            msg = json.dumps({"paths": paths, "tree": any(e[2] for e in entries)})
+                            self.wfile.write(f"event: changed\ndata: {msg}\n\n".encode())
+                        if any(e[1] is None for e in entries):   # 2.1.2: the sync status changed
+                            self.wfile.write(f"event: sync\ndata: {json.dumps(changes.status)}\n\n".encode())
                     else:
                         self.wfile.write(b": still here\n\n")
                     self.wfile.flush()
@@ -3307,13 +3644,22 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=Fal
 
         def server_close(self):
             stop.set()
+            if client is not None:
+                client.close()
             changes.close()                            # wakes the event streams, which then end
             super().server_close()
 
     server = Server((host, port), Handler)
-    server.changes, server.rescan, server.hub = changes, rescan, hub
+    if client is not None:
+        client.on_change, client.on_status = rescan, changes.publish_status
+        changes.status = dict(client.status)
+    elif hub is not None:
+        changes.status = {"state": "hub"}
+    server.changes, server.rescan, server.hub, server.sync = changes, rescan, hub, client
     if watched:
         threading.Thread(target=watch, daemon=True).start()
+    if client is not None and sync:
+        client.start()
     return server
 
 
@@ -3412,6 +3758,33 @@ Start the hub (and keep it running):
 Then, on each computer:
     python3 planner.py --pair http://THIS-COMPUTER:8765 {code}
 (THIS-COMPUTER: its Tailscale name, like kafeen-hub.)""")
+        return
+    if "--pair" in args:                                       # 2.1.2: this computer's Projects folder follows the hub
+        args.remove("--pair")
+        name = take_option(args, "--name")
+        if len(args) not in (2, 3):
+            sys.exit("planner.py: use --pair HUB-ADDRESS PAIRING-CODE [FOLDER] [--name NAME]")
+        folder = args[2] if len(args) == 3 else PROJECTS
+        try:
+            os.makedirs(folder, exist_ok=True)
+            state = pair(folder, args[0], args[1], name)
+            client = SyncClient(folder)
+            print(f"Paired with the hub at {client.hub} as {client.name!r} (the hub has {len(state['files'])} files).")
+            n = client.round()
+        except (OSError, ValueError) as e:
+            sys.exit(f"planner.py: {e}")
+        print(f"First sync: {n['pulled']} from the hub, {n['pushed']} sent, {n['merged']} merged"
+              + (f", {n['conflicts']} clashes (kept in {os.path.join(folder, SYNC_DIR, 'conflicts')})" if n["conflicts"] else "")
+              + ".\nFrom now on, python3 planner.py --serve keeps this folder in step with the hub, live.")
+        return
+    if "--unpair" in args:
+        args.remove("--unpair")
+        folder = args[0] if len(args) == 1 else PROJECTS
+        conf = os.path.join(folder, SYNC_DIR, "device.json")
+        if not os.path.exists(conf):
+            sys.exit("planner.py: this folder isn't paired with a hub")
+        os.remove(conf)
+        print("Unpaired: the files stay as they are and no longer sync. Pair again with --pair.")
         return
     if "--serve" in args:
         args.remove("--serve")

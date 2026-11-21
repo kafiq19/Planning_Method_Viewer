@@ -2668,3 +2668,173 @@ class TestHub(Base):                                          # 2.1.1: the sync 
             planner.main(["planner.py", "--setup-hub", folder])           # already one
         with self.assertRaises(SystemExit):
             planner.main(["planner.py", "--serve", "--hub", "notes.txt"])  # a hub serves the Projects folder
+
+
+class TestDeviceSync(Base):                                   # 2.1.2: devices paired with a hub
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        base = os.path.realpath(self.tmp.name)
+        self.hubdir, self.a, self.b = (os.path.join(base, n) for n in ("hub", "A", "B"))
+        for d in (self.hubdir, self.a, self.b):
+            os.makedirs(d)
+        self.put(self.hubdir, "HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.code = planner.setup_hub(self.hubdir)
+        self.hub = planner.make_server(0, None, portfolio=self.hubdir, hub=True)
+        self.url = f"http://127.0.0.1:{self.hub.server_address[1]}"
+        threading.Thread(target=self.hub.serve_forever, daemon=True).start()
+        planner.pair(self.a, self.url, self.code, "A")
+        planner.pair(self.b, self.url, self.code, "B")
+        self.ca, self.cb = planner.SyncClient(self.a), planner.SyncClient(self.b)
+
+    def tearDown(self):
+        self.hub.shutdown()
+        self.hub.server_close()
+        self.tmp.cleanup()
+        super().tearDown()
+
+    @staticmethod
+    def put(root, rel, text):
+        p = os.path.join(root, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        st = os.stat(p)                                  # a new mtime even within the same clock tick
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+    @staticmethod
+    def get(root, rel):
+        p = os.path.join(root, *rel.split("/"))
+        if not os.path.exists(p):
+            return None
+        with open(p, encoding="utf-8", newline="") as f:
+            return f.read()
+
+    def test_pair(self):
+        with open(os.path.join(self.a, ".kafeen", "device.json")) as f:
+            conf = json.load(f)
+        self.assertEqual((conf["hub"], conf["name"], conf["base"]), (self.url, "A", {}))
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.a, ".kafeen", "device.json")).st_mode), 0o600)
+        with self.assertRaises(ValueError):
+            planner.pair(self.b, self.url, "kfn-wrong")
+        with self.assertRaises(ValueError):
+            planner.pair(self.hubdir, self.url, self.code)                # the hub itself
+        with self.assertRaises(ValueError):
+            planner.pair(self.b, "http://127.0.0.1:1", self.code)         # nobody there
+
+    def test_first_sync_and_edits_both_ways(self):
+        self.assertEqual(self.ca.round()["pulled"], 2)                    # HDC/ and its backlog
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")            # A ticks a
+        self.put(self.a, "MDM/notes/Plan.md", "# plan\n")                 # and makes a page in a new project
+        self.assertEqual(self.ca.round()["pushed"], 4)
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.assertEqual(self.get(self.b, "MDM/notes/Plan.md"), "# plan\n")
+        self.assertEqual(self.cb.round(), {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0})   # in step
+
+    def test_offline_edits_merge(self):
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")            # both edit while apart
+        self.put(self.b, "HDC/backlog.kf", "- a\n- b\n~- c\n")
+        self.ca.round()
+        self.assertEqual(self.cb.round()["merged"], 1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+        self.ca.round()
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+
+    def test_a_clash_keeps_both(self):
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "~- a\n- b\n- c\n")
+        self.ca.round()
+        self.assertEqual(self.cb.round()["conflicts"], 1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n- c\n")      # the hub's version here
+        [name] = os.listdir(os.path.join(self.b, ".kafeen", "conflicts"))
+        with open(os.path.join(self.b, ".kafeen", "conflicts", name)) as f:
+            rec = json.load(f)
+        self.assertEqual((rec["path"], rec["device"]), ("HDC/backlog.kf", "B"))
+        self.assertEqual(self.cb.blob(rec["mine"]), b"~- a\n- b\n- c\n")             # B's version, kept aside
+        self.assertEqual(self.cb.status["conflicts"], 1)
+
+    def test_deletes_go_to_trash_everywhere(self):
+        self.put(self.hubdir, "HDC/notes/Old.md", "old\n")
+        self.ca.round(); self.cb.round()
+        os.remove(os.path.join(self.a, "HDC", "notes", "Old.md"))
+        self.ca.round()
+        self.assertIsNone(self.get(self.hubdir, "HDC/notes/Old.md"))
+        self.assertEqual(self.get(self.hubdir, ".trash/HDC/notes/Old.md"), "old\n")
+        self.cb.round()
+        self.assertIsNone(self.get(self.b, "HDC/notes/Old.md"))
+        self.assertEqual(self.get(self.b, ".trash/HDC/notes/Old.md"), "old\n")
+
+    def test_an_edit_beats_a_delete(self):
+        self.put(self.hubdir, "HDC/notes/Old.md", "old\n")
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/notes/Old.md", "old, edited\n")
+        self.ca.round()
+        os.remove(os.path.join(self.b, "HDC", "notes", "Old.md"))         # B deleted it meanwhile
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "HDC/notes/Old.md"), "old, edited\n")
+        self.assertEqual(self.get(self.hubdir, "HDC/notes/Old.md"), "old, edited\n")
+
+    def test_a_renamed_project_follows(self):
+        self.ca.round(); self.cb.round()
+        os.rename(os.path.join(self.a, "HDC"), os.path.join(self.a, "Harbour"))
+        self.ca.round()
+        self.assertEqual(self.get(self.hubdir, "Harbour/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertFalse(os.path.exists(os.path.join(self.hubdir, "HDC")))
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "Harbour/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertFalse(os.path.exists(os.path.join(self.b, "HDC")))
+
+    def test_pairing_a_folder_with_different_notes(self):
+        self.put(self.a, "HDC/backlog.kf", "- mine\n")                    # this device had its own copy
+        n = self.ca.round()
+        self.assertEqual(n["conflicts"], 1)
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertEqual(len(os.listdir(os.path.join(self.a, ".kafeen", "conflicts"))), 1)
+
+    def test_offline_and_back(self):
+        self.ca.round()
+        self.hub.shutdown()
+        self.hub.server_close()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        with self.assertRaises(OSError):
+            self.ca.round()
+        self.assertEqual(self.ca.waiting(), 1)
+        port = int(self.url.rsplit(":", 1)[1])
+        self.hub = planner.make_server(port, None, portfolio=self.hubdir, hub=True)   # the hub is back
+        threading.Thread(target=self.hub.serve_forever, daemon=True).start()
+        self.assertEqual(self.ca.round()["pushed"], 1)
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.assertEqual(self.ca.waiting(), 0)
+
+    def test_live_between_two_servers(self):
+        sa = planner.make_server(0, None, portfolio=self.a)
+        sb = planner.make_server(0, None, portfolio=self.b)
+        for srv in (sa, sb):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+        deadline = time.time() + 10
+        while self.get(self.b, "HDC/backlog.kf") is None and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        ua = f"http://127.0.0.1:{sa.server_address[1]}"
+        req = urllib.request.Request(ua + "/api/edit", json.dumps({"path": "HDC/backlog.kf", "version": planner.read_notes(
+            os.path.join(self.a, "HDC", "backlog.kf"))[1], "line": 2, "title": "b", "op": "status", "value": "done",
+            "name": "HDC"}).encode(), {"Content-Type": "application/json"})
+        t0 = time.time()
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.status, 200)
+        while self.get(self.b, "HDC/backlog.kf") != "- a\n!- b\n- c\n" and time.time() - t0 < 10:
+            time.sleep(0.05)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n!- b\n- c\n")
+        self.assertLess(time.time() - t0, 3)                              # live: within a couple of seconds
+        with urllib.request.urlopen(f"http://127.0.0.1:{sb.server_address[1]}/api/sync") as r:
+            st = json.loads(r.read())
+        self.assertEqual((st["state"], st["name"]), ("synced", "B"))

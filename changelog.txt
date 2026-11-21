@@ -5,6 +5,28 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.2  2026-11-21  Pair your devices
+-------------------------------------------------
+- New: python3 planner.py --pair http://kafeen-hub:8765 CODE pairs this
+  computer's Projects folder with the hub and syncs it once. From then
+  on python3 planner.py --serve keeps it in step, live: a change made on
+  one device reaches the others (and their open pages) in about a
+  second. --unpair stops (the files stay).
+- Offline: changes are kept and sent when the hub is reachable again;
+  changes to different lines merge by themselves. A clash on the same
+  line keeps the hub's version and sets yours aside in
+  Projects/.kafeen/conflicts/ (choosing between them comes next). An
+  edit beats a delete; deleted files go to .trash on every device.
+- New: a sync pill in the header: Synced, Syncing…, Offline · N waiting,
+  N clashes, or Hub on the hub itself. Point at it for details.
+- Code: pair, SyncClient (round, waiting, the run and long-poll
+  threads), _sync_request, scan_tree (shared with Hub); make_server
+  starts the client in a paired folder (sync=False for tests); /api/sync;
+  /api/events sends `sync` events; Hub.put refuses to merge two files
+  that never shared a version; Hub.state refreshes first. Page:
+  showSync, #syncPill.
+
+
 2.1.1  2026-11-21  The sync hub
 -------------------------------------------------
 - New: python3 planner.py --setup-hub makes this computer's Projects

@@ -26,6 +26,15 @@ button:hover, .btn:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: default; }
 #fileStatus { display: inline-flex; align-items: center; gap: 6px; }
 #fileStatus.bad { color: var(--bad); }
+/* 2.1.2: the sync pill */
+.syncpill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; color: var(--muted); white-space: nowrap; cursor: default; }
+.syncpill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.syncpill.s-synced::before, .syncpill.s-hub::before { background: #16a34a; }
+.syncpill.s-syncing::before { background: var(--accent); animation: syncblink 1s ease-in-out infinite; }
+.syncpill.s-offline, .syncpill.s-server { color: #b45309; border-color: #f59e0b80; }
+.syncpill.s-error, .syncpill.clash { color: var(--bad); border-color: currentColor; }
+@keyframes syncblink { 50% { opacity: .3; } }
+@media (max-width: 720px) { .syncpill { font-size: 11.5px; padding: 1px 7px; } }
 #fileStatus button { padding: 1px 8px; font-size: 13px; }
 button:disabled:hover { border-color: var(--line); }
 input[type=text], input[type=search] { cursor: text; }

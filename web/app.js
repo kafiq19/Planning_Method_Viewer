@@ -281,6 +281,24 @@ function listen() {
   if (!window.EventSource || location.protocol === "file:") return;
   const es = new EventSource("/api/events");
   es.addEventListener("changed", e => { try { onDiskChange(JSON.parse(e.data)); } catch (err) {} });
+  es.addEventListener("sync", e => { try { showSync(JSON.parse(e.data)); } catch (err) {} });
+  es.addEventListener("error", () => showSync({ state: "server" }));   // the local server itself went away
+  es.addEventListener("open", () => fetch("/api/sync").then(r => r.json()).then(showSync).catch(() => {}));
+}
+/* 2.1.2: the sync pill: where this device stands with the hub (hidden when the folder isn't paired) */
+const SYNC_TEXT = { synced: "Synced", syncing: "Syncing…", offline: "Offline", error: "Sync stopped", hub: "Hub", server: "Not connected" };
+function showSync(st) {
+  const pill = $("syncPill");
+  if (!st || !SYNC_TEXT[st.state] || st.state === "server" && pill.classList.contains("hidden")) return pill.classList.add("hidden");
+  const n = st.conflicts || 0, wait = st.state === "offline" && st.waiting ? ` · ${st.waiting} waiting` : "";
+  pill.className = "syncpill s-" + st.state + (n ? " clash" : "");
+  pill.textContent = SYNC_TEXT[st.state] + wait + (n ? ` · ${n} clash${n === 1 ? "" : "es"}` : "");
+  const when = st.last ? " Last synced " + st.last.slice(11, 16) + "." : "";
+  pill.title = st.state === "hub" ? "This computer is the sync hub: your paired devices keep in step with its Projects folder."
+    : st.state === "server" ? "Lost touch with KAFEEN on this computer; it reconnects by itself when it's running again."
+    : st.state === "offline" ? `Can't reach the hub at ${st.hub}. Your changes are kept here and sent when it's back` + (st.waiting ? ` (${st.waiting} waiting).` : ".") + when
+    : st.state === "error" ? "Sync stopped: " + (st.error || "") : `In step with the hub at ${st.hub}, as "${st.name}".` + when;
+  if (n) pill.title += `\n${n} change${n === 1 ? "" : "s"} clashed with another device's: the other version is shown, yours is kept aside (Projects/.kafeen/conflicts).`;
 }
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", e => {
