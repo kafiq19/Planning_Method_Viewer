@@ -5,6 +5,82 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.14  2026-11-21  Hide any project
+-------------------------------------------------
+- New: Hide, in a project's ⋯ in the drawer. A hidden project leaves the
+  project list, All projects and the Planner, and waits under Hidden (N)
+  at the bottom of the list; its ⋯ › Show brings it back. Nothing on disk
+  changes, and the choice is kept in this browser.
+- Changed: ⋯ › Show the Example project is now the same thing for the
+  sample project, so it shows under Hidden too. A choice made with
+  2.0.12 is kept.
+- Code: localStorage "hiddenProjects" (a list; "hideExample" is moved
+  into it once), hideProject, hiddenSet; the drawer's Hidden rows
+  (.dhidden, "folioHiddenOpen").
+
+
+2.0.13  2026-11-21  Pick several days or weeks at once
+-------------------------------------------------
+- New: in the Planner, the list that opens from a task or its Plan cell
+  has a checkbox per day, week, month or trimester, and stays open: tick
+  as many as you like (for example two weeks in the Month view), then
+  press Plan or Enter. Unticking takes the task off a column. It is one
+  change, with one Undo. Cancel or Esc changes nothing.
+- Code: pickMany (multi-select list) and placeBox (shared with pickCell);
+  planPick sends op plan with {add, remove, past}, which set_plan
+  applies in one edit.
+
+
+2.0.12  2026-11-21  Hide the Example project
+-------------------------------------------------
+- New: ⋯ › Show the Example project. Untick it and the sample project
+  leaves the drawer, All projects and the Planner (in this browser; the
+  folder stays as it is). Tick it to bring it back. The option shows only
+  when your Projects folder has the Example project.
+- Code: EXAMPLE, the tree's "example"; portfolio_projects and
+  portfolio_data take `hide`, and All-projects requests send `hide`
+  (_hide). Page: setFolio, state.folioAll, hiddenProjects, localStorage
+  "hideExample".
+
+
+2.0.11  2026-11-21  Several plans per task
+-------------------------------------------------
+- New: a task can be planned for several days, weeks, months or
+  trimesters: write >Oct14 >Oct16 (any mix of levels). Before, only the
+  first was read and the rest stayed in the title.
+- In the Planner each plan is its own card. Drag a card to move that day
+  only; hold ⌥/Alt or Shift while dropping to plan it there as well; drop
+  it on the backlog to take just that day off. Clicking a card (or the
+  Plan cell) ticks every column it is in: click others to add them, a
+  ticked one to remove it, or Unplan all.
+- The task keeps one status: done on one day is done on every card. Its
+  points count once in the side panel and in the terminal's week view.
+- Planning a task from the backlog drops its plans that are already in
+  the past, so lines don't fill up with old dates.
+- Code: Task.plans / at["plans"] (plan & co. = the earliest);
+  set_plan takes Oct16, +Oct16, -Oct14, "" and {from, to} (/api/edit
+  accepts that dict for op plan); planner_groups columns carry via;
+  task_data adds plans and plan_labels; _insert_before_tail is gone.
+  Page: planTask(t, token, pl, how, via), draggable(el, t, via),
+  dropZone passes {t, via} and copying, pickCell takes several ticks.
+  example.kf: send to board >Oct14 >Oct16.
+
+
+2.0.10  2026-11-21  Today follows the date
+-------------------------------------------------
+- Fixed: a server left running stayed on the day it was started, so
+  overdue tasks, "now" and the Planner's current week stopped moving on.
+  It now reads the clock on every request (unless started with --today).
+- Changed: Today in the ⋯ menu follows the date by itself. It shows the
+  real date greyed out ("auto"); type a day to see the views as of then
+  ("pinned"), and × goes back. A typed day is no longer kept after a
+  reload. A page left open redraws itself just after midnight.
+- Code: TODAY_PINNED (main sets it with --today; make_server keeps a
+  pinned or test TODAY, else date.today() per request). Page: showToday,
+  dayTick (a minute timer and visibilitychange); the old localStorage
+  key "today" is removed.
+
+
 2.0.9  2026-11-09  Fold projects in All projects; starred first; points done
 -------------------------------------------------
 - New: in All projects, each project has one heading (with its counts)

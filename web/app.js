@@ -229,13 +229,31 @@ document.addEventListener("keydown", e => {
 $("save").onclick = () => save();
 $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "drop"]) document.body.addEventListener(ev, e => e.preventDefault());   // a dropped file must not replace the page
-$("today").value = store.get("today", "");
+store.del("today");                                         // a pinned Today used to be kept for good; now the page follows the date
 $("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
 $("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
 for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
 $("defEffort").value = store.get("defEffort", "");
 $("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
-$("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };
+$("today").onchange = () => { showToday(); render(true); };
+$("todayReset").onclick = e => { e.preventDefault(); $("today").value = ""; showToday(); render(true); };
+const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function showToday() {             // the Today field: empty = the real date (shown as its placeholder), typed = pinned until cleared
+  const pinned = !!$("today").value.trim(), iso = state.data && state.data.today;
+  if (!pinned && iso) $("today").placeholder = MON3[+iso.slice(5, 7) - 1] + iso.slice(8, 10);
+  $("todayNote").textContent = pinned ? "pinned" : "auto";
+  $("todayReset").classList.toggle("hidden", !pinned);
+}
+let shownDay = new Date().toDateString();                    // midnight: redraw so Today, overdue and "now" move on by themselves
+function dayTick() {
+  const d = new Date().toDateString();
+  if (d === shownDay) return;
+  shownDay = d;
+  if (!$("today").value.trim() && state.mode === "planner" && !document.querySelector("#viewPane input:focus, #viewPane textarea:focus")) render(false);
+  else shownDay = "";                                         // busy in an edit box: try again on the next tick
+}
+setInterval(dayTick, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) dayTick(); });
 
 /* ---------- modes ---------- */
 function setMode(m) {
@@ -305,7 +323,7 @@ async function render(relayout) {
   try {
     const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }) });
+      body: JSON.stringify(state.all ? { all: true, hide: hiddenProjects(), ...when } : { text: editor.value, name: folioName(), ...when }) });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
@@ -313,6 +331,7 @@ async function render(relayout) {
       throw new Error(data.error || r.statusText);
     }
     state.data = data;
+    showToday();
     plannerView();
   } catch (err) {
     if (seq !== state.seq) return;
@@ -350,7 +369,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   try {
     if (state.all) {                                     // All projects: the server edits the task's backlog on disk
       const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, line: t.line, title: t.title, op, value, ...when }) });
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, hide: hiddenProjects(), line: t.line, title: t.title, op, value, ...when }) });
       const res = await r.json();
       if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
       if (seq !== state.seq) return true;
@@ -411,7 +430,7 @@ function pickCell(cell, label, choices, current, apply, tab) {
   const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
   const outside = e => { if (!box.contains(e.target)) close(); };
   const items = choices.map(({ value, text, note, badge }) => {
-    const on = value === current;
+    const on = Array.isArray(current) ? current.includes(value) : value === current;   // an array: several ticks
     const b = h("button", "mi", span("ck", on ? "✓" : ""), badge ? span("eff", text) : text, note ? span("k", note) : "");
     b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(on));
     b.onclick = e => { e.stopPropagation(); close(); apply(value); };
@@ -438,12 +457,55 @@ function pickCell(cell, label, choices, current, apply, tab) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow, .fhead");   // drop down from the cell, right edge on the cell's right edge
+  placeBox(cell, box);
+  document.addEventListener("pointerdown", outside, true);
+  (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
+}
+function placeBox(cell, box) {                   // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow, .fhead");
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
   row.append(box);
   if (box.getBoundingClientRect().left < r.left) { box.style.right = "auto"; box.style.left = "0"; }
+}
+/* A list of toggles that stays open: tick as many as you like (click or Space), then Plan (or Enter) applies them all
+   as one change; Esc, Cancel or a click outside changes nothing. `extra`: {text, run}, a button in the footer. */
+function pickMany(cell, label, choices, ticked, apply, extra) {
+  const box = h("div", "pickbox many"), on = new Set(ticked);
+  box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label); box.setAttribute("aria-multiselectable", "true");
+  const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
+  const outside = e => { if (!box.contains(e.target)) close(); };
+  const changed = () => on.size !== ticked.length || ticked.some(v => !on.has(v));
+  const ok = h("button", "ok", "Plan"), cancel = h("button", "ghost", "Cancel");
+  const done = () => { close(); if (changed()) apply(choices.map(c => c.value).filter(v => on.has(v))); else cell.focus(); };
+  const items = choices.map(({ value, text, note }) => {
+    const ck = span("ck"), b = h("button", "mi", ck, text, note ? span("k", note) : "");
+    b.setAttribute("role", "option");
+    const show = () => { ck.textContent = on.has(value) ? "✓" : ""; b.setAttribute("aria-selected", String(on.has(value))); ok.disabled = !changed(); };
+    b.onclick = e => { e.stopPropagation(); if (on.has(value)) on.delete(value); else on.add(value); show(); };
+    show();
+    return b;
+  });
+  ok.disabled = !changed();
+  ok.onclick = e => { e.stopPropagation(); done(); };
+  cancel.onclick = e => { e.stopPropagation(); close(); cell.focus(); };
+  const foot = h("div", "pfoot");
+  if (extra) { const x = h("button", "ghost", extra.text); x.onclick = e => { e.stopPropagation(); close(); extra.run(); }; foot.append(x); }
+  foot.append(cancel, ok);
+  box.append(h("div", "phead", label), ...items, foot);
+  box.onkeydown = e => {
+    e.stopPropagation();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i < 0 ? 0 : i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key === "Enter" && i >= 0) { e.preventDefault(); done(); }   // Space toggles (the button's own click)
+    else if (e.key === "Escape") { e.preventDefault(); close(); cell.focus(); }
+  };
+  box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
+  box.onclick = e => e.stopPropagation();
+  placeBox(cell, box);
   document.addEventListener("pointerdown", outside, true);
   (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
 }
@@ -784,7 +846,7 @@ function plannerView() {
   if (habitsPage) bits.push("Tick a day when you've done it · each habit repeats on the days its frequency says");
   else if (state.tab === "planner") {
     const pl = d.planner, unit = COLUMN_UNIT[pl.column_kind];
-    bits.push(`Drag a task onto a ${unit}, or use its Plan cell · ☆ marks a top priority for this ${PLAN_UNIT[pl.kind]}`
+    bits.push(`Drag a task onto a ${unit}, or use its Plan cell (⌥/Shift-drag a card to plan it there as well) · ☆ marks a top priority for this ${PLAN_UNIT[pl.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
   }
   else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
@@ -905,8 +967,9 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     row.classList.add("wrow");
     lead.insertBefore(starButton(t, week), ttl);
     const unit = COLUMN_UNIT[week.column_kind];
-    const plan = cellButton("plan r", "Plan", t.plan ? `Planned for ${t.plan_label}. Click to plan it for a ${unit} in ${week.label}`
-      : `Plan it for a ${unit} in ${week.label}`, [t.plan ? span("t", t.plan_label) : span("add", "Plan")], cell => planPick(cell, t, week));
+    const ps = t.plans || [], shown = ps.length > 1 ? `${t.plan_label} +${ps.length - 1}` : t.plan_label;   // the earliest, and how many more
+    const plan = cellButton("plan r", "Plan", ps.length ? `Planned for ${t.plan_labels}. Click to plan it for a ${unit} in ${week.label}`
+      : `Plan it for a ${unit} in ${week.label}`, [ps.length ? span("t", shown) : span("add", "Plan")], cell => planPick(cell, t, week));
     row.append(lead, who, size, dateCell, plan, moreCell(t));
     return row;
   }
@@ -959,7 +1022,7 @@ async function archiveOp(body, target, year) {
   let res;
   try {
     const r = await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, name: folioName(),
+      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, hide: hiddenProjects(), name: folioName(),
         today: $("today").value.trim() || null, period: state.period, planner: planFor() }) });
     res = await r.json();
     if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
@@ -968,7 +1031,7 @@ async function archiveOp(body, target, year) {
     if (state.file && !state.all) { const [r2, d2] = await fetchFile(state.file); if (r2.ok && !unsaved()) setFile(d2.text, d2.version); }
     return render(false);
   }
-  state.folio = res.tree; drawDrawer();
+  setFolio(res.tree); drawDrawer();
   if (!state.all && state.file && state.file.path === path) setFile(res.text, res.version);
   if (seq !== state.seq) return;
   state.data = res.data;
@@ -1205,22 +1268,40 @@ function vUpcoming(d) {
 
 /* ---------- Planner: plan tasks for a column (>Oct14 / >wk45 / >Nov / >T3 in the task's line, op "plan"), mark top
    priorities for the period (^wk45 / ^Nov / ^T3 / ^yr, op "priority"); the server groups them ---------- */
-let dragged = null;                              // the task being dragged (this page only)
-function inColumn(t, c, pl) {                    // is the task planned for this column (or a part of it)?
-  return !!t.plan && PLAN_RANK[t.plan_kind] <= PLAN_RANK[pl.column_kind] && c.start <= t.plan && t.plan_end <= c.end;
-}
-function planPick(cell, t, pl) {                 // the column list (Mon … Sat/Sun, weeks, months, trimesters), and Unplan
-  const here = pl.columns.find(c => inColumn(t, c, pl));
+let dragged = null;                              // {t, via}: the task being dragged, and the plan its card stands for
+const plansIn = (t, c, pl) => (t.plans || []).filter(p => PLAN_RANK[p.kind] <= PLAN_RANK[pl.column_kind] && c.start <= p.start && p.end <= c.end);
+const inPeriod = (t, pl) => (t.plans || []).filter(p => p.start <= pl.end && p.end >= pl.start)   // earliest first
+  .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+function inColumn(t, c, pl) { return plansIn(t, c, pl).length > 0; }   // planned for this column (or a part of it)?
+function planPick(cell, t, pl) {                 // the columns (days, weeks, months, trimesters): tick as many as you like
   const cols = pl.columns.filter(c => c.ok);
-  pickCell(cell, "Plan for", [...cols.map(c => ({ value: c.token, text: c.head, note: c.today ? "now" : "" })),
-    ...(t.plan ? [{ value: "", text: "Unplan", note: t.plan_label }] : [])], here ? here.token : null, v => planTask(t, v, pl));
+  const ticked = cols.filter(c => inColumn(t, c, pl)).map(c => c.token);
+  const fromBacklog = !inPeriod(t, pl).length;   // not planned in this period yet: plans already past go too
+  const n = (t.plans || []).length, unit = COLUMN_UNIT[pl.column_kind], head = v => cols.find(c => c.token === v).head;
+  const both = xs => xs.length > 1 ? xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1] : xs[0];
+  pickMany(cell, `Plan for: tick one ${unit} or more`, cols.map(c => ({ value: c.token, text: c.head, note: c.today ? "now" : "" })), ticked,
+    chosen => {
+      const add = chosen.filter(v => !ticked.includes(v)), off = ticked.filter(v => !chosen.includes(v));
+      const remove = off.flatMap(v => plansIn(t, cols.find(c => c.token === v), pl).map(p => p.token));
+      const says = [add.length && `planned for ${both(add.map(head))}`, off.length && `taken off ${both(off.map(head))}`].filter(Boolean).join("; ");
+      editTask(t, "plan", { add, remove, past: fromBacklog }, null, `"${t.title}": ${says}.`);
+    }, n ? { text: n > 1 ? "Unplan all" : "Unplan", run: () => planTask(t, "", pl, "clear") } : null);
 }
-function planTask(t, token, pl) {
-  const col = pl.columns.find(c => c.token === token), was = pl.columns.find(c => inColumn(t, c, pl));
-  if (token && col === was && t.plan_kind === pl.column_kind) return;
+function planTask(t, token, pl, how, via) {      // how: plan (from the backlog), copy (as well), move (via -> token), remove, clear
+  const col = pl.columns.find(c => c.token === token), head = col ? col.head : token, title = `"${t.title}"`;
   if (col && !col.ok) return;
-  editTask(t, "plan", token, null, !token ? `Unplanned "${t.title}".` : was ? `Moved "${t.title}" to ${col.head}.`
-    : `Planned "${t.title}" for ${col.head}.`);
+  if (how === "move" && (!via || !col)) how = "plan";
+  if (how === "move") {
+    if (plansIn(t, col, pl).some(p => p.token === via)) return;   // dropped where it already was
+    return editTask(t, "plan", { from: via, to: token }, null, `Moved ${title} to ${head}.`);
+  }
+  if (how === "copy") return editTask(t, "plan", "+" + token, null, `Also planned ${title} for ${head}.`);
+  if (how === "remove") {
+    const p = (t.plans || []).find(x => x.token === token);
+    return editTask(t, "plan", "-" + token, null, `Took ${title} off ${p ? p.label : token}.`);
+  }
+  if (how === "clear") return editTask(t, "plan", "", null, `Unplanned ${title}.`);
+  editTask(t, "plan", token, null, `Planned ${title} for ${head}.`);
 }
 const STAR = { on: '<path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6-4.4-4.2 6-.8z" fill="currentColor"/>',
   off: '<path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6-4.4-4.2 6-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' };
@@ -1270,26 +1351,32 @@ function projectChips(d) {
   }
   return box;
 }
-function draggable(el, t) {
+function draggable(el, t, via) {                 // via: the plan a card stands for (a backlog row has none)
   el.draggable = true;
-  el.addEventListener("dragstart", e => { dragged = t; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.title); });
+  el.addEventListener("dragstart", e => { dragged = { t, via }; e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("text/plain", t.title); });
   el.addEventListener("dragend", () => { dragged = null; });
 }
+const copying = e => e.altKey || e.shiftKey;     // ⌥/Alt or Shift while dropping a card: plan it there as well
 function dropZone(el, onDrop) {
-  el.addEventListener("dragover", e => { if (!dragged) return; e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragover", e => {
+    if (!dragged) return;
+    e.preventDefault(); el.classList.add("over");
+    e.dataTransfer.dropEffect = dragged.via && copying(e) ? "copy" : "move";
+  });
   el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
-  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const t = dragged; dragged = null; if (t) onDrop(t); });
+  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const d = dragged; dragged = null; if (d) onDrop(d, copying(e)); });
 }
-function weekItem(cls, t, w, extra) {           // a planned task: status, ☆, title (+ meta); a click opens the column list, drag moves it
+function weekItem(cls, t, w, extra, via) {      // a planned task: status, ☆, title (+ meta); a click opens the column list, drag moves it
   const body = h("span", "wbody", span("wt", t.title), ...extra);
   const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : ""), statusBox(t), starButton(t, w), body);
   el.dataset.line = t.line;
-  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (t.plan ? "  · planned " + t.plan_label : "") + "  (line " + t.line + ")";
+  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (t.plan_labels ? "  · planned " + t.plan_labels : "")
+    + "  (line " + t.line + ")" + (via ? "\nDrag to move this day; hold ⌥/Alt or Shift to plan it there as well" : "");
   el.onclick = e => {
     if ($("viewPane").classList.contains("jump") || e.target.closest("button")) return;   // Edit alongside: the click jumps instead
     e.stopPropagation(); planPick(el, t, w);
   };
-  draggable(el, t);
+  draggable(el, t, via === undefined ? (inPeriod(t, w)[0] || {}).token : via);   // a line, not a card: its first plan here
   return el;
 }
 /* ---------- Habits (a project's habits.kf): tasks with a frequency (*daily, *weekdays, *weekly Mon, Wed, *monthly 1st).
@@ -1417,8 +1504,11 @@ function vPlanner(d) {
   const unit = PLAN_UNIT[pl.kind], where = pl.current ? "this " + unit : pl.label;
   const chips = projectChips(d);
   if (chips) out.append(chips);
-  const meta = t => span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
-    + (t.plan_kind !== pl.column_kind ? " · " + t.plan_label : ""));
+  const meta = t => { const p = (t.plans || []).find(x => x.token === t.via);   // a plan finer than the column: say which
+    return span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
+      + (p && p.kind !== pl.column_kind ? " · " + p.label : "")); };
+  const where1 = t => [...new Set(inPeriod(t, pl).map(p => { const c = pl.columns.find(x => plansIn(t, x, pl).includes(p));
+    return c && p.kind === pl.column_kind ? c.head.split(" ")[0] : p.label; }))].join(", ");
   const prios = pl.priorities.filter(on);         // Top priorities for exactly this period
   const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + where)));
   if (prios.length) top.append(...prios.map(t => weekItem("wline", t, pl, [span("wd", projLabel({ name: t.project, folder: t.folder }))])));
@@ -1430,10 +1520,10 @@ function vPlanner(d) {
   for (const c of pl.columns) {
     const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
-    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)]));
+    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
-    if (c.ok) dropZone(col, t => planTask(t, c.token, pl));
+    if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, !d.via ? "plan" : copy ? "copy" : "move", d.via));
     days.append(col);
   }
   const side = h("div", "wside", h("h4", "grp", where[0].toUpperCase() + where.slice(1)));
@@ -1443,8 +1533,7 @@ function vPlanner(d) {
     const sum = h("div", "wsum", `${done}/${pts(total)}`);
     sum.title = `${pts(done)} done of ${pts(total)} planned`;
     side.append(h("div", "wproj", h("div", "wpname", projLabel(g)),
-      ...starFirst(g.tasks, pl).map(t => { const c = pl.columns.find(x => inColumn(t, x, pl));
-        return weekItem("wline", t, pl, [span("wd", c && t.plan_kind === pl.column_kind ? c.head.split(" ")[0] : t.plan_label)]); }),
+      ...starFirst(g.tasks, pl).map(t => weekItem("wline", t, pl, [span("wd", where1(t))])),
       sum));
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
@@ -1458,13 +1547,13 @@ function vPlanner(d) {
     back.append(h("h3", "ph", h("span", "", ...(g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name]))));
     for (const t of starBlocksFirst(g.tasks, pl)) {   // drag by the title side (the row's inputs stay selectable)
       const row = taskNode(t, { depth: t.depth, week: pl });
-      draggable(row.querySelector(".lead"), t);
+      draggable(row.querySelector(".lead"), t, null);
       back.append(row);
     }
   }
   if (!bgroups.length) back.append(h("div", "empty", hidden.size && !groups.length && !bgroups.length ? "No projects on the calendar: add one above."
     : d.filtered ? "No matching open tasks." : `Every open task is planned for ${where}.`));
-  dropZone(back, t => t.plan && planTask(t, "", pl));   // drop a planned task here to unplan it
+  dropZone(back, d => d.via && planTask(d.t, d.via, pl, "remove"));   // drop a card here: take that plan off
   out.append(back);
   return out;
 }
@@ -1593,11 +1682,11 @@ dNew.onclick = () => ask(dNew.parentNode, "project name", "", 0, async v => {
 async function folioOp(body) {                     // POST /api/portfolio; -> the new path (the tree is updated)
   const [r, d] = await fileApi(body, "/api/portfolio");
   if (!r.ok) throw new Error(d.error || r.statusText);
-  state.folio = d.tree;
+  setFolio(d.tree);
   return d.path;
 }
 async function refreshFolio() {                     // the folder may have changed outside the page
-  try { const [r, d] = await fileApi(null, "/api/portfolio"); if (r.ok && d.name) state.folio = d; } catch (e) {}
+  try { const [r, d] = await fileApi(null, "/api/portfolio"); if (r.ok && d.name) setFolio(d); } catch (e) {}
 }
 
 /* a one-line form in the drawer (new or rename): Enter submits (a refusal is shown on the field), Esc or leaving cancels */
@@ -1701,7 +1790,8 @@ function drawDrawer() {
     };
     const head = dRow(0, null, p.name, { chev: open, go: toggle, active: !open && here && isUnder(here, p.name),
       more: row => [["New page", () => newPage(p.name, null, row, 1)], ["New section", () => newSection(p.name, row)],
-        ["Rename", () => renameItem(p.path, row, 0)], ["Delete", () => trashItem(p.path, "the project")]] });
+        ["Rename", () => renameItem(p.path, row, 0)], ["Hide", () => hideProject(p.name, true)],
+        ["Delete", () => trashItem(p.path, "the project")]] });
     rows.push(head);
     if (!open) continue;
     for (const [key, label, ic] of FOLIO_FILES)
@@ -1723,8 +1813,22 @@ function drawDrawer() {
       for (const a of p.archive) rows.push(dRow(2, null, String(a.year), { active: here === a.path, go: () => openPage(a.path) }));
     } else rows.push(dRow(1, ARCHIVE_ICON, "Archive", { disabled: true, title: "Nothing archived yet" }));
   }
-  if (!f.projects.length) rows.push(h("div", "empty", "No projects yet."));
-  else if (q && rows.length === 2) rows.push(h("div", "empty", "No project matches."));
+  const hidden = state.folioAll.projects.filter(p => hiddenProjects().includes(p.name));
+  const shownHidden = hidden.filter(p => !q || p.name.toLowerCase().includes(q));
+  if (!f.projects.length) rows.push(h("div", "empty", hidden.length ? "Every project is hidden." : "No projects yet."));
+  else if (q && rows.length === 3 && !shownHidden.length) rows.push(h("div", "empty", "No project matches."));
+  if (shownHidden.length) {                      // hidden projects: folded away at the bottom, ⋯ › Show brings one back
+    const open = !!q || store.get("folioHiddenOpen", "0") === "1";
+    rows.push(dRow(0, null, `Hidden (${hidden.length})`, { chev: open, title: "Projects you hid: they stay in the Projects folder",
+      go: () => { store.set("folioHiddenOpen", open ? "0" : "1"); drawDrawer(); } }));
+    rows[rows.length - 1].classList.add("dhidden");
+    if (open) for (const p of shownHidden) {
+      const r = dRow(1, null, p.name, { title: `${p.name} is hidden from the list, All projects and the Planner`,
+        more: row => [["Show", () => hideProject(p.name, false)], ["Delete", () => trashItem(p.path, "the project")]] });
+      r.classList.add("dhidden");
+      rows.push(r);
+    }
+  }
   dNav.replaceChildren(...rows);
 }
 function pageRow(pg, depth, here) {
@@ -1748,12 +1852,40 @@ function inTree(path) {                              // is this page still in th
   if (p.archive.some(a => a.path === path)) return true;
   return p.notes.some(n => n.path === path || (n.pages || []).some(pg => pg.path === path));
 }
+/* Hidden projects (per browser, "hiddenProjects": a list of folder names). Hide one from its ⋯ in the drawer (or the
+   sample project from ⋯ › Show the Example project); it leaves the project list, All projects and the Planner (the
+   server leaves it out of All projects: `hide`) and waits under "Hidden" at the bottom of the drawer, where its ⋯ shows
+   it again. Its folder is untouched. */
+if (store.get("hideExample", null) !== null) {       // 2.0.12 kept only the Example project's choice
+  if (store.get("hideExample", "0") === "1") store.set("hiddenProjects", JSON.stringify(["Example"]));
+  store.del("hideExample");
+}
+function hiddenSet() { try { return new Set(JSON.parse(store.get("hiddenProjects", "[]"))); } catch (e) { return new Set(); } }
+const hiddenProjects = () => state.folioAll ? state.folioAll.projects.map(p => p.name).filter(n => hiddenSet().has(n)) : [];
+function setFolio(tree) {                            // keep the whole tree, show the projects not hidden
+  state.folioAll = tree;
+  const hide = hiddenProjects();
+  state.folio = { ...tree, projects: tree.projects.filter(p => !hide.includes(p.name)) };
+  $("exampleWrap").classList.toggle("hidden", !tree.example);
+  $("showExample").checked = !hide.includes(tree.example);
+}
+async function hideProject(name, hide) {             // hide (true) or show a project again
+  const set = hiddenSet();
+  set[hide ? "add" : "delete"](name);
+  store.set("hiddenProjects", JSON.stringify([...set]));
+  if (!state.folioAll) return;
+  setFolio(state.folioAll);
+  if (hide && state.file && state.file.path && state.file.path.split("/")[0] === name) await showAll();   // its page was open
+  else if (state.all) render(false);
+  drawDrawer();
+}
+$("showExample").onchange = () => { if (state.folioAll && state.folioAll.example) hideProject(state.folioAll.example, !$("showExample").checked); };
 async function startPortfolio(tree) {
-  state.folio = tree;
+  setFolio(tree);
   $("brand").disabled = false; $("brand").title = "Projects and pages";
   const last = store.get("folioActive", "");
   if (last && inTree(last)) await openPage(last); else await showAll();
-  if (!last && !tree.projects.length) openDrawer(true);
+  if (!last && !state.folio.projects.length) openDrawer(true);
 }
 async function openPage(path) {                      // show one of a project's files in the text box (autosaved)
   await leaveFile();

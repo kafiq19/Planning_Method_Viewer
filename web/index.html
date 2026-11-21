@@ -31,11 +31,12 @@
       <button class="mi" id="theme" role="menuitem">Dark mode <span class="k" id="themeNote"></span></button>
       <div class="mi" id="sizeWrap">Text size <span class="seg" id="textSize" role="radiogroup" aria-label="Text size"></span></div>
       <label class="mi" id="fontWrap">Font <select id="font" aria-label="Font for the views"></select></label>
+      <label class="mi hidden" id="exampleWrap" title="The sample project in your Projects folder. Hiding it only hides it in this browser; the folder stays. Any project can be hidden from its ⋯ in the drawer">Show the Example project <input type="checkbox" id="showExample"></label>
       <div class="sep"></div>
       <label class="mi" title="Filled in for each new task (+ Add task)">My initials <input type="text" id="defWho" placeholder="KA" maxlength="14"></label>
       <label class="mi" title="Filled in for each new task (+ Add task)">Default effort <select id="defEffort"><option value="">None</option></select></label>
       <div class="sep"></div>
-      <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
+      <label class="mi" id="todayWrap" title="Follows the date by itself. Type a day (like Oct12) to see the views as of then, like --today; it lasts until you clear it or reload">Today <span class="tday"><span class="k" id="todayNote">auto</span><input type="text" id="today" placeholder="Oct12" aria-describedby="todayNote"><button type="button" id="todayReset" class="hidden" title="Back to the real date" aria-label="Back to the real date">×</button></span></label>
     </div>
   </span>
 </header>

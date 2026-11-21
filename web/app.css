@@ -52,6 +52,10 @@ input[type=text], input[type=search] { cursor: text; }
 .mi .seg button { padding: 2px 9px; line-height: 1.2; }
 .mi select { font-size: 13px; padding: 3px 6px; max-width: 9.5em; }
 .mi input[type=text] { width: 7.5em; font-size: 13px; padding: 3px 7px; }
+.tday { display: inline-flex; align-items: center; gap: 6px; }
+.tday input[type=text] { width: 5.5em; }
+#todayReset { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
+#todayReset:hover { color: var(--text); }
 .sep { height: 1px; background: var(--line); margin: 5px 4px; }
 .panel { padding: 14px; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -174,6 +178,16 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .pickbox .mi { padding: 5px 8px; font-size: calc(13px * var(--fz)); gap: 10px; justify-content: flex-start; }
 .pickbox .mi .k { margin-left: auto; }
 .pickbox .mi .ck { width: 1em; color: var(--accent); }
+/* the Planner's plan list: several ticks, then Plan */
+.pickbox.many { min-width: 230px; }
+.pickbox.many .mi .ck { width: 14px; height: 14px; flex: none; border: 1.5px solid var(--muted); border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1; }
+.pickbox.many .mi[aria-selected=true] .ck { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.pickbox .phead { padding: 4px 8px 5px; font-size: calc(11.5px * var(--fz)); color: var(--muted); }
+.pickbox .pfoot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--line); }
+.pickbox .pfoot button { font-size: calc(12.5px * var(--fz)); padding: 3px 10px; white-space: nowrap; }
+.pickbox .pfoot .ghost:first-child:not(:nth-last-child(2)) { margin-right: auto; }
+.pickbox .pfoot .ok { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 /* "+ Add task" at the end of a project (and of each person, and of Timeline / Upcoming, with a project picker) */
 .addrow { display: flex; align-items: center; min-height: 28px; padding: 0 8px; }
 .addtask { border: 0; background: none; color: var(--muted); font-size: calc(13px * var(--fz)); padding: 2px 6px; margin-left: -4px; border-radius: 5px; }
@@ -319,6 +333,7 @@ body.drawer-open .scrim { display: block; }
 .dlabel { padding: 12px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .drow { position: relative; display: flex; align-items: center; border-radius: 6px; }
 .drow:hover, .drow.on { background: var(--hover); }
+.drow.dhidden > .ditem { color: var(--muted); }
 .drow.on > .ditem { font-weight: 600; color: var(--text); }
 .ditem { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px calc(8px + var(--dd, 0) * 18px);
   border: 0; background: none; color: var(--text); font-size: 14px; text-align: left; }
