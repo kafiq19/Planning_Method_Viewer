@@ -5,6 +5,29 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.17  2026-11-21  Fold projects in the Planner's backlog
+-------------------------------------------------
+- New: in the Planner, click a project's name in the backlog to fold its
+  tasks away, as in Projects; it then says how many open tasks it hides.
+  Folds are remembered (separately from Projects) and open while a
+  search or filter is on.
+- Code: the backlog headings use foldHead, key "collapsedBacklog".
+
+
+2.0.16  2026-11-21  Day view and Add task in the Planner
+-------------------------------------------------
+- New: Day, after Week in the Planner's levels. It shows one day: what's
+  planned for it, its habits to tick, and the backlog to plan from; ‹ ›
+  step a day at a time. Its top priorities (☆) are the week's.
+- New: + Add task in the Planner. Each column has + Add at its foot: the
+  new task goes to the project you pick and is planned for that column.
+  The backlog has + Add task after each project and one at the end, as
+  in Projects.
+- Code: planner kind "day" (index = day of the year; _day_of,
+  star_period, DAY_NAMES); planner.star.label; planner.days for a day;
+  add_with_fields takes plan; addTaskRow/openAdd take a column.
+
+
 2.0.15  2026-11-21  One place to hide a project
 -------------------------------------------------
 - Removed: ⋯ › Show the Example project in the top right. Hide the

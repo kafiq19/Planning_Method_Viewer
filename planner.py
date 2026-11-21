@@ -702,16 +702,28 @@ def week_days(monday):
     return list(zip(heads, [[d] for d in days[:5]])) + [(f"Sat/Sun {days[5].day}-{days[6].day}", days[5:])]
 
 
-# ---------- the Planner: Year / Season / Month / Week (a planner period is (kind, year, index)) ----------
-# Week: ISO year and week. Month: index 1-12. Season: index 0-2 (SEASONS). Year: index 0.
-# Its columns are the next level down: days (Sat/Sun together), weeks, months, trimesters.
+# ---------- the Planner: Year / Season / Month / Week / Day (a planner period is (kind, year, index)) ----------
+# Day: index = day of the year (1-366). Week: ISO year and week. Month: index 1-12. Season: index 0-2 (SEASONS).
+# Year: index 0. Its columns are the next level down: days (Sat/Sun together), weeks, months, trimesters; a day
+# has one column, itself.
 
-PLANNER_KINDS = ("year", "season", "month", "week")
-COLUMN_KIND = {"week": "day", "month": "week", "season": "month", "year": "season"}
+PLANNER_KINDS = ("year", "season", "month", "week", "day")
+COLUMN_KIND = {"day": "day", "week": "day", "month": "week", "season": "month", "year": "season"}
+DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _day_of(y, i):
+    """Day `i` (1-366) of year `y`; ValueError if the year has no such day."""
+    d = date(y, 1, 1) + timedelta(days=i - 1) if type(i) is int and i >= 1 else None
+    if d is None or d.year != y:
+        raise ValueError(f"{y} has no day {i}")
+    return d
 
 
 def planner_at(kind, d):
     """The planner period of `kind` containing day `d`."""
+    if kind == "day":
+        return "day", d.year, d.timetuple().tm_yday
     if kind == "week":
         y, w, _ = d.isocalendar()
         return "week", y, w
@@ -732,7 +744,9 @@ def planner_from(obj):
     y, i = obj.get("year"), obj.get("index", 0)
     if type(y) is not int or type(i) is not int or not 1900 <= y <= 2999:
         raise ValueError(f"bad planner period {obj!r}")
-    if kind == "week":
+    if kind == "day":
+        _day_of(y, i)                                       # ValueError if there is no such day
+    elif kind == "week":
         date.fromisocalendar(y, i, 1)                       # ValueError if there is no such week
     elif kind in ("month", "season"):
         return period_from(obj)
@@ -742,6 +756,9 @@ def planner_from(obj):
 
 
 def planner_range(kind, y, i):
+    if kind == "day":
+        d = _day_of(y, i)
+        return d, d
     if kind == "week":
         m = date.fromisocalendar(y, i, 1)
         return m, m + timedelta(days=6)
@@ -751,6 +768,8 @@ def planner_range(kind, y, i):
 
 
 def planner_step(kind, y, i, step):
+    if kind == "day":
+        return planner_at("day", _day_of(y, i) + timedelta(days=step))
     if kind == "week":
         return planner_at("week", date.fromisocalendar(y, i, 1) + timedelta(days=7 * step))
     if kind == "year":
@@ -759,7 +778,10 @@ def planner_step(kind, y, i, step):
 
 
 def planner_label(kind, y, i):
-    """"Oct 12 - 18", "Nov 2026", "Fall 2026", "2026"."""
+    """"Mon Oct 12", "Oct 12 - 18", "Nov 2026", "Fall 2026", "2026"."""
+    if kind == "day":
+        d = _day_of(y, i)
+        return f"{DAY_NAMES[d.weekday()]} {fd(d)}"
     if kind == "week":
         return week_label(date.fromisocalendar(y, i, 1))
     if kind == "year":
@@ -772,6 +794,8 @@ def planner_columns(kind, y, i):
     together, planned as Saturday), a month's Mon-Sun weeks (headed by their days in the month), a
     season's months, a year's trimesters. `token` is the plan token for the column (without the >)."""
     ps, pe = planner_range(kind, y, i)
+    if kind == "day":
+        return [(f"{DAY_NAMES[ps.weekday()]} {ps.day}", ps, ps, f"{MONTH_NAMES[ps.month - 1]}{ps.day:02d}")]
     if kind == "week":
         return [(head, ds[0], ds[-1], f"{MONTH_NAMES[ds[0].month - 1]}{ds[0].day:02d}") for head, ds in week_days(ps)]
     if kind == "month":
@@ -788,9 +812,17 @@ def planner_columns(kind, y, i):
             for k, (n, a, b) in enumerate(SEASONS)]
 
 
+def star_period(kind, y, i):
+    """The period a ☆ marks from this planner period: itself, but a day's is its week (there are no day priorities)."""
+    if kind == "day":
+        return planner_at("week", _day_of(y, i))
+    return kind, y, i
+
+
 def planner_star(kind, y, i):
-    """The ^priority token for this period, and whether it reads back as this period (a token has no year,
-    so only periods within about a year can be marked; ^yr is always this year)."""
+    """The ^priority token for this period (a day: its week's), and whether it reads back as that period (a token
+    has no year, so only periods within about a year can be marked; ^yr is always this year)."""
+    kind, y, i = star_period(kind, y, i)
     ps, pe = planner_range(kind, y, i)
     token = {"week": f"wk{i}", "month": MONTH_NAMES[i - 1] if kind == "month" else "", "season": f"T{i + 1}", "year": "yr"}[kind]
     pr = priority_of(token)
@@ -829,6 +861,8 @@ def planner_groups(projects, period):
         cols.append((head, a, b, token, ok, []))
     lo, hi = cols[0][1], cols[-1][2]
     rank = PLAN_RANK[COLUMN_KIND[kind]]
+    sp = star_period(*period)
+    star = (sp[0],) + planner_range(*sp)                      # priorities: for this period (a day: its week)
     planned, backlog, prios = [], [], []
     for p in projects:
         mine, rest = [], []
@@ -847,7 +881,7 @@ def planner_groups(projects, period):
                             cols[ci][5].append((p, t, tok))
             elif t.status != "done":
                 rest.append((depth, t))
-            if any(pr[1:] == (kind, ps, pe) for pr in t.priorities):
+            if any(pr[1:] == star for pr in t.priorities):
                 prios.append((p, t))
             for c in t.children:
                 visit(c, depth + 1)
@@ -1029,6 +1063,8 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
     pnow = planner_at(plan[0], TODAY)
     pstart, pend = planner_range(*plan)
     star, star_ok = planner_star(*plan)
+    spk = star_period(*plan)
+    spr = planner_range(*spk)
 
     def pref(x):
         return {"kind": x[0], "year": x[1], "index": x[2], "label": planner_label(*x)}
@@ -1062,7 +1098,7 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
             **pref(plan), "start": iso(pstart), "end": iso(pend), "current": plan == pnow,
             "prev": pref(planner_step(*plan, -1)), "next": pref(planner_step(*plan, 1)), "now": pref(pnow),
             "column_kind": COLUMN_KIND[plan[0]],
-            "star": {"token": star, "ok": star_ok, "kind": plan[0], "start": iso(pstart), "end": iso(pend)},
+            "star": {"token": star, "ok": star_ok, "kind": spk[0], "start": iso(spr[0]), "end": iso(spr[1]), "label": planner_label(*spk)},
             "columns": [{"head": head, "start": iso(a), "end": iso(b), "token": token, "ok": ok, "today": a <= TODAY <= b,
                          "tasks": [dict(flat(p, t), via=via) for p, t, via in items]} for head, a, b, token, ok, items in pcols],
             "projects": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "points": effort_points(tasks)[1],
@@ -1075,7 +1111,7 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
                        for p, t, specs, due, done in habit_rows(habits or [], pcols[0][1], pcols[-1][2], every)],
             "days": [{"date": iso(x), "head": f"{('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[x.weekday()]} {x.day}",
                       "token": f"{MONTH_NAMES[x.month - 1]}{x.day:02d}", "today": x == TODAY, "future": x > TODAY}
-                     for x in (pstart + timedelta(days=k) for k in range(7))] if plan[0] == "week" else [],
+                     for x in (pstart + timedelta(days=k) for k in range((pend - pstart).days + 1))] if plan[0] in ("week", "day") else [],
             "log_years": sorted({x.year for p in (habits or []) for t in p.all_tasks() for x in t.log() if x.year < TODAY.year})},
     }
 
@@ -1792,7 +1828,8 @@ def add_task(text, line, task_text, title=None):
 
 def add_with_fields(op, text, line, fields, title=None):
     """Op `task` or `subtask` with the new task's fields given separately:
-    {"title": "draft report", "who": "KA", "effort": "m", "date": "Oct24"} (all but the title optional).
+    {"title": "draft report", "who": "KA", "effort": "m", "date": "Oct24", "plan": "Oct14"} (all but the title
+    optional; `every` too, for a habit; `plan` plans it, as the Planner's column + Add task does).
 
     The line is added with the title alone, then who, effort and date are set on it by the
     same edits as the page's cells (set_assignees, set_effort, set_date), so each is checked
@@ -1803,7 +1840,7 @@ def add_with_fields(op, text, line, fields, title=None):
     out = EDITS[op](text, line, fields["title"], title)
     a, b = text.splitlines(), out.splitlines()
     n = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), len(a)) + 1   # the new line
-    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date), ("every", set_every)):
+    for key, edit in (("who", set_assignees), ("effort", set_effort), ("date", set_date), ("every", set_every), ("plan", set_plan)):
         value = fields.get(key)
         if value in (None, ""):
             continue

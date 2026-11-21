@@ -519,18 +519,18 @@ const ADD = () => span("add", "+");
 
 /* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
    Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
-function addTaskRow(project, who = "") {           // who: People prefills that person's initials
-  const btn = h("button", "addtask", span("plus", "+"), "Add task");
-  btn.title = project ? "Add a task at the end of " + projLabel(project) : "Add a task to a project";
-  btn.dataset.key = (project ? "p\n" + (project.path || "") + "\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
-  const row = h("div", "addrow", btn);
-  btn.onclick = () => openAdd(btn, project, who);
+function addTaskRow(project, who = "", col = null) {   // who: People prefills that person's initials; col: a Planner column to plan it for
+  const btn = h("button", "addtask", span("plus", "+"), col ? "Add" : "Add task");
+  btn.title = (project ? "Add a task at the end of " + projLabel(project) : "Add a task to a project") + (col ? `, planned for ${col.head}` : "");
+  btn.dataset.key = (project ? "p\n" + (project.path || "") + "\n" + project.name : "x") + "\n" + who + (col ? "\n" + col.token : "");   // found again after a redraw (keep adding)
+  const row = h("div", "addrow" + (col ? " wadd" : ""), btn);
+  btn.onclick = () => openAdd(btn, project, who, null, col);
   return row;
 }
 /* + Add task: the title, then optional Who / Effort / Date fields (Tab moves between them), prefilled with the
    defaults from ⋯. Enter adds it and opens the form again for the next one; Esc or clicking away ends. The fields
    go to the server separately (op "task" with {title, who, effort, date}); the page never writes note syntax. */
-function openAdd(btn, project, presetWho, keep) {
+function openAdd(btn, project, presetWho, keep, col) {
   const targets = state.data.targets;
   if (!project && !targets.length) {
     state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
@@ -562,7 +562,7 @@ function openAdd(btn, project, presetWho, keep) {
     const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
     sel.value = pick;
   }
-  const form = h("div", "addform", ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
+  const form = h("div", "addform" + (col ? " stack" : ""), ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
   let closed = false, pressing = false;
   const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
     if (closed) return;
@@ -579,15 +579,16 @@ function openAdd(btn, project, presetWho, keep) {
     else if (e.key === "Enter" && e.target !== sel) {
       e.preventDefault();
       const v = input.value.trim(), p = project || targets[sel.value];
-      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim() };
+      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim(), ...(col ? { plan: col.token } : {}) };
       cancel();
       if (!v) return;
       if (sel) store.set("addTo", (p.path || "") + "\n" + p.line + "\n" + p.name);
-      const plain = !fields.who && !fields.effort && !fields.date;
-      const done = editTask({ line: p.line, title: p.name, path: p.path }, "task", plain ? v : fields, null, `Added "${v}" to ${projLabel(p)}.`);
+      const plain = !fields.who && !fields.effort && !fields.date && !col;
+      const done = editTask({ line: p.line, title: p.name, path: p.path }, "task", plain ? v : fields, null,
+        `Added "${v}" to ${projLabel(p)}` + (col ? `, planned for ${col.head}.` : "."));
       done.then(ok => {                            // keep adding: the form again, empty, same Who / Effort; refused: as typed
         const again = [...plannerBody.querySelectorAll(".addtask")].find(b => b.dataset.key === btn.dataset.key);
-        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields);
+        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields, col);
       });
     }
   };
@@ -712,10 +713,10 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   }
 }
 
-/* ---------- Planner: Year / Season / Month / Week, then ‹ Oct 12-18 › (the server does the date math). The level is
+/* ---------- Planner: Year / Season / Month / Week / Day, then ‹ Oct 12-18 › (the server does the date math). The level is
    remembered ("planKind"); the period is not, so the Planner opens on the current week, month, season or year ---------- */
-const PLAN_LEVELS = [["year", "Year"], ["season", "Season"], ["month", "Month"], ["week", "Week"]];
-const PLAN_UNIT = { week: "week", month: "month", season: "season", year: "year" };
+const PLAN_LEVELS = [["year", "Year"], ["season", "Season"], ["month", "Month"], ["week", "Week"], ["day", "Day"]];
+const PLAN_UNIT = { day: "day", week: "week", month: "month", season: "season", year: "year" };
 const COLUMN_UNIT = { day: "day", week: "week", month: "month", season: "trimester" };
 const PLAN_RANK = { day: 0, week: 1, month: 2, season: 3, year: 4 };
 state.plan = { kind: PLAN_LEVELS.some(([k]) => k === store.get("planKind", "")) ? store.get("planKind", "") : "week" };
@@ -846,7 +847,9 @@ function plannerView() {
   if (habitsPage) bits.push("Tick a day when you've done it · each habit repeats on the days its frequency says");
   else if (state.tab === "planner") {
     const pl = d.planner, unit = COLUMN_UNIT[pl.column_kind];
-    bits.push(`Drag a task onto a ${unit}, or use its Plan cell (⌥/Shift-drag a card to plan it there as well) · ☆ marks a top priority for this ${PLAN_UNIT[pl.kind]}`
+    bits.push((pl.kind === "day" ? "Drag a task from the backlog onto the day, or use its Plan cell"
+      : `Drag a task onto a ${unit}, or use its Plan cell (⌥/Shift-drag a card to plan it there as well)`)
+      + ` · ☆ marks a top priority for this ${PLAN_UNIT[pl.star.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
   }
   else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
@@ -1309,14 +1312,14 @@ const starred = (t, pl) => t.priorities.some(p => p.kind === pl.star.kind && p.s
 function starButton(t, pl) {                     // ☆: a top priority for the period shown (^wk45, ^Nov, ^T3, ^yr)
   const on = starred(t, pl), b = h("button", "star" + (on ? " on" : ""));
   b.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">${on ? STAR.on : STAR.off}</svg>`;   // fixed markup
-  b.title = on ? `Top priority for ${pl.label}. Click to unmark` : pl.star.ok ? `Make it a top priority for ${pl.label}`
+  b.title = on ? `Top priority for ${pl.star.label}. Click to unmark` : pl.star.ok ? `Make it a top priority for ${pl.star.label}`
     : pl.kind === "year" ? "Year priorities can be marked for this year only" : "Too far away to mark (the notes have no years)";
   b.setAttribute("aria-label", b.title); b.setAttribute("aria-pressed", String(on));
   b.disabled = !on && !pl.star.ok;
   b.onclick = e => {
     e.stopPropagation();
     editTask(t, "priority", (on ? "-" : "") + pl.star.token, b,
-      on ? `"${t.title}" is no longer a top priority for ${pl.label}.` : `Made "${t.title}" a top priority for ${pl.label}.`);
+      on ? `"${t.title}" is no longer a top priority for ${pl.star.label}.` : `Made "${t.title}" a top priority for ${pl.star.label}.`);
   };
   return b;
 }
@@ -1501,18 +1504,19 @@ const groupsStarFirst = (groups, pl) => [...groups.filter(g => g.tasks.some(t =>
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
   const pl = d.planner, out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
-  const unit = PLAN_UNIT[pl.kind], where = pl.current ? "this " + unit : pl.label;
+  const unit = PLAN_UNIT[pl.kind], where = pl.kind === "day" ? (pl.current ? "today" : pl.label) : pl.current ? "this " + unit : pl.label;
+  const starWhere = pl.star.kind === pl.kind ? where : pl.current ? "this week" : "the week of " + pl.star.label;   // a day's are its week's
   const chips = projectChips(d);
   if (chips) out.append(chips);
   const meta = t => { const p = (t.plans || []).find(x => x.token === t.via);   // a plan finer than the column: say which
     return span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
       + (p && p.kind !== pl.column_kind ? " · " + p.label : "")); };
   const where1 = t => [...new Set(inPeriod(t, pl).map(p => { const c = pl.columns.find(x => plansIn(t, x, pl).includes(p));
-    return c && p.kind === pl.column_kind ? c.head.split(" ")[0] : p.label; }))].join(", ");
+    return c && p.kind === pl.column_kind ? (pl.kind === "day" ? "" : c.head.split(" ")[0]) : p.label; }))].filter(Boolean).join(", ");
   const prios = pl.priorities.filter(on);         // Top priorities for exactly this period
-  const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + where)));
+  const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + starWhere)));
   if (prios.length) top.append(...prios.map(t => weekItem("wline", t, pl, [span("wd", projLabel({ name: t.project, folder: t.folder }))])));
-  else top.append(h("div", "wempty", pl.star.ok ? `Mark a task with ☆ to make it a top priority for ${where}.`
+  else top.append(h("div", "wempty", pl.star.ok ? `Mark a task with ☆ to make it a top priority for ${starWhere}.`
     : pl.kind === "year" ? "Year priorities can be marked for this year only." : "Too far away to mark priorities (the notes have no years)."));
   out.append(top);
   const days = h("div", "wdays");
@@ -1523,6 +1527,7 @@ function vPlanner(d) {
     for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
+    if (c.ok && d.targets.length) col.append(addTaskRow(null, "", c));   // a new task, planned for this column
     if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, !d.via ? "plan" : copy ? "copy" : "move", d.via));
     days.append(col);
   }
@@ -1543,16 +1548,22 @@ function vPlanner(d) {
   back.firstChild.children[4].textContent = "Plan";
   back.firstChild.children[4].classList.add("r");
   const bgroups = groupsStarFirst(pl.backlog.filter(g => !hidden.has(projKey(g))), pl);
-  for (const g of bgroups) {
-    back.append(h("h3", "ph", h("span", "", ...(g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name]))));
+  for (const g of bgroups) {                     // each project folds, as in Projects ("collapsedBacklog"; open while filtering)
+    const n = g.tasks.length, [head, shut] = foldHead("collapsedBacklog", (g.folder || "") + "\n" + (g.path || "") + "\n" + g.name, "project",
+      g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name],
+      span("count", `${n} open task${n === 1 ? "" : "s"}`));
+    back.append(head);
+    if (shut) continue;
     for (const t of starBlocksFirst(g.tasks, pl)) {   // drag by the title side (the row's inputs stay selectable)
       const row = taskNode(t, { depth: t.depth, week: pl });
       draggable(row.querySelector(".lead"), t, null);
       back.append(row);
     }
+    back.append(addTaskRow(g));                   // like Projects: a new task at the end of this project
   }
   if (!bgroups.length) back.append(h("div", "empty", hidden.size && !groups.length && !bgroups.length ? "No projects on the calendar: add one above."
     : d.filtered ? "No matching open tasks." : `Every open task is planned for ${where}.`));
+  if (d.targets.length) back.append(addTaskRow(null));   // any project (one with nothing in the backlog, too)
   dropZone(back, d => d.via && planTask(d.t, d.via, pl, "remove"));   // drop a card here: take that plan off
   out.append(back);
   return out;

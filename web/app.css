@@ -200,6 +200,12 @@ button.st:disabled { opacity: .5; cursor: wait; }
 .addform .fwho { flex: 0 0 5.5em; min-width: 0; }
 .addform .fdate { flex: 0 0 7em; min-width: 0; }
 .addform .feff { flex: none; }
+/* the Planner's column + Add: a new task planned for that column; its form stacks to fit the column */
+.addrow.wadd { padding: 2px 0 0; min-height: 0; }
+.addrow.wadd .addtask { font-size: calc(12px * var(--fz)); opacity: .75; }
+.wday:hover .addrow.wadd .addtask, .addrow.wadd .addtask:focus-visible { opacity: 1; }
+.addform.stack { flex-direction: column; flex-wrap: nowrap; }
+.addform.stack > * { flex: none; width: 100%; min-width: 0; box-sizing: border-box; }
 .eff { font-size: calc(11px * var(--fz)); font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--effort); color: var(--effort-text); }
 .dim .lead > :not(.g), .dim .cell { opacity: .5; }
 .note { display: flex; color: var(--muted); font-size: calc(12.5px * var(--fz)); padding: 0 8px 3px; line-height: 1.35; }
