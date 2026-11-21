@@ -5,6 +5,53 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.22  2026-11-21  Timeline by week, with plans
+-------------------------------------------------
+- New: By week in the period menu (▾): Mon-Sun, with ‹ › stepping a week
+  at a time. Projects and People show the tasks dated in that week; the
+  Timeline's columns become its seven days.
+- New: the Timeline shows when tasks are planned: a purple diamond in each
+  column a plan falls in. A task with plans but no date gets a row of
+  diamonds (instead of sitting under Unscheduled), and with a period
+  chosen, a task planned in it shows even if its date is elsewhere.
+- New: Show done / Hide done above the Timeline (the Filter's "Show done
+  tasks", at hand), with a key for bars and plan marks.
+- Code: period kind "week" (ISO year and week) in period_from / _range /
+  _at / _step / _label / _columns; timeline rows carry planned (per
+  column) and may have no span; vTimeline .pmark, .tlbar, .donetog.
+
+
+2.0.21  2026-11-21  Dates show on the Planner's calendar
+-------------------------------------------------
+- New: in the Planner, a task with its own date appears by itself in
+  the column it falls in: Oct24 on that day, a range on each of its days
+  (or weeks, months), a loose date (~wk45, ~Nov, ~T1) in the column that
+  holds all of it (never on a single day). The card has a dashed border
+  and says "due"; the side panel lists it as "due Oct 24", and it leaves
+  the backlog. Drag it to another column to plan it there as well (the
+  date isn't changed). Where the task is planned too, only the plan
+  card shows. The CLI week view lists them with "(due Oct 24)".
+- Code: planner_groups adds due cards after the planned ones (via None);
+  the planner columns' tasks carry due; weekItem .due, draggable(.., due)
+  drops as a copy.
+
+
+2.0.20  2026-11-21  On hold
+-------------------------------------------------
+- New: a task can be on hold, written /- (like ~- and !-), with (!) in
+  front if circled: (!)/- . Put it on hold, or take it off, from its ⋯
+  menu; its circle shows a pause sign, and clicking it makes the task
+  open again. A held task's subtasks are paused with it.
+- On hold means paused: greyed out in Projects, Timeline and People;
+  hidden in the Planner until you click "Show on hold (N)" (remembered
+  in the browser); never overdue; left out of Upcoming; a habit on hold
+  isn't due (its ticks are off). It still counts as points left, Archive
+  done leaves it, and the sort button puts it last. The CLI shows [/].
+- Code: RE_TASK takes /; status "hold" (STATUS_MARK, BOX, box(),
+  STATUS_ORDER); Task.held (own or an ancestor's); task dicts carry held;
+  .held, withoutHeld, heldToggle, MARK.hold.
+
+
 2.0.19  2026-11-21  Sort a project's tasks by status
 -------------------------------------------------
 - New: point at a project or @group heading in Projects and click the

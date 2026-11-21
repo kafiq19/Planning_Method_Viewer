@@ -345,8 +345,8 @@ const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "Pe
 if (state.tab === "week") state.tab = "planner";            // the Week tab (1.5) is the Planner now
 
 /* ---------- status clicks: the server rewrites only the task's status mark ---------- */
-const NEXT = { open: "doing", doing: "done", done: "open" };
-const STATUS_NAME = { open: "open", doing: "in progress", done: "done" };
+const NEXT = { open: "doing", doing: "done", done: "open", hold: "open" };   // a held task's circle takes it off hold
+const STATUS_NAME = { open: "open", doing: "in progress", done: "done", hold: "on hold" };
 
 function replaceText(text) {           // swap in the new text, keeping the cursor and scroll where they were
   const old = editor.value;
@@ -395,7 +395,8 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   if (seq === state.seq) plannerView();
   return ok;
 }
-const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
+const setStatus = (t, status, btn) => editTask(t, "status", status, btn,
+  t.status === "hold" && status === "open" ? `Took "${t.title}" off hold.` : `Marked "${t.title}" ${STATUS_NAME[status]}.`);
 
 /* a one-line input over a cell; Enter applies, Esc or leaving cancels; with `tab`, Tab / Shift-Tab apply and move on */
 function editCell(cell, placeholder, initial, apply, wide, fill, tab) {   // fill: from the cell's left edge to the row's right edge
@@ -619,11 +620,14 @@ const MARK = {                                  // open: ring; in progress: half
   open: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/>',
   doing: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/>',
   done: '<circle cx="9" cy="9" r="7.8" fill="currentColor"/><path d="M5.5 9.2l2.3 2.3 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
-};
+  hold: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.2 6.3v5.4M10.8 6.3v5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+};   // on hold (2.0.20): a ring with a pause sign
+const heldBy = t => t.held && t.status !== "hold" ? "On hold with its parent task. " : "";
 function statusBox(t) {
   const b = h("button", "st");
   b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${MARK[t.status]}</svg>`;   // fixed markup, no note text
-  b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.title = heldBy(t) + (t.status === "hold" ? `On hold. Click to take it off hold (line ${t.line})`
+    : `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`);
   b.setAttribute("aria-label", b.title);
   b.onclick = () => setStatus(t, NEXT[t.status], b);
   return b;
@@ -689,13 +693,13 @@ function setPeriod(p) {
 pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
 pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
 function showPeriod(per) {       // ‹ › name where they go (on hover); the date says what is showing and returns to now
-  const unit = per && (per.kind === "month" ? "month" : "season");
+  const unit = per && per.kind;                   // week, month or season
   pctl.classList.toggle("on", !!per);
   pctl.classList.toggle("away", !!per && !per.current);
   pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
   pMid.textContent = per ? per.short : "All dates";   // "Fall 2026"; the line above the list gives the months
-  pMid.title = !per ? "Show all dates, one month or one season"
-    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
+  pMid.title = !per ? "Show all dates, one week, one month or one season"
+    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, weeks, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
   const item = (label, note, on, pick, disabled) => {
     const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
     b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
@@ -705,6 +709,7 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   const kind = per ? per.kind : "";
   pMenu.replaceChildren(
     item("All dates", kind === "" ? "✓" : "", kind === "", () => kind && setPeriod(null)),
+    item("By week", kind === "week" ? "✓" : "Mon-Sun", kind === "week", () => kind !== "week" && setPeriod({ kind: "week" })),
     item("By month", kind === "month" ? "✓" : "", kind === "month", () => kind !== "month" && setPeriod({ kind: "month" })),
     item("By season", kind === "season" ? "✓" : "Winter, Summer, Fall", kind === "season", () => kind !== "season" && setPeriod({ kind: "season" })),
     ...(per ? [h("div", "sep"), item("This " + unit, per.current ? "you're here" : per.now.label, false, () => setPeriod(per.now), per.current)] : []));
@@ -870,7 +875,7 @@ function plannerView() {
       + ` · ☆ marks a top priority for this ${PLAN_UNIT[pl.star.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
   }
-  else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+  else if (per) bits.push(per.label + (per.current ? ` (this ${per.kind})` : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
   contextLine.textContent = bits.join(" · ");
   plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
@@ -904,7 +909,7 @@ async function tabTo(row, kind, dir, applied) {
 }
 
 function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
-  const row = h("div", "task s-" + t.status + (t.notable ? " notable" : ""));
+  const row = h("div", "task s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : ""));
   row.style.setProperty("--d", depth);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
   row.dataset.line = t.line;
@@ -1011,12 +1016,15 @@ function archiveYears() {                        // this year and last year (the
 }
 function moreCell(t) {
   const kids = countTasks(t.children || []);
-  return cellButton("more mid", "More", "Circle in purple, archive or delete", [span("add", "⋯")], cell => {
-    const choices = [{ value: "notable", text: t.notable ? "Remove the purple circle" : "Circle in purple" }];
+  return cellButton("more mid", "More", "Put on hold, circle in purple, archive or delete", [span("add", "⋯")], cell => {
+    const choices = [{ value: "hold", text: t.status === "hold" ? "Take off hold" : "Put on hold" },
+      { value: "notable", text: t.notable ? "Remove the purple circle" : "Circle in purple" }];
     if (canArchive()) for (const y of archiveYears()) choices.push({ value: "archive:" + y, text: "Archive to " + y });
     choices.push({ value: "delete", text: kids ? `Delete, with ${tasksN(kids).replace("task", "subtask")}` : "Delete" });
     pickCell(cell, "Task", choices, null, v => {
-      if (v === "notable") editTask(t, "notable", t.notable ? "" : "on", null, t.notable ? `Removed the purple circle from "${t.title}".` : `Circled "${t.title}" in purple.`);
+      if (v === "hold") editTask(t, "status", t.status === "hold" ? "open" : "hold", null,
+        t.status === "hold" ? `Took "${t.title}" off hold.` : `Put "${t.title}" on hold.`);
+      else if (v === "notable") editTask(t, "notable", t.notable ? "" : "on", null, t.notable ? `Removed the purple circle from "${t.title}".` : `Circled "${t.title}" in purple.`);
       else if (v === "delete") {
         if (kids && !confirm(`Delete "${t.title}" and its ${tasksN(kids).replace("task", "subtask")}?`)) return;
         editTask(t, "delete", "", null, `Deleted "${t.title}"` + (kids ? ` and its ${tasksN(kids).replace("task", "subtask")}.` : "."));
@@ -1236,6 +1244,11 @@ function welcome() {                             // no notes yet
 
 function vTimeline(d) {
   const tl = d.timeline, out = h("div");
+  const doneTog = h("button", "ghost donetog" + (filt.done ? " on" : ""), filt.done ? "Hide done" : "Show done");   // 2.0.22: the Filter's "Show done tasks", at hand
+  doneTog.title = filt.done ? "Hide the finished tasks" : "Show the finished tasks too (faded)";
+  doneTog.setAttribute("aria-pressed", String(filt.done));
+  doneTog.onclick = () => { fDone.checked = !filt.done; setFilt("done", !filt.done); };
+  out.append(h("div", "tlbar", h("span", "tlkey", h("i", "kbar"), "dates", h("b", "kplan"), "planned"), doneTog));
   if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
   else {
     const head = h("tr", "", h("th", "", "Task"));
@@ -1247,18 +1260,26 @@ function vTimeline(d) {
       const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
       if (t.notable) nm.classList.add("notable");
-      const tr = h("tr", t.status === "done" ? "done" : "", nm);
+      const tr = h("tr", (t.status === "done" ? "done" : "") + (t.held ? " held" : ""), nm);
       tr.dataset.line = t.line;
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];
         const cell = h("i", on ? "on" : "");
         if (on && !prev) cell.classList.add("s");           // round only the bar's two ends
         if (on && !next) cell.classList.add("e");
-        tr.append(h("td", "c", cell));
+        const td = h("td", "c", cell);
+        if (t.planned && t.planned[i]) {                    // a plan falls in this column: a mark over the track
+          td.append(h("b", "pmark"));
+          td.title = "planned " + t.plan_labels;
+        }
+        tr.append(td);
       });
-      const w = h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""));
-      w.title = t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "");
-      if (t.span.how !== "own") w.style.fontStyle = "italic";
+      const plan = t.plan_labels ? "planned " + t.plan_labels : "";
+      const w = t.span ? h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""))
+        : h("td", "w plan", plan);                           // no date, only plans
+      w.title = t.span ? t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "")
+        + (plan ? " · " + plan : "") : plan;
+      if (t.span && t.span.how !== "own") w.style.fontStyle = "italic";
       tr.append(w);
       table.append(tr);
     }
@@ -1391,9 +1412,9 @@ function projectChips(d) {
   }
   return box;
 }
-function draggable(el, t, via) {                 // via: the plan a card stands for (a backlog row has none)
+function draggable(el, t, via, due) {            // via: the plan a card stands for (a backlog row has none); due: a date card
   el.draggable = true;
-  el.addEventListener("dragstart", e => { dragged = { t, via }; e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("text/plain", t.title); });
+  el.addEventListener("dragstart", e => { dragged = { t, via, due }; e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("text/plain", t.title); });
   el.addEventListener("dragend", () => { dragged = null; });
 }
 const copying = e => e.altKey || e.shiftKey;     // ⌥/Alt or Shift while dropping a card: plan it there as well
@@ -1401,22 +1422,25 @@ function dropZone(el, onDrop) {
   el.addEventListener("dragover", e => {
     if (!dragged) return;
     e.preventDefault(); el.classList.add("over");
-    e.dataTransfer.dropEffect = dragged.via && copying(e) ? "copy" : "move";
+    e.dataTransfer.dropEffect = dragged.due || dragged.via && copying(e) ? "copy" : "move";
   });
   el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
   el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const d = dragged; dragged = null; if (d) onDrop(d, copying(e)); });
 }
 function weekItem(cls, t, w, extra, via) {      // a planned task: status, ☆, title (+ meta); a click opens the column list, drag moves it
   const body = h("span", "wbody", span("wt", t.title), ...extra);
-  const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : ""), statusBox(t), starButton(t, w), body);
+  const due = cls === "wcard" && t.due;          // a date card (2.0.21): here because of its own date, not a plan
+  const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : "") + (due ? " due" : ""), statusBox(t), starButton(t, w), body);
   el.dataset.line = t.line;
-  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (t.plan_labels ? "  · planned " + t.plan_labels : "")
-    + "  (line " + t.line + ")" + (via ? "\nDrag to move this day; hold ⌥/Alt or Shift to plan it there as well" : "");
+  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (due ? "  · due " + t.when : "") + (t.plan_labels ? "  · planned " + t.plan_labels : "")
+    + "  (line " + t.line + ")" + (due ? "\nOn the calendar because of its date. Drag it to plan it for another day too (the date stays)"
+    : via ? "\nDrag to move this day; hold ⌥/Alt or Shift to plan it there as well" : "");
   el.onclick = e => {
     if ($("viewPane").classList.contains("jump") || e.target.closest("button")) return;   // Edit alongside: the click jumps instead
     e.stopPropagation(); planPick(el, t, w);
   };
-  draggable(el, t, via === undefined ? (inPeriod(t, w)[0] || {}).token : via);   // a line, not a card: its first plan here
+  if (due) draggable(el, t, null, true);         // dropped on a column: planned there as well
+  else draggable(el, t, via === undefined ? (inPeriod(t, w)[0] || {}).token : via);   // a line, not a card: its first plan here
   return el;
 }
 /* ---------- Habits (a project's habits.kf): tasks with a frequency (*daily, *weekdays, *weekly Mon, Wed, *monthly 1st).
@@ -1428,7 +1452,8 @@ function tickButton(t, day, due) {               // one habit on one day: ticked
   b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${done ? TICK.on : TICK.off}</svg>`;   // fixed markup
   b.title = `${t.title}, ${day.head}: ` + (done ? "done. Click to untick" : day.future ? "not yet" : due ? "due. Click when done" : "not due (click to tick anyway)");
   b.setAttribute("aria-label", b.title); b.setAttribute("aria-pressed", String(done));
-  b.disabled = day.future && !done;
+  b.disabled = day.future && !done || !!t.held;   // a held habit is paused
+  if (t.held) b.title = `${t.title} is on hold`;
   b.onclick = e => {
     e.stopPropagation();
     editTask(t, "tick", (done ? "-" : "") + day.token, b, done ? `Unticked "${t.title}" for ${day.head}.` : `Ticked "${t.title}" for ${day.head}.`);
@@ -1468,7 +1493,7 @@ function vHabits(d) {
   table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"),
     ...pl.days.map(x => span("hday" + (x.today ? " today" : ""), x.head)), span("hcount", "Done"), span("", "")));
   for (const t of pl.habits) {
-    const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : ""));
+    const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : ""));
     row.dataset.line = t.line; row.title = "line " + t.line;
     const name = span("hname", t.title);
     name.onclick = e => {                          // the habit's text, like a task's title (Edit alongside: jump instead)
@@ -1538,17 +1563,37 @@ function starBlocksFirst(items, pl) {
   return [...top, ...rest];
 }
 const groupsStarFirst = (groups, pl) => [...groups.filter(g => g.tasks.some(t => starred(t, pl))), ...groups.filter(g => !g.tasks.some(t => starred(t, pl)))];
+/* on hold (2.0.20): hidden from the Planner unless "Show on hold" is on (remembered per browser, "showHeld") */
+const showHeld = () => store.get("showHeld", "0") === "1";
+function withoutHeld(pl) {                       // -> [planner data without held tasks, how many tasks were left out]
+  const gone = new Set(), keep = t => !t.held || (gone.add(t.path + ":" + t.line), false);
+  const groups = gs => gs.map(g => ({ ...g, tasks: g.tasks.filter(keep) })).filter(g => g.tasks.length);
+  const out = { ...pl, columns: pl.columns.map(c => ({ ...c, tasks: c.tasks.filter(keep) })), projects: groups(pl.projects),
+    backlog: groups(pl.backlog), priorities: pl.priorities.filter(keep) };
+  return [out, gone.size];
+}
+function heldToggle(n) {
+  const on = showHeld(), b = h("button", "ghost heldtog" + (on ? " on" : ""), on ? "Hide on hold" : `Show on hold (${n})`);
+  b.title = on ? "Hide the tasks on hold" : "Show the tasks on hold, greyed";
+  b.setAttribute("aria-pressed", String(on));
+  b.onclick = () => { store.set("showHeld", on ? "0" : "1"); plannerView(); };
+  return b;
+}
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
-  const pl = d.planner, out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
+  const [pl, nHeld] = showHeld() ? [d.planner, (d.planner.backlog.flatMap(g => g.tasks).concat(d.planner.projects.flatMap(g => g.tasks)))
+    .filter(t => t.held).length] : withoutHeld(d.planner);
+  const out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
   const unit = PLAN_UNIT[pl.kind], where = pl.kind === "day" ? (pl.current ? "today" : pl.label) : pl.current ? "this " + unit : pl.label;
   const starWhere = pl.star.kind === pl.kind ? where : pl.current ? "this week" : "the week of " + pl.star.label;   // a day's are its week's
-  const chips = projectChips(d);
+  const chips = projectChips(d) || (nHeld || showHeld() ? h("div", "pchips") : null);
   if (chips) out.append(chips);
-  const meta = t => { const p = (t.plans || []).find(x => x.token === t.via);   // a plan finer than the column: say which
+  if (nHeld || showHeld()) chips.append(heldToggle(nHeld));
+  const meta = (t, c) => { const p = (t.plans || []).find(x => x.token === t.via);   // a plan finer than the column: say which
+    const dueWhen = t.due ? " · due" + (c.start === c.end && t.span && t.span.start === t.span.end ? "" : " " + t.when) : "";
     return span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
-      + (p && p.kind !== pl.column_kind ? " · " + p.label : "")); };
-  const where1 = t => [...new Set(inPeriod(t, pl).map(p => { const c = pl.columns.find(x => plansIn(t, x, pl).includes(p));
+      + (p && p.kind !== pl.column_kind ? " · " + p.label : "") + dueWhen); };
+  const where1 = t => !inPeriod(t, pl).length ? "due " + t.when : [...new Set(inPeriod(t, pl).map(p => { const c = pl.columns.find(x => plansIn(t, x, pl).includes(p));
     return c && p.kind === pl.column_kind ? (pl.kind === "day" ? "" : c.head.split(" ")[0]) : p.label; }))].filter(Boolean).join(", ");
   const prios = pl.priorities.filter(on);         // Top priorities for exactly this period
   const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + starWhere)));
@@ -1561,11 +1606,11 @@ function vPlanner(d) {
   for (const c of pl.columns) {
     const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
-    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)], t.via));
+    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t, c)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
     if (c.ok && d.targets.length) col.append(addTaskRow(null, "", c));   // a new task, planned for this column
-    if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, !d.via ? "plan" : copy ? "copy" : "move", d.via));
+    if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, d.due ? "copy" : !d.via ? "plan" : copy ? "copy" : "move", d.via));
     days.append(col);
   }
   const side = h("div", "wside", h("h4", "grp", where[0].toUpperCase() + where.slice(1)));
@@ -1580,7 +1625,7 @@ function vPlanner(d) {
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
   out.append(h("div", "wtop", days, side));
-  const back = h("div", "wback", colHead("Backlog", `open tasks not planned for ${where}`));
+  const back = h("div", "wback", colHead("Backlog", `open tasks not planned or due ${where.startsWith("this") || where === "today" ? "" : "in "}${where}`));
   back.firstChild.classList.add("wrow");
   back.firstChild.children[4].textContent = "Plan";
   back.firstChild.children[4].classList.add("r");
@@ -1599,7 +1644,7 @@ function vPlanner(d) {
     back.append(addTaskRow(g));                   // like Projects: a new task at the end of this project
   }
   if (!bgroups.length) back.append(h("div", "empty", hidden.size && !groups.length && !bgroups.length ? "No projects on the calendar: add one above."
-    : d.filtered ? "No matching open tasks." : `Every open task is planned for ${where}.`));
+    : d.filtered ? "No matching open tasks." : `Every open task is planned or due ${where.startsWith("this") || where === "today" ? "" : "in "}${where}.`));
   if (d.targets.length) back.append(addTaskRow(null));   // any project (one with nothing in the backlog, too)
   dropZone(back, d => d.via && planTask(d.t, d.via, pl, "remove"));   // drop a card here: take that plan off
   out.append(back);

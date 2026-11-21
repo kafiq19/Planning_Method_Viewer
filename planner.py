@@ -33,6 +33,7 @@ NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
   @HDC                          project: runs until the next @ or heading
   - task  ~- task  !- task      open / in progress / done
+  /- task                       on hold: paused with its subtasks (never overdue, not upcoming)
   (!)- task                     notable: circled in purple (before any status mark)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
@@ -60,7 +61,7 @@ MONTHS = {m: i for i, m in enumerate(MONTH_NAMES, 1)}
 MON = "(?:" + "|".join(MONTH_NAMES) + ")"
 WEEKDAYS = {d: i for i, d in enumerate(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])}
 
-RE_TASK = re.compile(r"^(\(!\))?([!~]?)-\s*(.*)$")              # a task line's content: (!) notable, ! done, ~ doing
+RE_TASK = re.compile(r"^(\(!\))?([!~/]?)-\s*(.*)$")             # a task line's content: (!) notable, ! done, ~ doing, / on hold
 RE_EFFORT = re.compile(r"(?<!\w)\(\s*(xs|s|m|l|xl)\s*\)")     # lowercase, so (S) stays initials
 RE_ASSIGN = re.compile(r"\(\s*([A-Z]{1,4}(?:\s*,\s*[A-Z]{1,4})*)\s*\)")
 DAYNAME = r"(?:[Mm]on|[Tt]ue|[Ww]ed|[Tt]hu|[Ff]ri|[Ss]at|[Ss]un)[a-z]*"
@@ -77,7 +78,12 @@ RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
 PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue stays overdue);
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
-BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]"}
+BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]", "hold": "[/]"}
+
+
+def box(t):
+    """A task's box in the text views: [/] for one on hold, also through its parent (unless done)."""
+    return BOX["hold"] if t.held and t.status != "done" else BOX[t.status]
 EFFORT = {"xs": 1, "s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
 TODAY = date.today()
 TODAY_PINNED = False            # --today given: the server keeps that day; otherwise it reads the clock per request
@@ -380,9 +386,19 @@ class Task:
             p = p.parent
         return None
 
+    @property
+    def held(self):
+        """On hold (2.0.20): its own `/` mark or an ancestor's (a held task's subtasks are paused too)."""
+        t = self
+        while t:
+            if t.status == "hold":
+                return True
+            t = t.parent
+        return False
+
     def overdue(self):
         sp = self.span()
-        return self.status != "done" and sp is not None and sp[1] < TODAY
+        return self.status != "done" and not self.held and sp is not None and sp[1] < TODAY
 
     def label(self):
         s = self.title
@@ -444,7 +460,7 @@ def parse(text, name=None):
 
         m = RE_TASK.match(line)
         if m:
-            status = {"!": "done", "~": "doing", "": "open"}[m.group(2)]
+            status = {"!": "done", "~": "doing", "/": "hold", "": "open"}[m.group(2)]
             t = Task(m.group(3), status, level, n)
             t.notable = bool(m.group(1))     # (!) before the mark: circled in purple
             t.col = len(ws) + m.start(3)
@@ -493,7 +509,7 @@ def view_projects(projects):
             out.append(f"    -- {n}")
 
         def render(t, depth):
-            line = "    " * depth + f"{BOX[t.status]} {t.label()}"
+            line = "    " * depth + f"{box(t)} {t.label()}"
             if t.effort:
                 line += f" [{t.effort.upper()}]"
             if t.end:
@@ -533,16 +549,24 @@ SEASONS = [("Winter", 1, 4), ("Summer", 5, 8), ("Fall", 9, 12)]   # (name, first
 def period_from(obj):
     """Request value {kind, year, index} -> (kind, year, index), or None for "all dates".
 
-    kind "month": index 1-12. kind "season": index 0-2 into SEASONS.
+    kind "month": index 1-12. kind "season": index 0-2 into SEASONS. kind "week" (2.0.22): ISO year and week.
     With no year and index, the period that contains TODAY.
     """
     if obj is None:
         return None
-    if not isinstance(obj, dict) or obj.get("kind") not in ("month", "season"):
-        raise ValueError("period.kind must be month or season")
+    if not isinstance(obj, dict) or obj.get("kind") not in ("week", "month", "season"):
+        raise ValueError("period.kind must be week, month or season")
     kind, year, index = obj["kind"], obj.get("year"), obj.get("index")
     if year is None and index is None:
         return period_at(kind, TODAY)
+    if kind == "week":
+        try:
+            if type(year) is not int or not 1900 <= year <= 2999 or type(index) is not int:
+                raise ValueError
+            date.fromisocalendar(year, index, 1)
+        except ValueError:
+            raise ValueError(f"bad period {obj!r}") from None
+        return kind, year, index
     hi = 12 if kind == "month" else len(SEASONS) - 1
     lo = 1 if kind == "month" else 0
     if type(year) is not int or not 1900 <= year <= 2999 or type(index) is not int or not lo <= index <= hi:
@@ -552,6 +576,9 @@ def period_from(obj):
 
 def period_range(kind, year, index):
     """-> (first day, last day) of the period."""
+    if kind == "week":
+        mon = date.fromisocalendar(year, index, 1)
+        return mon, mon + timedelta(days=6)
     if kind == "month":
         return date(year, index, 1), month_end(year, index)
     _, a, b = SEASONS[index]
@@ -560,6 +587,8 @@ def period_range(kind, year, index):
 
 def period_at(kind, d):
     """The period of this kind that contains date d -> (kind, year, index)."""
+    if kind == "week":
+        return (kind,) + tuple(d.isocalendar()[:2])
     if kind == "month":
         return kind, d.year, d.month
     return kind, d.year, next(i for i, (_, a, b) in enumerate(SEASONS) if a <= d.month <= b)
@@ -567,13 +596,21 @@ def period_at(kind, d):
 
 def period_step(kind, year, index, step):
     """The period `step` periods later (negative = earlier), crossing years."""
+    if kind == "week":
+        return period_at(kind, period_range(kind, year, index)[0] + timedelta(weeks=step))
     n, base = (12, 1) if kind == "month" else (len(SEASONS), 0)
     k = year * n + index - base + step
     return kind, k // n, k % n + base
 
 
 def period_label(kind, year, index, short=False):
-    """"Oct 2026"; "Fall 2026 (Sep-Dec)", or "Fall 2026" when short."""
+    """"Oct 2026"; "Fall 2026 (Sep-Dec)", or "Fall 2026" when short; a week "Oct 12-18 2026", or
+    "Week 42: Oct 12-18 2026"."""
+    if kind == "week":
+        a, b = period_range(kind, year, index)
+        span = f"{MONTH_NAMES[a.month - 1]} {a.day}-{b.day}" if a.month == b.month else \
+            f"{MONTH_NAMES[a.month - 1]} {a.day} - {MONTH_NAMES[b.month - 1]} {b.day}"
+        return ("" if short else f"Week {index}: ") + f"{span} {b.year}"
     if kind == "month":
         return f"{MONTH_NAMES[index - 1]} {year}"
     name, a, b = SEASONS[index]
@@ -584,6 +621,9 @@ def period_columns(kind, year, index):
     """Timeline columns [(heading, start, end)]: the months of a season, or the weeks
     (Mon-Sun, cut to the month) of a month."""
     start, end = period_range(kind, year, index)
+    if kind == "week":                                    # its seven days
+        return [(f"{DAY_NAMES[k]} {(start + timedelta(days=k)).day}", start + timedelta(days=k), start + timedelta(days=k))
+                for k in range(7)]
     if kind == "season":
         _, a, b = SEASONS[index]
         return [(MONTH_NAMES[m - 1], date(year, m, 1), month_end(year, m)) for m in range(a, b + 1)]
@@ -633,7 +673,7 @@ def view_timeline(projects):
             bar = "<" + bar[1:]
         if e > last:
             bar = bar[:-1] + ">"
-        mark = "~" if t.status == "doing" else " "
+        mark = "/" if t.held and t.status != "done" else "~" if t.status == "doing" else " "
         name = f"{mark}@{p.name}  {t.label()}"
         if len(name) > W:
             name = name[:W - 3] + "..."
@@ -647,7 +687,7 @@ def view_timeline(projects):
     if unscheduled:
         out += ["", "Unscheduled:"]
         for p, t in unscheduled:
-            out.append(f"  {BOX[t.status]} @{p.name}  {t.label()}")
+            out.append(f"  {box(t)} @{p.name}  {t.label()}")
     return out
 
 
@@ -677,7 +717,7 @@ def view_people(projects):
             size = f" [{t.effort.upper()}]" if t.effort else ""
             when = f"   {fspan(sp[0], sp[1])}" if sp else ""
             flag = "   OVERDUE" if t.overdue() else ""
-            out.append(f"    {BOX[t.status]} @{p.name}  {t.title}{size}{when}{flag}")
+            out.append(f"    {box(t)} @{p.name}  {t.title}{size}{when}{flag}")
     return out
 
 
@@ -837,9 +877,9 @@ def habit_rows(projects, a, b, every=False):
     for p in projects:
         for t in p.all_tasks():
             specs = [spec for spec, _ in t.reminders if repeats(spec)]
-            if t.status == "done" or not (specs or every):
-                continue
-            due = sorted({d for spec in specs for d in reminder_days(spec, a, b)})
+            if t.status == "done" or not (specs or every) or (t.held and not every):
+                continue                          # a held habit is paused: only the Habits page lists it, never due
+            due = [] if t.held else sorted({d for spec in specs for d in reminder_days(spec, a, b)})
             out.append((p, t, specs, due, [d for d in t.log() if a <= d <= b]))
     return out
 
@@ -848,10 +888,12 @@ def planner_groups(projects, period):
     """-> (columns, planned, backlog, priorities) for a planner period.
     columns: [(heading, start, end, token, ok, [(project, task, via)])]: tasks planned for that column or a part of it,
       once per column however many of their plans are in it (via: the token of the first such plan; ok: the
-      column's token reads back as that column, so it can be planned);
-    planned: [(project, [tasks])], every task with a plan in this period (overlapping it and inside the columns),
-      done ones too, once each, by its earliest such plan;
-    backlog: [(project, [(depth, task)])], every open task with no plan in it, in outline order;
+      column's token reads back as that column, so it can be planned), then (2.0.21) tasks whose own date falls
+      in it, with via None (a "due" card): a single date or a range in every column it overlaps, a loose date
+      (~wk45, ~Nov, ~T1, ~Q1) in a column that holds all of it; not in a column the task is already planned in;
+    planned: [(project, [tasks])], every task with a plan in this period (overlapping it and inside the columns)
+      or a due card, done ones too, once each, by its earliest such plan (else its date);
+    backlog: [(project, [(depth, task)])], every open task with neither, in outline order;
     priorities: [(project, task)], tasks marked as top priorities for exactly this period."""
     kind, y, i = period
     ps, pe = planner_range(*period)
@@ -864,22 +906,30 @@ def planner_groups(projects, period):
     rank = PLAN_RANK[COLUMN_KIND[kind]]
     sp = star_period(*period)
     star = (sp[0],) + planner_range(*sp)                      # priorities: for this period (a day: its week)
-    planned, backlog, prios = [], [], []
+    planned, backlog, prios, dues = [], [], [], []
     for p in projects:
         mine, rest = [], []
 
         def visit(t, depth):
             here = sorted((x for x in t.plans if x[2] <= pe and x[3] >= ps and lo <= x[2] and x[3] <= hi),
                           key=lambda x: (x[2], x[3]))
+            taken = set()
+            for k, tok, a, b in here:
+                if PLAN_RANK[k] <= rank:
+                    ci = next((j for j, c in enumerate(cols) if c[1] <= a and b <= c[2]), None)
+                    if ci is not None and ci not in taken:
+                        taken.add(ci)
+                        cols[ci][5].append((p, t, tok))
+            due = []
+            if t.end:                                     # its own date: a due card in the columns it falls in
+                for j, c in enumerate(cols):
+                    if j not in taken and (c[1] <= t.start and t.end <= c[2] if t.loose else t.start <= c[2] and t.end >= c[1]):
+                        due.append(j)
+                        dues.append((j, p, t))
             if here:
                 mine.append((here[0][2], here[0][3], len(mine), t))
-                taken = set()
-                for k, tok, a, b in here:
-                    if PLAN_RANK[k] <= rank:
-                        ci = next((j for j, c in enumerate(cols) if c[1] <= a and b <= c[2]), None)
-                        if ci is not None and ci not in taken:
-                            taken.add(ci)
-                            cols[ci][5].append((p, t, tok))
+            elif due:
+                mine.append((max(t.start, lo), t.end, len(mine), t))
             elif t.status != "done":
                 rest.append((depth, t))
             if any(pr[1:] == star for pr in t.priorities):
@@ -892,6 +942,8 @@ def planner_groups(projects, period):
             planned.append((p, [t for *_, t in sorted(mine, key=lambda x: x[:3])]))
         if rest:
             backlog.append((p, rest))
+    for j, p, t in dues:                                  # due cards after the planned ones
+        cols[j][5].append((p, t, None))
     return cols, planned, backlog, prios
 
 
@@ -901,7 +953,7 @@ def upcoming_groups(projects):
     overdue, due, doing, reminders = [], [], [], []
     for p in projects:
         for t in p.all_tasks():
-            if t.status == "done":
+            if t.status == "done" or t.held:          # on hold: paused, not upcoming
                 continue
             sp = t.span()
             if t.overdue() and sp[2] != "parent":
@@ -941,25 +993,30 @@ def view_week(projects, monday=None, habits=None):
     out = ["WEEK", "====", f"Week of {week_label(monday)}  (plan a task for a day with >MonDD)"]
     if prios:
         out.append("\nTop priorities (^wk" + str(monday.isocalendar()[1]) + ")")
-        out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t in prios)
+        out.extend(f"    {box(t)} @{p.name}  {t.label()}" for p, t in prios)
     for head, a, b, _, _, items in cols:
         out.append(f"\n{head}")
-        out.extend(f"    {BOX[t.status]} @{p.name}  {t.label()}" for p, t, _ in items)
+        out.extend(f"    {box(t)} @{p.name}  {t.label()}" + ("" if via else f"  (due {fspan(t.start, t.end, t.loose)})")
+                   for p, t, via in items)
         hab = [(d, p, t, d in done) for p, t, _, due, done in rows for d in due if a <= d <= b]
         out.extend(f"    {'[x]' if ok else '[ ]'} @{p.name}  {t.title}  (habit" + (f", {('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[d.weekday()]})" if a != b else ")")
                    for d, p, t, ok in sorted(hab, key=lambda x: x[0]))
         if not items and not hab:
             out.append("    (nothing planned)")
+    sun = monday + timedelta(days=6)
+
+    def where(t):                                         # its plans, or (a due card only) its date
+        return plan_labels(t) if any(a <= sun and b >= monday for _, _, a, b in t.plans) else "due " + fspan(t.start, t.end, t.loose)
     out.append("\nBy project")
     for p, tasks in planned:
         out.append(f"  @{p.name}   {pts(effort_points(tasks)[1])}")
-        out.extend(f"    {BOX[t.status]} {plan_labels(t):<7} {t.label()}" for t in tasks)
+        out.extend(f"    {box(t)} {where(t):<7} {t.label()}" for t in tasks)
     if not planned:
         out.append("    (nothing planned this week)")
-    out.append("\nBacklog (open tasks not planned this week)")
+    out.append("\nBacklog (open tasks not planned or due this week)")
     for p, items in backlog:
         out.append(f"  @{p.name}")
-        out.extend(f"    {'    ' * depth}{BOX[t.status]} {t.label()}"
+        out.extend(f"    {'    ' * depth}{box(t)} {t.label()}"
                    + (f"   (planned {plan_labels(t)})" if t.plans else "")
                    for depth, t in items)
     return out
@@ -992,7 +1049,7 @@ def task_data(t, keep=None):
         "when": fspan(t.start, t.end, t.loose) if t.end else None, "loose": t.loose,
         "span": {"start": iso(sp[0]), "end": iso(sp[1]), "how": sp[2],
                  "label": fspan(sp[0], sp[1], t.loose if sp[2] == "own" else None)} if sp else None,
-        "overdue": t.overdue(),
+        "overdue": t.overdue(), "held": t.held,
         "reminders": [{"spec": spec, "next": iso(d)} for spec, d in t.reminders],
         "children": kids,
     }
@@ -1054,8 +1111,15 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
 
     first, last = cols[0][1], cols[-1][2]
     rows, unscheduled = timeline_rows(projects, done=True)   # the page hides done ones unless "Show done tasks"
+    planned_only = [(p, t) for p, t in unscheduled if t.plans]   # 2.0.22: undated but planned: a row of plan marks
+    unscheduled = [(p, t) for p, t in unscheduled if not t.plans]
+
+    def planned_in(t, a, b):
+        return any(x[2] <= b and x[3] >= a for x in t.plans)
+    rows = [(s, e, p, t, how) for s, e, p, t, how in rows if not period or (s <= last and e >= first) or planned_in(t, first, last)]
+    rows += [(min(x[2] for x in t.plans), None, p, t, None) for p, t in planned_only if not period or planned_in(t, first, last)]
+    rows.sort(key=lambda r: r[0])
     if period:
-        rows = [r for r in rows if r[0] <= last and r[1] >= first]
         unscheduled = []
     people = [(n, [(p, t) for p, t in items if not inside or inside(t)]) for n, items in people_groups(projects)]
     horizon, overdue, due, doing, reminders = upcoming_groups(projects)
@@ -1084,8 +1148,9 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
                      "section": p.section.title if p.section else None} for p in projects],
         "timeline": {
             "columns": [{"head": h, "start": iso(a), "end": iso(b)} for h, a, b in cols],
-            "rows": [dict(flat(p, t), bar=[s <= b and e >= a for _, a, b in cols],
-                          before=e < first, after=e > last) for s, e, p, t, _ in rows],
+            "rows": [dict(flat(p, t), bar=[e is not None and s <= b and e >= a for _, a, b in cols],
+                          planned=[planned_in(t, a, b) for _, a, b in cols],
+                          before=e is not None and e < first, after=e is not None and e > last) for s, e, p, t, _ in rows],
             "unscheduled": [flat(p, t) for p, t in unscheduled]},
         "people": [{"name": n, "points": effort_points(t for _, t in items)[0], "tasks": [flat(p, t) for p, t in items]}
                    for n, items in people if items],
@@ -1101,7 +1166,7 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
             "column_kind": COLUMN_KIND[plan[0]],
             "star": {"token": star, "ok": star_ok, "kind": spk[0], "start": iso(spr[0]), "end": iso(spr[1]), "label": planner_label(*spk)},
             "columns": [{"head": head, "start": iso(a), "end": iso(b), "token": token, "ok": ok, "today": a <= TODAY <= b,
-                         "tasks": [dict(flat(p, t), via=via) for p, t, via in items]} for head, a, b, token, ok, items in pcols],
+                         "tasks": [dict(flat(p, t), via=via, due=via is None) for p, t, via in items]} for head, a, b, token, ok, items in pcols],
             "projects": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "points": effort_points(tasks)[1],
                           "tasks": [flat(p, t) for t in tasks]} for p, tasks in pplanned],
             "backlog": [{"name": p.name, "line": p.line, "path": p.path, "folder": p.folder, "tasks": [dict(flat(p, t), depth=d) for d, t in items]}
@@ -1119,7 +1184,7 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
 
 # ---------- editing (only on an explicit user action) ----------
 
-STATUS_MARK = {"open": "", "doing": "~", "done": "!"}
+STATUS_MARK = {"open": "", "doing": "~", "done": "!", "hold": "/"}
 
 
 class EditError(ValueError):
@@ -1161,14 +1226,14 @@ def set_status(text, line, status, title=None):
     title, so an edit made from an out-of-date view is refused, not misapplied.
     """
     if status not in STATUS_MARK:
-        raise EditError(f"unknown status {status!r} (use open, doing or done)")
+        raise EditError(f"unknown status {status!r} (use open, doing, done or hold)")
     lines, _ = _task_at(text, line, title)
     raw = lines[line - 1]
     ws = raw[:len(raw) - len(raw.lstrip())]
     body = raw[len(ws):]
     notable = "(!)" if body.startswith("(!)") else ""
     body = body[len(notable):]
-    if body[0] in "!~":
+    if body[0] in "!~/":
         body = body[1:]
     lines[line - 1] = ws + notable + STATUS_MARK[status] + body
     return "".join(lines)
@@ -1787,7 +1852,7 @@ def _project_end(lines, line):
     return last
 
 
-STATUS_ORDER = {"done": 0, "doing": 1, "open": 2}
+STATUS_ORDER = {"done": 0, "doing": 1, "open": 2, "hold": 3}
 _ENDS = tuple("\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 
 

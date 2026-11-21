@@ -153,7 +153,7 @@ button.st { flex: none; width: 22px; height: 22px; padding: 0; margin-right: 6px
 button.st svg { width: 16px; height: 16px; }
 button.st:hover { border-color: var(--line); background: var(--panel); }
 button.st:disabled { opacity: .5; cursor: wait; }
-.s-open .st { color: var(--muted); } .s-doing .st { color: var(--doing); } .s-done .st { color: var(--done); }
+.s-open .st, .s-hold .st { color: var(--muted); } .s-doing .st { color: var(--doing); } .s-done .st { color: var(--done); }
 .s-done .ttl { color: var(--muted); text-decoration: line-through; }
 /* the Who / Effort / Date cells and the + (subtask) cell: click to edit; empty ones show a faint + on the row */
 .cell { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 4px; border: 0; border-radius: 4px;
@@ -452,3 +452,24 @@ td.name.notable .lead { border-radius: 5px; padding-right: 6px; }
 .sechead.fhead.shut { border-bottom-color: transparent; }
 .subsec { padding: 10px 8px 0; font-size: calc(11.5px * var(--fz)); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .subsec .when { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+/* on hold (2.0.20): greyed (not the pop-ups and editors a row holds) */
+.task.held > :not(.pickbox):not(.editbox), tr.held td, .wcard.held > :not(.pickbox), .wline.held > :not(.pickbox), .hrow.held > :not(.pickbox):not(.editbox) { opacity: .5; }
+.task.held .ttl, .wcard.held .wt, .wline.held .wt { font-style: italic; }
+.pchips .heldtog { margin-left: auto; padding: 0 8px; font-size: calc(12px * var(--fz)); }
+.pchips .heldtog.on { color: var(--accent); }
+
+/* a date card (2.0.21): on the calendar because of its own date, not a plan */
+.wcard.due { border-style: dashed; background: transparent; }
+
+/* Timeline (2.0.22): plan marks over the track, the key and Show done */
+table.tl td.c { position: relative; }
+table.tl td.c b.pmark { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; transform: rotate(45deg);
+  background: var(--effort, #6d28d9); border: 1px solid var(--panel); }
+table.tl td.w.plan { color: var(--muted); }
+.tlbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: calc(12px * var(--fz)); color: var(--muted); }
+.tlkey { display: inline-flex; align-items: center; gap: 5px; }
+.tlkey i.kbar { display: inline-block; width: 18px; height: 8px; border-radius: 4px; background: var(--bar); }
+.tlkey b.kplan { display: inline-block; width: 8px; height: 8px; margin-left: 8px; transform: rotate(45deg); background: var(--effort, #6d28d9); }
+.tlbar .donetog { padding: 0 8px; font-size: calc(12px * var(--fz)); }
+.tlbar .donetog.on { color: var(--accent); }
