@@ -1975,10 +1975,9 @@ class TestServerPortfolio(Base):
         self.assertEqual((code, out["text"]), (200, "- first (RT)\n"))
         self.assertIn("OPS", [p["name"] for sec in out["data"]["projects"] for p in sec["projects"]])
 
-    def test_hide_the_example(self):
+    def test_hide_projects(self):
         self.write("Example/backlog.kf", "- sample (KA) Oct14\n")
         self.write("Example/habits.kf", "- stretch *daily\n")
-        self.assertEqual(planner.portfolio_tree(self.root)["example"], "Example")
         names = lambda d: [p["folder"] for sec in d["projects"] for p in sec["projects"]]
         d = self.post("/api/parse", {"all": True, "today": "2026-10-12"})[1]
         self.assertIn("Example", names(d))
@@ -1990,8 +1989,6 @@ class TestServerPortfolio(Base):
         self.assertEqual(code, 200)
         self.assertNotIn("Example", names(out["data"]))
         self.assertEqual(self.post("/api/parse", {"all": True, "hide": "Example"})[0], 400)
-        os.rename(os.path.join(self.root, "Example"), os.path.join(self.root, "Sample"))
-        self.assertIsNone(planner.portfolio_tree(self.root)["example"])
 
     def test_all_projects_merges_sections_by_title(self):
         self.write("A/backlog.kf", "Fall\n- a\n")

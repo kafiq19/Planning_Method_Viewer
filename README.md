@@ -144,7 +144,7 @@ Your projects live in the **`Projects`** folder next to `planner.py`, one sub-fo
 
 ```
 Projects/
-  Example/              a sample project to look around in; hide it (⋯ › Show the Example project) or delete it
+  Example/              a sample project to look around in; hide it (its ⋯ › Hide in the drawer) or delete it
     backlog.kf          the project's planning notes
     quicknote.kf        a quick note for this project
     habits.kf           repeating tasks (habits)
@@ -156,7 +156,7 @@ Projects/
 
 **+ New project** in the drawer makes the folder with all of these ready: an empty `backlog.kf`, `quicknote.kf` and `habits.kf`, and the `notes/` and `archive/` folders. A folder you add yourself becomes a project too, and any of its files that are missing are made the first time you save them.
 
-To put a project out of the way without deleting it, choose **Hide** from its **⋯** in the drawer: it leaves the project list, All projects and the Planner, and waits under **Hidden** at the bottom of the list, where **⋯ › Show** brings it back. Its folder isn't touched, and the choice is kept in this browser. The sample project can also be hidden from **⋯ › Show the Example project** in the top right.
+To put a project out of the way without deleting it, choose **Hide** from its **⋯** in the drawer: it leaves the project list, All projects and the Planner, and waits under **Hidden** at the bottom of the list, where **⋯ › Show** brings it back. Its folder isn't touched, and the choice is kept in this browser.
 
 Git ignores `Projects/` except for `Example`, so your own projects stay out of the repository.
 

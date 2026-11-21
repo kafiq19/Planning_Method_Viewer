@@ -1887,7 +1887,6 @@ def write_notes(path, text, version, force=False):
 # names (starting with ".") are never listed or opened; .trash/ holds what was deleted.
 
 PROJECTS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "Projects")
-EXAMPLE = "Example"           # the sample project shipped in PROJECTS (the page can hide it, in ⋯)
 PROJECT_FILES = {"backlog": "backlog.kf", "quicknote": "quicknote.kf", "habits": "habits.kf"}
 NOTES_DIR, ARCHIVE_DIR, TRASH_DIR = "notes", "archive", ".trash"
 RE_ARCHIVE = re.compile(r"\d{4}\.kf")
@@ -1979,12 +1978,10 @@ def project_info(root, name):
 
 
 def portfolio_tree(root):
-    """{name, example, projects: [project_info]} for the portfolio folder `root` (`example`: the sample
-    project's name if the portfolio has one, else None)."""
+    """{name, projects: [project_info]} for the portfolio folder `root`."""
     root = os.path.realpath(root)
-    projects = [project_info(root, e.name) for e in _listing(root) if e.is_dir()]
-    return {"name": os.path.basename(root), "example": EXAMPLE if any(p["name"] == EXAMPLE for p in projects) else None,
-            "projects": projects}
+    return {"name": os.path.basename(root),
+            "projects": [project_info(root, e.name) for e in _listing(root) if e.is_dir()]}
 
 
 def new_project(root, name):
@@ -2203,7 +2200,7 @@ def apply_edit(text, req):
 
 
 def _hide(req):
-    """A request's `hide`: project names to leave out of All projects (the page's "Show the Example project")."""
+    """A request's `hide`: project names to leave out of All projects (the projects hidden in the page's drawer)."""
     hide = req.get("hide") or []
     if not isinstance(hide, list) or not all(isinstance(x, str) for x in hide):
         raise ValueError("hide must be a list of project names")

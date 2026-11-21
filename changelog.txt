@@ -5,6 +5,14 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.15  2026-11-21  One place to hide a project
+-------------------------------------------------
+- Removed: ⋯ › Show the Example project in the top right. Hide the
+  Example project like any other, from its ⋯ in the drawer.
+- Code: the tree's "example" and EXAMPLE are gone; the hidden list
+  (localStorage "hiddenProjects") is unchanged.
+
+
 2.0.14  2026-11-21  Hide any project
 -------------------------------------------------
 - New: Hide, in a project's ⋯ in the drawer. A hidden project leaves the

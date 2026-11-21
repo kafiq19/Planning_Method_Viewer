@@ -1852,8 +1852,7 @@ function inTree(path) {                              // is this page still in th
   if (p.archive.some(a => a.path === path)) return true;
   return p.notes.some(n => n.path === path || (n.pages || []).some(pg => pg.path === path));
 }
-/* Hidden projects (per browser, "hiddenProjects": a list of folder names). Hide one from its ⋯ in the drawer (or the
-   sample project from ⋯ › Show the Example project); it leaves the project list, All projects and the Planner (the
+/* Hidden projects (per browser, "hiddenProjects": a list of folder names). Hide one from its ⋯ in the drawer; it leaves the project list, All projects and the Planner (the
    server leaves it out of All projects: `hide`) and waits under "Hidden" at the bottom of the drawer, where its ⋯ shows
    it again. Its folder is untouched. */
 if (store.get("hideExample", null) !== null) {       // 2.0.12 kept only the Example project's choice
@@ -1866,8 +1865,6 @@ function setFolio(tree) {                            // keep the whole tree, sho
   state.folioAll = tree;
   const hide = hiddenProjects();
   state.folio = { ...tree, projects: tree.projects.filter(p => !hide.includes(p.name)) };
-  $("exampleWrap").classList.toggle("hidden", !tree.example);
-  $("showExample").checked = !hide.includes(tree.example);
 }
 async function hideProject(name, hide) {             // hide (true) or show a project again
   const set = hiddenSet();
@@ -1879,7 +1876,6 @@ async function hideProject(name, hide) {             // hide (true) or show a pr
   else if (state.all) render(false);
   drawDrawer();
 }
-$("showExample").onchange = () => { if (state.folioAll && state.folioAll.example) hideProject(state.folioAll.example, !$("showExample").checked); };
 async function startPortfolio(tree) {
   setFolio(tree);
   $("brand").disabled = false; $("brand").title = "Projects and pages";
