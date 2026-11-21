@@ -5,7 +5,275 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
-2.0.13  2026-11-11  --host for a network server
+2.0.28  2026-11-21  Merged main: S is 2 points, threaded server, --host
+-------------------------------------------------
+- The changes made on main (listed below as "on main") join the rest:
+  (s) is worth 2 points (sizes 1, 2, 3, 5, 8), the server runs requests
+  on their own threads (?debug=1 shows a request log), the Planner
+  doesn't redraw when nothing changed, and --serve --host 0.0.0.0 serves
+  the page on a trusted network.
+- The printed Planner's effort key reads S 2.
+- Code: the two branches both used 2.0.10-2.0.13; main's four entries
+  keep their numbers, marked "(on main)".
+
+
+2.0.27  2026-11-21  Print the Planner on one page
+-------------------------------------------------
+- New: a printer button next to the Planner's week control prints the
+  period shown on one landscape page, or saves it as a PDF. Day columns
+  with big day names; a Habits row with a tick box per habit due that
+  day; a row per project with its tasks (tick box, effort, ★ for a top
+  priority, done ones struck out); an empty Other row to write in. On the
+  right: the week's number and dates, Top priorities with lines to add
+  more, tasks planned for the week without a day, each habit's days,
+  effort per project to fill in, and lines for notes. At the foot: Top
+  lesson of last week and Top priority this week. Works on every level
+  (a month prints its weeks). Follows the filters, the projects on the
+  calendar, the work week and Show on hold. A busy week gets less room to
+  write, then smaller type, so it always fits on one page.
+- Code: page only (web/app.js printPlanner, printSheet, fitSheet;
+  plannerShown shared with vPlanner; web/app.css .psheet and @media
+  print). The sheet is built off screen, fitted, printed, then removed.
+
+
+2.0.26  2026-11-21  Habits in Upcoming
+-------------------------------------------------
+- New: Upcoming has a Habits group (marked 🔁): each habit due in the
+  next 14 days, its project and how often, its effort, and its next day.
+  One due today has its tick box; once ticked it stays, with "next …".
+  On All projects it lists every project's habits; on a project's Backlog
+  page, that project's. Ticking from a Backlog page writes the project's
+  habits.kf (the backlog is untouched), with Undo.
+- CLI: the upcoming view over a projects folder lists the habits too.
+- Code: upcoming_habits, own_habits; page_data(…, own) adds the
+  project's habits and their version; to_data upcoming.habits and
+  upcoming.today; editTask edits a habit on disk from a page.
+
+
+2.0.25  2026-11-21  Habits in the Planner: counts, effort, 🔁
+-------------------------------------------------
+- New: every habit in the Planner and on the Habits page is marked 🔁.
+- New: in the Month, Season and Year Planner, each column lists each habit
+  with the days done out of the days due there (gym 11/12). A month's first
+  and last weeks count only their days in the month. The panel on the
+  right has a Habits group with each habit's count for the whole period
+  (in a work week, Monday to Friday). Day and Week keep their tick boxes,
+  now with the habit's effort beside it.
+- New: habits can have an effort (the Habits page's new Effort column, or
+  (m) in the line). It counts once per day: the days due are planned
+  points, the days ticked are done points, added to each column's
+  done/planned and the period's total. A day ticked that wasn't due counts
+  as done and as a day.
+- CLI: the week view lists each habit's days done of due, with its points.
+- Code: habit_count (shared rule); planner habit dicts carry count
+  {done, days}; app.js habitCount, habitsSum, clip, habitMark; the Habits
+  table gets a heff column. The examples' gym and weekly client update
+  have an effort.
+
+
+2.0.24  2026-11-21  Held project; effort per column; copy a day
+-------------------------------------------------
+- New: the project you open stays chosen across the tabs. From HDC's
+  Backlog, the Planner (and All projects' tabs) show only HDC; the
+  breadcrumb reads "HDC › Planner". It's remembered after a reload; ×
+  beside the breadcrumb, or Planner / All projects in the drawer, show
+  every project again.
+- New: each Planner column's heading shows the effort done / planned of
+  its cards at the right (3/10 pts), like the side panel's heading for
+  the period's total (each task once).
+- New: click a Planner column's heading to copy its tasks, each line as
+  written in the notes (without indentation), one per line.
+- Code: folioScope, scopeName, setScope, allHide (sent as hide),
+  folioShown, unscopeBtn; .wpts, .wtotal, copyTasks; task dicts carry
+  raw (Task.raw, set by parse).
+
+
+2.0.23  2026-11-21  Work week in the Planner
+-------------------------------------------------
+- New: in the Planner, click Week again to switch to the Work week
+  (Monday to Friday; the button says "Work week"), and again for the
+  full week. Remembered in the browser. The line above the Planner says
+  how many tasks are planned on the hidden Sat/Sun.
+- Code: workWeek ("workWeek" in localStorage), weekend; page only.
+
+
+2.0.22  2026-11-21  Timeline by week, with plans
+-------------------------------------------------
+- New: By week in the period menu (▾): Mon-Sun, with ‹ › stepping a week
+  at a time. Projects and People show the tasks dated in that week; the
+  Timeline's columns become its seven days.
+- New: the Timeline shows when tasks are planned: a purple diamond in each
+  column a plan falls in. A task with plans but no date gets a row of
+  diamonds (instead of sitting under Unscheduled), and with a period
+  chosen, a task planned in it shows even if its date is elsewhere.
+- New: Show done / Hide done above the Timeline (the Filter's "Show done
+  tasks", at hand), with a key for bars and plan marks.
+- Code: period kind "week" (ISO year and week) in period_from / _range /
+  _at / _step / _label / _columns; timeline rows carry planned (per
+  column) and may have no span; vTimeline .pmark, .tlbar, .donetog.
+
+
+2.0.21  2026-11-21  Dates show on the Planner's calendar
+-------------------------------------------------
+- New: in the Planner, a task with its own date appears by itself in
+  the column it falls in: Oct24 on that day, a range on each of its days
+  (or weeks, months), a loose date (~wk45, ~Nov, ~T1) in the column that
+  holds all of it (never on a single day). The card has a dashed border
+  and says "due"; the side panel lists it as "due Oct 24", and it leaves
+  the backlog. Drag it to another column to plan it there as well (the
+  date isn't changed). Where the task is planned too, only the plan
+  card shows. The CLI week view lists them with "(due Oct 24)".
+- Code: planner_groups adds due cards after the planned ones (via None);
+  the planner columns' tasks carry due; weekItem .due, draggable(.., due)
+  drops as a copy.
+
+
+2.0.20  2026-11-21  On hold
+-------------------------------------------------
+- New: a task can be on hold, written /- (like ~- and !-), with (!) in
+  front if circled: (!)/- . Put it on hold, or take it off, from its ⋯
+  menu; its circle shows a pause sign, and clicking it makes the task
+  open again. A held task's subtasks are paused with it.
+- On hold means paused: greyed out in Projects, Timeline and People;
+  hidden in the Planner until you click "Show on hold (N)" (remembered
+  in the browser); never overdue; left out of Upcoming; a habit on hold
+  isn't due (its ticks are off). It still counts as points left, Archive
+  done leaves it, and the sort button puts it last. The CLI shows [/].
+- Code: RE_TASK takes /; status "hold" (STATUS_MARK, BOX, box(),
+  STATUS_ORDER); Task.held (own or an ancestor's); task dicts carry held;
+  .held, withoutHeld, heldToggle, MARK.hold.
+
+
+2.0.19  2026-11-21  Sort a project's tasks by status
+-------------------------------------------------
+- New: point at a project or @group heading in Projects and click the
+  circular-arrows button beside it. Its tasks are moved in the notes so
+  done ones come first, then in progress, then open, and within each
+  A to Z by title (ignoring capitals and tokens like dates or initials).
+  Each task keeps its subtasks and notes.
+  Undo puts them back. In All projects, the button on a project's own
+  heading sorts each group in its backlog.
+- Code: sort_tasks (op "sort"; value "" for one project, "all" for the
+  file), _project_end (shared with add_task), STATUS_ORDER; sortButton.
+
+
+2.0.18  2026-11-21  The edit message hides by itself
+-------------------------------------------------
+- Changed: the message at the bottom after an edit (a status click, a
+  plan, a new task, ...) fades away after 6 seconds. Pointing at it or
+  tabbing into it keeps it, so Undo stays in reach. A message saying an
+  edit was refused still stays until you close it.
+- Code: TOAST_MS, toastLater; .toast.leaving.
+
+
+2.0.17  2026-11-21  Fold projects in the Planner's backlog
+-------------------------------------------------
+- New: in the Planner, click a project's name in the backlog to fold its
+  tasks away, as in Projects; it then says how many open tasks it hides.
+  Folds are remembered (separately from Projects) and open while a
+  search or filter is on.
+- Code: the backlog headings use foldHead, key "collapsedBacklog".
+
+
+2.0.16  2026-11-21  Day view and Add task in the Planner
+-------------------------------------------------
+- New: Day, after Week in the Planner's levels. It shows one day: what's
+  planned for it, its habits to tick, and the backlog to plan from; ‹ ›
+  step a day at a time. Its top priorities (☆) are the week's.
+- New: + Add task in the Planner. Each column has + Add at its foot: the
+  new task goes to the project you pick and is planned for that column.
+  The backlog has + Add task after each project and one at the end, as
+  in Projects.
+- Code: planner kind "day" (index = day of the year; _day_of,
+  star_period, DAY_NAMES); planner.star.label; planner.days for a day;
+  add_with_fields takes plan; addTaskRow/openAdd take a column.
+
+
+2.0.15  2026-11-21  One place to hide a project
+-------------------------------------------------
+- Removed: ⋯ › Show the Example project in the top right. Hide the
+  Example project like any other, from its ⋯ in the drawer.
+- Code: the tree's "example" and EXAMPLE are gone; the hidden list
+  (localStorage "hiddenProjects") is unchanged.
+
+
+2.0.14  2026-11-21  Hide any project
+-------------------------------------------------
+- New: Hide, in a project's ⋯ in the drawer. A hidden project leaves the
+  project list, All projects and the Planner, and waits under Hidden (N)
+  at the bottom of the list; its ⋯ › Show brings it back. Nothing on disk
+  changes, and the choice is kept in this browser.
+- Changed: ⋯ › Show the Example project is now the same thing for the
+  sample project, so it shows under Hidden too. A choice made with
+  2.0.12 is kept.
+- Code: localStorage "hiddenProjects" (a list; "hideExample" is moved
+  into it once), hideProject, hiddenSet; the drawer's Hidden rows
+  (.dhidden, "folioHiddenOpen").
+
+
+2.0.13  2026-11-21  Pick several days or weeks at once
+-------------------------------------------------
+- New: in the Planner, the list that opens from a task or its Plan cell
+  has a checkbox per day, week, month or trimester, and stays open: tick
+  as many as you like (for example two weeks in the Month view), then
+  press Plan or Enter. Unticking takes the task off a column. It is one
+  change, with one Undo. Cancel or Esc changes nothing.
+- Code: pickMany (multi-select list) and placeBox (shared with pickCell);
+  planPick sends op plan with {add, remove, past}, which set_plan
+  applies in one edit.
+
+
+2.0.12  2026-11-21  Hide the Example project
+-------------------------------------------------
+- New: ⋯ › Show the Example project. Untick it and the sample project
+  leaves the drawer, All projects and the Planner (in this browser; the
+  folder stays as it is). Tick it to bring it back. The option shows only
+  when your Projects folder has the Example project.
+- Code: EXAMPLE, the tree's "example"; portfolio_projects and
+  portfolio_data take `hide`, and All-projects requests send `hide`
+  (_hide). Page: setFolio, state.folioAll, hiddenProjects, localStorage
+  "hideExample".
+
+
+2.0.11  2026-11-21  Several plans per task
+-------------------------------------------------
+- New: a task can be planned for several days, weeks, months or
+  trimesters: write >Oct14 >Oct16 (any mix of levels). Before, only the
+  first was read and the rest stayed in the title.
+- In the Planner each plan is its own card. Drag a card to move that day
+  only; hold ⌥/Alt or Shift while dropping to plan it there as well; drop
+  it on the backlog to take just that day off. Clicking a card (or the
+  Plan cell) ticks every column it is in: click others to add them, a
+  ticked one to remove it, or Unplan all.
+- The task keeps one status: done on one day is done on every card. Its
+  points count once in the side panel and in the terminal's week view.
+- Planning a task from the backlog drops its plans that are already in
+  the past, so lines don't fill up with old dates.
+- Code: Task.plans / at["plans"] (plan & co. = the earliest);
+  set_plan takes Oct16, +Oct16, -Oct14, "" and {from, to} (/api/edit
+  accepts that dict for op plan); planner_groups columns carry via;
+  task_data adds plans and plan_labels; _insert_before_tail is gone.
+  Page: planTask(t, token, pl, how, via), draggable(el, t, via),
+  dropZone passes {t, via} and copying, pickCell takes several ticks.
+  example.kf: send to board >Oct14 >Oct16.
+
+
+2.0.10  2026-11-21  Today follows the date
+-------------------------------------------------
+- Fixed: a server left running stayed on the day it was started, so
+  overdue tasks, "now" and the Planner's current week stopped moving on.
+  It now reads the clock on every request (unless started with --today).
+- Changed: Today in the ⋯ menu follows the date by itself. It shows the
+  real date greyed out ("auto"); type a day to see the views as of then
+  ("pinned"), and × goes back. A typed day is no longer kept after a
+  reload. A page left open redraws itself just after midnight.
+- Code: TODAY_PINNED (main sets it with --today; make_server keeps a
+  pinned or test TODAY, else date.today() per request). Page: showToday,
+  dayTick (a minute timer and visibilitychange); the old localStorage
+  key "today" is removed.
+
+
+2.0.13 (on main)  2026-11-11  --host for a network server
 -------------------------------------------------
 - New: python planner.py --serve --host 0.0.0.0 serves the page to every
   machine on your network (for example a Linux box on your LAN), at
@@ -16,7 +284,7 @@ for people using the tool, then notes for anyone working on the code.
   check for a non-loopback host.
 
 
-2.0.12  2026-11-10  Fewer redraws
+2.0.12 (on main)  2026-11-10  Fewer redraws
 -------------------------------------------------
 - Changed: the Planner views no longer redraw when the server's answer
   is the same as what is already shown (for example after a window
@@ -27,7 +295,7 @@ for people using the tool, then notes for anyone working on the code.
 - Code: render() / unchanged() / state.shown / state.ctl in web/app.js.
 
 
-2.0.11  2026-11-09  Stability: threaded server, debug log
+2.0.11 (on main)  2026-11-09  Stability: threaded server, debug log
 -------------------------------------------------
 - Fixed: the server handled one request at a time, so a browser
   connection that stalled (or one slow request) froze the whole page.
@@ -44,7 +312,7 @@ for people using the tool, then notes for anyone working on the code.
   and parallel requests.
 
 
-2.0.10  2026-11-09  Effort S is worth 2 points
+2.0.10 (on main)  2026-11-09  Effort S is worth 2 points
 -------------------------------------------------
 - Changed: (s) is now worth 2 points (it was 1), so the sizes are
   1, 2, 3, 5 and 8. Point totals in the views change accordingly.

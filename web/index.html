@@ -35,7 +35,7 @@
       <label class="mi" title="Filled in for each new task (+ Add task)">My initials <input type="text" id="defWho" placeholder="KA" maxlength="14"></label>
       <label class="mi" title="Filled in for each new task (+ Add task)">Default effort <select id="defEffort"><option value="">None</option></select></label>
       <div class="sep"></div>
-      <label class="mi" id="todayWrap" title="See the views as of another day, like --today">Today <input type="text" id="today" placeholder="Oct12"></label>
+      <label class="mi" id="todayWrap" title="Follows the date by itself. Type a day (like Oct12) to see the views as of then, like --today; it lasts until you clear it or reload">Today <span class="tday"><span class="k" id="todayNote">auto</span><input type="text" id="today" placeholder="Oct12" aria-describedby="todayNote"><button type="button" id="todayReset" class="hidden" title="Back to the real date" aria-label="Back to the real date">×</button></span></label>
     </div>
   </span>
 </header>

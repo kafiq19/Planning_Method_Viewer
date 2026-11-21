@@ -261,13 +261,31 @@ document.addEventListener("keydown", e => {
 $("save").onclick = () => save();
 $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "drop"]) document.body.addEventListener(ev, e => e.preventDefault());   // a dropped file must not replace the page
-$("today").value = store.get("today", "");
+store.del("today");                                         // a pinned Today used to be kept for good; now the page follows the date
 $("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
 $("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
 for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
 $("defEffort").value = store.get("defEffort", "");
 $("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
-$("today").onchange = () => { store.set("today", $("today").value.trim()); render(true); };
+$("today").onchange = () => { showToday(); render(true); };
+$("todayReset").onclick = e => { e.preventDefault(); $("today").value = ""; showToday(); render(true); };
+const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function showToday() {             // the Today field: empty = the real date (shown as its placeholder), typed = pinned until cleared
+  const pinned = !!$("today").value.trim(), iso = state.data && state.data.today;
+  if (!pinned && iso) $("today").placeholder = MON3[+iso.slice(5, 7) - 1] + iso.slice(8, 10);
+  $("todayNote").textContent = pinned ? "pinned" : "auto";
+  $("todayReset").classList.toggle("hidden", !pinned);
+}
+let shownDay = new Date().toDateString();                    // midnight: redraw so Today, overdue and "now" move on by themselves
+function dayTick() {
+  const d = new Date().toDateString();
+  if (d === shownDay) return;
+  shownDay = d;
+  if (!$("today").value.trim() && state.mode === "planner" && !document.querySelector("#viewPane input:focus, #viewPane textarea:focus")) render(false);
+  else shownDay = "";                                         // busy in an edit box: try again on the next tick
+}
+setInterval(dayTick, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) dayTick(); });
 
 /* ---------- modes ---------- */
 function setMode(m) {
@@ -347,7 +365,7 @@ async function render(relayout) {
   try {
     const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.all ? { all: true, ...when } : { text: editor.value, name: folioName(), ...when }), signal: ctl.signal });
+      body: JSON.stringify(state.all ? { all: true, hide: allHide(), ...when } : { text: editor.value, name: folioName(), ...when }), signal: ctl.signal });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
@@ -356,6 +374,7 @@ async function render(relayout) {
     }
     if (unchanged(data)) return;                             // same answer as the one on screen: leave the view (focus, scroll, open editors) alone
     state.data = data;
+    showToday();
     plannerView();
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.seq) return;
@@ -369,8 +388,8 @@ const TABS = [["projects", "Projects"], ["timeline", "Timeline"], ["people", "Pe
 if (state.tab === "week") state.tab = "planner";            // the Week tab (1.5) is the Planner now
 
 /* ---------- status clicks: the server rewrites only the task's status mark ---------- */
-const NEXT = { open: "doing", doing: "done", done: "open" };
-const STATUS_NAME = { open: "open", doing: "in progress", done: "done" };
+const NEXT = { open: "doing", doing: "done", done: "open", hold: "open" };   // a held task's circle takes it off hold
+const STATUS_NAME = { open: "open", doing: "in progress", done: "done", hold: "on hold" };
 
 function replaceText(text) {           // swap in the new text, keeping the cursor and scroll where they were
   const old = editor.value;
@@ -393,13 +412,24 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   try {
     if (state.all) {                                     // All projects: the server edits the task's backlog on disk
       const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, line: t.line, title: t.title, op, value, ...when }) });
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, hide: allHide(), line: t.line, title: t.title, op, value, ...when }) });
       const res = await r.json();
       if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
       if (seq !== state.seq) return true;
       state.data = res.data;
-      state.msg = { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
+      state.msg = res.text === res.before && op === "sort" ? { text: ALREADY_SORTED }
+        : { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
       plannerView();
+      return true;
+    }
+    if (t.path && state.data.versions && t.path in state.data.versions && !(state.file && state.file.path === t.path)) {
+      // 2.0.25: a habit shown on a project's Backlog page (Upcoming): its habits.kf is edited on disk, then the page redrawn
+      const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], line: t.line, title: t.title, op, value, ...when, habits: true }) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.conflict ? "its habits changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
+      state.msg = { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
+      await render(false);
       return true;
     }
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -409,7 +439,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
     if (!r.ok) throw new Error(res.error || r.statusText);
     replaceText(res.text);
     state.data = res.data;
-    state.msg = { text: done, undo: { before, after: res.text } };
+    state.msg = res.text === before && op === "sort" ? { text: ALREADY_SORTED } : { text: done, undo: { before, after: res.text } };
     ok = true;
   } catch (err) {
     state.msg = { text: "Not changed: " + err.message, bad: true };
@@ -418,7 +448,8 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   if (seq === state.seq) plannerView();
   return ok;
 }
-const setStatus = (t, status, btn) => editTask(t, "status", status, btn, `Marked "${t.title}" ${STATUS_NAME[status]}.`);
+const setStatus = (t, status, btn) => editTask(t, "status", status, btn,
+  t.status === "hold" && status === "open" ? `Took "${t.title}" off hold.` : `Marked "${t.title}" ${STATUS_NAME[status]}.`);
 
 /* a one-line input over a cell; Enter applies, Esc or leaving cancels; with `tab`, Tab / Shift-Tab apply and move on */
 function editCell(cell, placeholder, initial, apply, wide, fill, tab) {   // fill: from the cell's left edge to the row's right edge
@@ -454,7 +485,7 @@ function pickCell(cell, label, choices, current, apply, tab) {
   const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
   const outside = e => { if (!box.contains(e.target)) close(); };
   const items = choices.map(({ value, text, note, badge }) => {
-    const on = value === current;
+    const on = Array.isArray(current) ? current.includes(value) : value === current;   // an array: several ticks
     const b = h("button", "mi", span("ck", on ? "✓" : ""), badge ? span("eff", text) : text, note ? span("k", note) : "");
     b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(on));
     b.onclick = e => { e.stopPropagation(); close(); apply(value); };
@@ -481,12 +512,55 @@ function pickCell(cell, label, choices, current, apply, tab) {
   };
   box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
   box.onclick = e => e.stopPropagation();
-  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow, .fhead");   // drop down from the cell, right edge on the cell's right edge
+  placeBox(cell, box);
+  document.addEventListener("pointerdown", outside, true);
+  (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
+}
+function placeBox(cell, box) {                   // drop down from the cell, right edge on the cell's right edge
+  const row = cell.closest(".task, .wcard, .wline, .ph, .hrow, .fhead");
   const r = row.getBoundingClientRect(), c = cell.getBoundingClientRect();
   box.style.top = (c.bottom - r.top + 2) + "px";
   box.style.right = Math.max(0, r.right - c.right) + "px";
   row.append(box);
   if (box.getBoundingClientRect().left < r.left) { box.style.right = "auto"; box.style.left = "0"; }
+}
+/* A list of toggles that stays open: tick as many as you like (click or Space), then Plan (or Enter) applies them all
+   as one change; Esc, Cancel or a click outside changes nothing. `extra`: {text, run}, a button in the footer. */
+function pickMany(cell, label, choices, ticked, apply, extra) {
+  const box = h("div", "pickbox many"), on = new Set(ticked);
+  box.setAttribute("role", "listbox"); box.setAttribute("aria-label", label); box.setAttribute("aria-multiselectable", "true");
+  const close = () => { if (box.isConnected) box.remove(); document.removeEventListener("pointerdown", outside, true); };
+  const outside = e => { if (!box.contains(e.target)) close(); };
+  const changed = () => on.size !== ticked.length || ticked.some(v => !on.has(v));
+  const ok = h("button", "ok", "Plan"), cancel = h("button", "ghost", "Cancel");
+  const done = () => { close(); if (changed()) apply(choices.map(c => c.value).filter(v => on.has(v))); else cell.focus(); };
+  const items = choices.map(({ value, text, note }) => {
+    const ck = span("ck"), b = h("button", "mi", ck, text, note ? span("k", note) : "");
+    b.setAttribute("role", "option");
+    const show = () => { ck.textContent = on.has(value) ? "✓" : ""; b.setAttribute("aria-selected", String(on.has(value))); ok.disabled = !changed(); };
+    b.onclick = e => { e.stopPropagation(); if (on.has(value)) on.delete(value); else on.add(value); show(); };
+    show();
+    return b;
+  });
+  ok.disabled = !changed();
+  ok.onclick = e => { e.stopPropagation(); done(); };
+  cancel.onclick = e => { e.stopPropagation(); close(); cell.focus(); };
+  const foot = h("div", "pfoot");
+  if (extra) { const x = h("button", "ghost", extra.text); x.onclick = e => { e.stopPropagation(); close(); extra.run(); }; foot.append(x); }
+  foot.append(cancel, ok);
+  box.append(h("div", "phead", label), ...items, foot);
+  box.onkeydown = e => {
+    e.stopPropagation();
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i < 0 ? 0 : i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    } else if (e.key === "Enter" && i >= 0) { e.preventDefault(); done(); }   // Space toggles (the button's own click)
+    else if (e.key === "Escape") { e.preventDefault(); close(); cell.focus(); }
+  };
+  box.addEventListener("focusout", e => { if (!box.contains(e.relatedTarget)) setTimeout(() => { if (!box.contains(document.activeElement)) close(); }); });
+  box.onclick = e => e.stopPropagation();
+  placeBox(cell, box);
   document.addEventListener("pointerdown", outside, true);
   (items.find(b => b.getAttribute("aria-selected") === "true") || items[0]).focus();
 }
@@ -500,18 +574,18 @@ const ADD = () => span("add", "+");
 
 /* "+ Add task": a new top-level task at the end of a project (op "task", sent with the project's @ line and name).
    Given no project (People, Timeline, Upcoming), the form also has a project picker; `prefill` starts the text. */
-function addTaskRow(project, who = "") {           // who: People prefills that person's initials
-  const btn = h("button", "addtask", span("plus", "+"), "Add task");
-  btn.title = project ? "Add a task at the end of " + projLabel(project) : "Add a task to a project";
-  btn.dataset.key = (project ? "p\n" + (project.path || "") + "\n" + project.name : "x") + "\n" + who;   // found again after a redraw (keep adding)
-  const row = h("div", "addrow", btn);
-  btn.onclick = () => openAdd(btn, project, who);
+function addTaskRow(project, who = "", col = null) {   // who: People prefills that person's initials; col: a Planner column to plan it for
+  const btn = h("button", "addtask", span("plus", "+"), col ? "Add" : "Add task");
+  btn.title = (project ? "Add a task at the end of " + projLabel(project) : "Add a task to a project") + (col ? `, planned for ${col.head}` : "");
+  btn.dataset.key = (project ? "p\n" + (project.path || "") + "\n" + project.name : "x") + "\n" + who + (col ? "\n" + col.token : "");   // found again after a redraw (keep adding)
+  const row = h("div", "addrow" + (col ? " wadd" : ""), btn);
+  btn.onclick = () => openAdd(btn, project, who, null, col);
   return row;
 }
 /* + Add task: the title, then optional Who / Effort / Date fields (Tab moves between them), prefilled with the
    defaults from ⋯. Enter adds it and opens the form again for the next one; Esc or clicking away ends. The fields
    go to the server separately (op "task" with {title, who, effort, date}); the page never writes note syntax. */
-function openAdd(btn, project, presetWho, keep) {
+function openAdd(btn, project, presetWho, keep, col) {
   const targets = state.data.targets;
   if (!project && !targets.length) {
     state.msg = { text: "There is no project yet: add one like  @Planning  in the text first.", bad: true };
@@ -543,7 +617,7 @@ function openAdd(btn, project, presetWho, keep) {
     const pick = [targets.findIndex(t => t.name === filt.proj), targets.findIndex((t, i) => at(i) === last), 0].find(i => i >= 0);
     sel.value = pick;
   }
-  const form = h("div", "addform", ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
+  const form = h("div", "addform" + (col ? " stack" : ""), ...(sel ? [sel] : []), input, fWhoIn, fEff, fDate);
   let closed = false, pressing = false;
   const cancel = () => {                         // closed is set first: removing the focused input fires focusout again
     if (closed) return;
@@ -560,15 +634,16 @@ function openAdd(btn, project, presetWho, keep) {
     else if (e.key === "Enter" && e.target !== sel) {
       e.preventDefault();
       const v = input.value.trim(), p = project || targets[sel.value];
-      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim() };
+      const fields = { title: v, who: fWhoIn.value.trim(), effort: fEff.value, date: fDate.value.trim(), ...(col ? { plan: col.token } : {}) };
       cancel();
       if (!v) return;
       if (sel) store.set("addTo", (p.path || "") + "\n" + p.line + "\n" + p.name);
-      const plain = !fields.who && !fields.effort && !fields.date;
-      const done = editTask({ line: p.line, title: p.name, path: p.path }, "task", plain ? v : fields, null, `Added "${v}" to ${projLabel(p)}.`);
+      const plain = !fields.who && !fields.effort && !fields.date && !col;
+      const done = editTask({ line: p.line, title: p.name, path: p.path }, "task", plain ? v : fields, null,
+        `Added "${v}" to ${projLabel(p)}` + (col ? `, planned for ${col.head}.` : "."));
       done.then(ok => {                            // keep adding: the form again, empty, same Who / Effort; refused: as typed
         const again = [...plannerBody.querySelectorAll(".addtask")].find(b => b.dataset.key === btn.dataset.key);
-        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields);
+        if (again) openAdd(again, project, presetWho, ok ? { who: fields.who, effort: fields.effort } : fields, col);
       });
     }
   };
@@ -598,11 +673,14 @@ const MARK = {                                  // open: ring; in progress: half
   open: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/>',
   doing: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/>',
   done: '<circle cx="9" cy="9" r="7.8" fill="currentColor"/><path d="M5.5 9.2l2.3 2.3 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
-};
+  hold: '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.2 6.3v5.4M10.8 6.3v5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+};   // on hold (2.0.20): a ring with a pause sign
+const heldBy = t => t.held && t.status !== "hold" ? "On hold with its parent task. " : "";
 function statusBox(t) {
   const b = h("button", "st");
   b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${MARK[t.status]}</svg>`;   // fixed markup, no note text
-  b.title = `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`;
+  b.title = heldBy(t) + (t.status === "hold" ? `On hold. Click to take it off hold (line ${t.line})`
+    : `${STATUS_NAME[t.status]}. Click to mark ${STATUS_NAME[NEXT[t.status]]} (line ${t.line})`);
   b.setAttribute("aria-label", b.title);
   b.onclick = () => setStatus(t, NEXT[t.status], b);
   return b;
@@ -634,7 +712,7 @@ function filtered(d) {
     timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
     people: d.people.filter(g => !filt.who || g.name === filt.who)
       .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
-    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) },
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing), habits: flat(u.habits || []) },
     planner: { ...d.planner, columns: d.planner.columns.map(x => ({ ...x, tasks: flat(x.tasks).filter(shown) })),
       projects: d.planner.projects.map(g => ({ ...g, tasks: flat(g.tasks).filter(shown) })).filter(g => g.tasks.length),
       backlog: d.planner.backlog.map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
@@ -668,13 +746,13 @@ function setPeriod(p) {
 pPrev.onclick = () => state.data.period && setPeriod(state.data.period.prev);
 pNext.onclick = () => state.data.period && setPeriod(state.data.period.next);
 function showPeriod(per) {       // ‹ › name where they go (on hover); the date says what is showing and returns to now
-  const unit = per && (per.kind === "month" ? "month" : "season");
+  const unit = per && per.kind;                   // week, month or season
   pctl.classList.toggle("on", !!per);
   pctl.classList.toggle("away", !!per && !per.current);
   pPrev.classList.toggle("hidden", !per); pNext.classList.toggle("hidden", !per);
   pMid.textContent = per ? per.short : "All dates";   // "Fall 2026"; the line above the list gives the months
-  pMid.title = !per ? "Show all dates, one month or one season"
-    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
+  pMid.title = !per ? "Show all dates, one week, one month or one season"
+    : per.current ? `This ${unit}. Use ‹ › to step, ▾ for all dates, weeks, months or seasons` : `Back to this ${unit}: ${per.now.label}`;
   const item = (label, note, on, pick, disabled) => {
     const b = h("button", "mi", label, span("k", note)); b.setAttribute("role", "menuitemradio");
     b.setAttribute("aria-checked", !!on); b.disabled = !!disabled;
@@ -684,6 +762,7 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   const kind = per ? per.kind : "";
   pMenu.replaceChildren(
     item("All dates", kind === "" ? "✓" : "", kind === "", () => kind && setPeriod(null)),
+    item("By week", kind === "week" ? "✓" : "Mon-Sun", kind === "week", () => kind !== "week" && setPeriod({ kind: "week" })),
     item("By month", kind === "month" ? "✓" : "", kind === "month", () => kind !== "month" && setPeriod({ kind: "month" })),
     item("By season", kind === "season" ? "✓" : "Winter, Summer, Fall", kind === "season", () => kind !== "season" && setPeriod({ kind: "season" })),
     ...(per ? [h("div", "sep"), item("This " + unit, per.current ? "you're here" : per.now.label, false, () => setPeriod(per.now), per.current)] : []));
@@ -693,10 +772,10 @@ function showPeriod(per) {       // ‹ › name where they go (on hover); the d
   }
 }
 
-/* ---------- Planner: Year / Season / Month / Week, then ‹ Oct 12-18 › (the server does the date math). The level is
+/* ---------- Planner: Year / Season / Month / Week / Day, then ‹ Oct 12-18 › (the server does the date math). The level is
    remembered ("planKind"); the period is not, so the Planner opens on the current week, month, season or year ---------- */
-const PLAN_LEVELS = [["year", "Year"], ["season", "Season"], ["month", "Month"], ["week", "Week"]];
-const PLAN_UNIT = { week: "week", month: "month", season: "season", year: "year" };
+const PLAN_LEVELS = [["year", "Year"], ["season", "Season"], ["month", "Month"], ["week", "Week"], ["day", "Day"]];
+const PLAN_UNIT = { day: "day", week: "week", month: "month", season: "season", year: "year" };
 const COLUMN_UNIT = { day: "day", week: "week", month: "month", season: "trimester" };
 const PLAN_RANK = { day: 0, week: 1, month: 2, season: 3, year: 4 };
 state.plan = { kind: PLAN_LEVELS.some(([k]) => k === store.get("planKind", "")) ? store.get("planKind", "") : "week" };
@@ -706,9 +785,16 @@ wSeg.setAttribute("role", "radiogroup"); wSeg.setAttribute("aria-label", "Plan b
 for (const [k, label] of PLAN_LEVELS) {
   const b = h("button", "", label);
   b.dataset.kind = k; b.setAttribute("role", "radio");
-  b.onclick = () => { store.set("planKind", k); setPlan({ kind: k }); };
+  b.onclick = () => {                            // Week again: work week (Mon-Fri) <-> full week (2.0.23)
+    if (k === "week" && !isHabitsPage() && state.data && state.data.planner && state.data.planner.kind === "week") {
+      store.set("workWeek", workWeek() ? "0" : "1"); return plannerView();
+    }
+    store.set("planKind", k); setPlan({ kind: k });
+  };
   wSeg.append(b);
 }
+const workWeek = () => store.get("workWeek", "0") === "1";
+const weekend = c => [0, 6].includes(new Date(c.start + "T12:00:00").getDay());   // the Sat/Sun column
 state.habitWeek = { kind: "week" };                       // the Habits page has its own week (not remembered)
 const isHabitsPage = () => !!(state.folio && !state.all && state.file && /^[^/]+\/habits\.kf$/.test(state.file.path));
 const planFor = () => isHabitsPage() ? state.habitWeek : state.plan;
@@ -723,9 +809,13 @@ wMid.onclick = () => { if (!state.data.planner.current) setPlan(state.data.plann
 function showPlan(pl, on) {
   wbox.classList.toggle("hidden", !on); pctl.classList.toggle("hidden", on);
   wSeg.classList.toggle("hidden", isHabitsPage());          // Habits: one week at a time
+  printBtn.classList.toggle("hidden", isHabitsPage());      // 2.0.27: print the Planner (not the Habits page)
   if (!on) return;
   const unit = PLAN_UNIT[pl.kind];
   for (const b of wSeg.children) { const sel = b.dataset.kind === pl.kind; b.classList.toggle("on", sel); b.setAttribute("aria-checked", String(sel)); }
+  const wk = wSeg.querySelector('[data-kind="week"]'), ww = workWeek() && !isHabitsPage();
+  wk.textContent = ww ? "Work week" : "Week";
+  wk.title = pl.kind !== "week" ? "Plan by week" : ww ? "Monday to Friday. Click for the full week" : "The full week. Click for the work week (Mon-Fri)";
   wctl.classList.toggle("away", !pl.current);
   wMid.textContent = pl.label;
   wMid.title = pl.current ? `This ${unit}. Use ‹ › to step` : `Back to this ${unit}: ${pl.now.label}`;
@@ -779,9 +869,26 @@ function options(sel, names, current, all) {     // a chosen name stays listed e
   sel.value = current;
 }
 
+/* An edit's message hides by itself after TOAST_MS (fading out); pointing at it or focusing it holds it, so Undo stays in
+   reach. Error messages (bad) stay until dismissed. The timer belongs to the message: redraws don't restart it. */
+const TOAST_MS = 6000;
+let toastTimer = null, toastFor = null;
+function toastLater(m, ms) {
+  clearTimeout(toastTimer);
+  toastTimer = m.bad ? null : setTimeout(() => {
+    if (state.msg !== m || toast.matches(":hover, :focus-within")) return;
+    toast.classList.add("leaving");                        // fade out, then drop it (unless something replaced it meanwhile)
+    toastTimer = setTimeout(() => { if (state.msg === m) { state.msg = null; showToast(); } }, 200);
+  }, ms);
+}
+toast.addEventListener("pointerenter", () => { clearTimeout(toastTimer); toast.classList.remove("leaving"); });
+toast.addEventListener("focusin", () => { clearTimeout(toastTimer); toast.classList.remove("leaving"); });
+toast.addEventListener("pointerleave", () => { if (state.msg && !toast.matches(":focus-within")) toastLater(state.msg, 2500); });
+toast.addEventListener("focusout", e => { if (state.msg && !toast.contains(e.relatedTarget) && !toast.matches(":hover")) toastLater(state.msg, 2500); });
 function showToast() {                           // the last edit's message, with Undo while it still applies
   const m = state.msg;
   toast.classList.toggle("hidden", !m);
+  if (m !== toastFor) { toastFor = m; toast.classList.remove("leaving"); if (m) toastLater(m, TOAST_MS); else clearTimeout(toastTimer); }
   if (!m) return toast.replaceChildren();
   toast.classList.toggle("bad", !!m.bad);
   const close = h("button", "", "×"); close.setAttribute("aria-label", "Dismiss");
@@ -828,10 +935,16 @@ function plannerView() {
   if (habitsPage) bits.push("Tick a day when you've done it · each habit repeats on the days its frequency says");
   else if (state.tab === "planner") {
     const pl = d.planner, unit = COLUMN_UNIT[pl.column_kind];
-    bits.push(`Drag a task onto a ${unit}, or use its Plan cell · ☆ marks a top priority for this ${PLAN_UNIT[pl.kind]}`
+    bits.push((pl.kind === "day" ? "Drag a task from the backlog onto the day, or use its Plan cell"
+      : `Drag a task onto a ${unit}, or use its Plan cell (⌥/Shift-drag a card to plan it there as well)`)
+      + ` · ☆ marks a top priority for this ${PLAN_UNIT[pl.star.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
+    if (pl.kind === "week" && workWeek()) {       // work week: say what the hidden Sat/Sun holds
+      const n = pl.columns.filter(weekend).reduce((a, c) => a + c.tasks.length, 0);
+      bits.push("Work week: Sat/Sun hidden" + (n ? ` (${n} planned there)` : "") + ", click Week for the full week");
+    }
   }
-  else if (per) bits.push(per.label + (per.current ? (per.kind === "month" ? " (this month)" : " (this season)") : ""),
+  else if (per) bits.push(per.label + (per.current ? ` (this ${per.kind})` : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
   contextLine.textContent = bits.join(" · ");
   plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
@@ -866,7 +979,7 @@ async function tabTo(row, kind, dir, applied) {
 }
 
 function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, rem, week } = {}) {
-  const row = h("div", "task s-" + t.status + (t.notable ? " notable" : ""));
+  const row = h("div", "task s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : ""));
   row.style.setProperty("--d", depth);
   row.title = "line " + t.line;                         // hover shows where the task is in the text
   row.dataset.line = t.line;
@@ -950,8 +1063,9 @@ function taskNode(t, { project = false, span: useSpan = false, depth = 0, date, 
     row.classList.add("wrow");
     lead.insertBefore(starButton(t, week), ttl);
     const unit = COLUMN_UNIT[week.column_kind];
-    const plan = cellButton("plan r", "Plan", t.plan ? `Planned for ${t.plan_label}. Click to plan it for a ${unit} in ${week.label}`
-      : `Plan it for a ${unit} in ${week.label}`, [t.plan ? span("t", t.plan_label) : span("add", "Plan")], cell => planPick(cell, t, week));
+    const ps = t.plans || [], shown = ps.length > 1 ? `${t.plan_label} +${ps.length - 1}` : t.plan_label;   // the earliest, and how many more
+    const plan = cellButton("plan r", "Plan", ps.length ? `Planned for ${t.plan_labels}. Click to plan it for a ${unit} in ${week.label}`
+      : `Plan it for a ${unit} in ${week.label}`, [ps.length ? span("t", shown) : span("add", "Plan")], cell => planPick(cell, t, week));
     row.append(lead, who, size, dateCell, plan, moreCell(t));
     return row;
   }
@@ -972,12 +1086,15 @@ function archiveYears() {                        // this year and last year (the
 }
 function moreCell(t) {
   const kids = countTasks(t.children || []);
-  return cellButton("more mid", "More", "Circle in purple, archive or delete", [span("add", "⋯")], cell => {
-    const choices = [{ value: "notable", text: t.notable ? "Remove the purple circle" : "Circle in purple" }];
+  return cellButton("more mid", "More", "Put on hold, circle in purple, archive or delete", [span("add", "⋯")], cell => {
+    const choices = [{ value: "hold", text: t.status === "hold" ? "Take off hold" : "Put on hold" },
+      { value: "notable", text: t.notable ? "Remove the purple circle" : "Circle in purple" }];
     if (canArchive()) for (const y of archiveYears()) choices.push({ value: "archive:" + y, text: "Archive to " + y });
     choices.push({ value: "delete", text: kids ? `Delete, with ${tasksN(kids).replace("task", "subtask")}` : "Delete" });
     pickCell(cell, "Task", choices, null, v => {
-      if (v === "notable") editTask(t, "notable", t.notable ? "" : "on", null, t.notable ? `Removed the purple circle from "${t.title}".` : `Circled "${t.title}" in purple.`);
+      if (v === "hold") editTask(t, "status", t.status === "hold" ? "open" : "hold", null,
+        t.status === "hold" ? `Took "${t.title}" off hold.` : `Put "${t.title}" on hold.`);
+      else if (v === "notable") editTask(t, "notable", t.notable ? "" : "on", null, t.notable ? `Removed the purple circle from "${t.title}".` : `Circled "${t.title}" in purple.`);
       else if (v === "delete") {
         if (kids && !confirm(`Delete "${t.title}" and its ${tasksN(kids).replace("task", "subtask")}?`)) return;
         editTask(t, "delete", "", null, `Deleted "${t.title}"` + (kids ? ` and its ${tasksN(kids).replace("task", "subtask")}.` : "."));
@@ -1004,7 +1121,7 @@ async function archiveOp(body, target, year) {
   let res;
   try {
     const r = await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, name: folioName(),
+      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, hide: allHide(), name: folioName(),
         today: $("today").value.trim() || null, period: state.period, planner: planFor() }) });
     res = await r.json();
     if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
@@ -1013,7 +1130,7 @@ async function archiveOp(body, target, year) {
     if (state.file && !state.all) { const [r2, d2] = await fetchFile(state.file); if (r2.ok && !unsaved()) setFile(d2.text, d2.version); }
     return render(false);
   }
-  state.folio = res.tree; drawDrawer();
+  setFolio(res.tree); drawDrawer();
   if (!state.all && state.file && state.file.path === path) setFile(res.text, res.version);
   if (seq !== state.seq) return;
   state.data = res.data;
@@ -1086,7 +1203,7 @@ function foldHead(name, key, what, label, count) {   // a project or person head
 /* All projects: one heading per project (its folder), which folds everything in it ("collapsedFolders"); inside, its
    tasks by section, and its @ sub-groups with their own fold. A project with no tasks yet still shows, with + Add task. */
 function vAllProjects(d) {
-  const out = h("div"), by = new Map(state.folio.projects.map(f => [f.name, []]));
+  const out = h("div"), by = new Map(folioShown().map(f => [f.name, []]));
   for (const sec of d.projects)
     for (const p of sec.projects) {
       const f = p.folder || p.name;
@@ -1105,6 +1222,8 @@ function vAllProjects(d) {
     const backlog = ps.find(p => p.path) || d.targets.find(t => t.folder === folder);
     if (canArchive() && add(ps, p => p.done) && !d.filtered && backlog)   // Archive done: the project's whole backlog
       head.firstChild.append(archiveDoneButton({ line: null, path: backlog.path }));
+    if (!d.filtered && backlog && ps.some(p => p.tasks.length > 1))     // sort every group in the backlog
+      head.firstChild.append(sortButton({ line: 0, name: null, path: backlog.path }, folder, true));
     out.append(head);
     if (shut) { head.classList.add("shut"); continue; }
     if (!items.length) {                          // no tasks yet: + Add task for the project itself
@@ -1121,6 +1240,7 @@ function vAllProjects(d) {
         const effort = p.points.total ? ` · ${p.points.left} of ${pts(p.points.total)} left` : "";
         const [ph, pshut] = foldHead("collapsed", key, "group", [span("at", "@"), p.name], span("count", p.done + "/" + p.total + " done" + effort));
         if (canArchive() && p.done && !d.filtered) ph.append(archiveDoneButton(p));
+        if (p.tasks.length > 1 && !d.filtered) ph.append(sortButton(p, "@" + p.name));
         out.append(ph);
         if (pshut) continue;
       }
@@ -1150,6 +1270,7 @@ function vProjects(d) {
       const [head, shut] = foldHead("collapsed", (sec.title || "") + "\n" + (p.folder ? p.folder + "\n" : "") + p.name, "project", label,
         span("count", p.done + "/" + p.total + " done" + effort));
       if (canArchive() && p.done && !d.filtered) head.append(archiveDoneButton(p));
+      if (p.tasks.length > 1 && !d.filtered) head.append(sortButton(p, p.name === "(no project)" ? p.name : "@" + p.name));
       out.append(head);
       if (shut) continue;
       for (const n of p.notes) out.append(noteNode(n, 0));
@@ -1159,6 +1280,21 @@ function vProjects(d) {
   }
   if (!out.children.length) out.append(d.filtered ? h("div", "empty", "No matching tasks.") : welcome());
   return out;
+}
+/* a project heading's sort button (2.0.19): moves its top-level tasks in the notes, done first, then in progress, then
+   open (op "sort"; each keeps its subtasks and notes, and each group its order). `all`: every group in that backlog. */
+const SORT_ICON = "M20 11a8 8 0 0 0-14.9-4M4 4v4h4M4 13a8 8 0 0 0 14.9 4M20 20v-4h-4";
+const ALREADY_SORTED = "Already in order: done, in progress, then open.";
+function sortButton(p, label, all) {
+  const b = h("button", "ghost sorttasks", icon(SORT_ICON, 14));
+  b.title = (all ? "Sort each group's tasks" : "Sort the tasks") + ": done first, then in progress, then open (moves them in the notes)";
+  b.setAttribute("aria-label", "Sort " + label + "'s tasks by status");
+  b.onclick = e => {
+    e.stopPropagation();
+    editTask({ line: p.line, title: p.name, path: p.path }, "sort", all ? "all" : "", b,
+      `Sorted ${label}: done, in progress, then open.`);
+  };
+  return b;
 }
 function archiveDoneButton(p) {                  // a project heading's "Archive done": every finished task (and its subtasks)
   const b = h("button", "ghost archdone", "Archive done");
@@ -1178,6 +1314,11 @@ function welcome() {                             // no notes yet
 
 function vTimeline(d) {
   const tl = d.timeline, out = h("div");
+  const doneTog = h("button", "ghost donetog" + (filt.done ? " on" : ""), filt.done ? "Hide done" : "Show done");   // 2.0.22: the Filter's "Show done tasks", at hand
+  doneTog.title = filt.done ? "Hide the finished tasks" : "Show the finished tasks too (faded)";
+  doneTog.setAttribute("aria-pressed", String(filt.done));
+  doneTog.onclick = () => { fDone.checked = !filt.done; setFilt("done", !filt.done); };
+  out.append(h("div", "tlbar", h("span", "tlkey", h("i", "kbar"), "dates", h("b", "kplan"), "planned"), doneTog));
   if (!tl.rows.length) out.append(h("div", "empty", d.filtered ? "Nothing scheduled matches." : "Nothing scheduled."));
   else {
     const head = h("tr", "", h("th", "", "Task"));
@@ -1189,18 +1330,26 @@ function vTimeline(d) {
       const nm = h("td", "name", h("span", "lead s-" + t.status, statusBox(t), span("proj", "@" + t.project), span("ttl", label)));
       nm.title = "@" + t.project + "  " + label;
       if (t.notable) nm.classList.add("notable");
-      const tr = h("tr", t.status === "done" ? "done" : "", nm);
+      const tr = h("tr", (t.status === "done" ? "done" : "") + (t.held ? " held" : ""), nm);
       tr.dataset.line = t.line;
       t.bar.forEach((on, i) => {
         const prev = t.bar[i - 1], next = t.bar[i + 1];
         const cell = h("i", on ? "on" : "");
         if (on && !prev) cell.classList.add("s");           // round only the bar's two ends
         if (on && !next) cell.classList.add("e");
-        tr.append(h("td", "c", cell));
+        const td = h("td", "c", cell);
+        if (t.planned && t.planned[i]) {                    // a plan falls in this column: a mark over the track
+          td.append(h("b", "pmark"));
+          td.title = "planned " + t.plan_labels;
+        }
+        tr.append(td);
       });
-      const w = h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""));
-      w.title = t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "");
-      if (t.span.how !== "own") w.style.fontStyle = "italic";
+      const plan = t.plan_labels ? "planned " + t.plan_labels : "";
+      const w = t.span ? h("td", "w" + (t.overdue ? " late" : ""), (t.loose && t.span.how === "own" ? "~" + t.loose : t.span.label) + (t.overdue ? " · overdue" : ""))
+        : h("td", "w plan", plan);                           // no date, only plans
+      w.title = t.span ? t.span.label + (t.span.how === "parent" ? " (from its parent)" : t.span.how === "rollup" ? " (from its subtasks)" : "")
+        + (plan ? " · " + plan : "") : plan;
+      if (t.span && t.span.how !== "own") w.style.fontStyle = "italic";
       tr.append(w);
       table.append(tr);
     }
@@ -1242,6 +1391,15 @@ function vUpcoming(d) {
   group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
   group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
   group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
+  group("Habits", u.habits || [], t => {          // 2.0.25: each habit's next day due; due today: its tick box (ticked stays here)
+    const dueToday = t.due.length > 0, now = t.next === u.today.date, row = h("div", "urow");   // no data-line: its line is in habits.kf
+    row.append(...[dueToday ? tickButton(t, u.today, true) : span("utick"), habitMark(), span("wt", t.title),
+      span("wd", projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "")),
+      t.effort ? span("weff", t.effort.toUpperCase()) : null, span("unext" + (now ? " now" : ""), now ? "today" : (dueToday ? "next " : "") + t.next_label)].filter(Boolean));
+    row.title = `${t.title}: ${t.every_label || ""}, ` + (dueToday && !now ? "done today; " : "") + `next ${now ? "today" : t.next_label}`
+      + (t.effort ? ` · ${pts(t.points)} each time` : "");
+    return row;
+  });
   if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
     : "Nothing due, overdue or in progress in the next " + u.days + " days."));
   if (d.targets.length) out.append(addTaskRow(null));
@@ -1250,22 +1408,40 @@ function vUpcoming(d) {
 
 /* ---------- Planner: plan tasks for a column (>Oct14 / >wk45 / >Nov / >T3 in the task's line, op "plan"), mark top
    priorities for the period (^wk45 / ^Nov / ^T3 / ^yr, op "priority"); the server groups them ---------- */
-let dragged = null;                              // the task being dragged (this page only)
-function inColumn(t, c, pl) {                    // is the task planned for this column (or a part of it)?
-  return !!t.plan && PLAN_RANK[t.plan_kind] <= PLAN_RANK[pl.column_kind] && c.start <= t.plan && t.plan_end <= c.end;
-}
-function planPick(cell, t, pl) {                 // the column list (Mon … Sat/Sun, weeks, months, trimesters), and Unplan
-  const here = pl.columns.find(c => inColumn(t, c, pl));
+let dragged = null;                              // {t, via}: the task being dragged, and the plan its card stands for
+const plansIn = (t, c, pl) => (t.plans || []).filter(p => PLAN_RANK[p.kind] <= PLAN_RANK[pl.column_kind] && c.start <= p.start && p.end <= c.end);
+const inPeriod = (t, pl) => (t.plans || []).filter(p => p.start <= pl.end && p.end >= pl.start)   // earliest first
+  .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+function inColumn(t, c, pl) { return plansIn(t, c, pl).length > 0; }   // planned for this column (or a part of it)?
+function planPick(cell, t, pl) {                 // the columns (days, weeks, months, trimesters): tick as many as you like
   const cols = pl.columns.filter(c => c.ok);
-  pickCell(cell, "Plan for", [...cols.map(c => ({ value: c.token, text: c.head, note: c.today ? "now" : "" })),
-    ...(t.plan ? [{ value: "", text: "Unplan", note: t.plan_label }] : [])], here ? here.token : null, v => planTask(t, v, pl));
+  const ticked = cols.filter(c => inColumn(t, c, pl)).map(c => c.token);
+  const fromBacklog = !inPeriod(t, pl).length;   // not planned in this period yet: plans already past go too
+  const n = (t.plans || []).length, unit = COLUMN_UNIT[pl.column_kind], head = v => cols.find(c => c.token === v).head;
+  const both = xs => xs.length > 1 ? xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1] : xs[0];
+  pickMany(cell, `Plan for: tick one ${unit} or more`, cols.map(c => ({ value: c.token, text: c.head, note: c.today ? "now" : "" })), ticked,
+    chosen => {
+      const add = chosen.filter(v => !ticked.includes(v)), off = ticked.filter(v => !chosen.includes(v));
+      const remove = off.flatMap(v => plansIn(t, cols.find(c => c.token === v), pl).map(p => p.token));
+      const says = [add.length && `planned for ${both(add.map(head))}`, off.length && `taken off ${both(off.map(head))}`].filter(Boolean).join("; ");
+      editTask(t, "plan", { add, remove, past: fromBacklog }, null, `"${t.title}": ${says}.`);
+    }, n ? { text: n > 1 ? "Unplan all" : "Unplan", run: () => planTask(t, "", pl, "clear") } : null);
 }
-function planTask(t, token, pl) {
-  const col = pl.columns.find(c => c.token === token), was = pl.columns.find(c => inColumn(t, c, pl));
-  if (token && col === was && t.plan_kind === pl.column_kind) return;
+function planTask(t, token, pl, how, via) {      // how: plan (from the backlog), copy (as well), move (via -> token), remove, clear
+  const col = pl.columns.find(c => c.token === token), head = col ? col.head : token, title = `"${t.title}"`;
   if (col && !col.ok) return;
-  editTask(t, "plan", token, null, !token ? `Unplanned "${t.title}".` : was ? `Moved "${t.title}" to ${col.head}.`
-    : `Planned "${t.title}" for ${col.head}.`);
+  if (how === "move" && (!via || !col)) how = "plan";
+  if (how === "move") {
+    if (plansIn(t, col, pl).some(p => p.token === via)) return;   // dropped where it already was
+    return editTask(t, "plan", { from: via, to: token }, null, `Moved ${title} to ${head}.`);
+  }
+  if (how === "copy") return editTask(t, "plan", "+" + token, null, `Also planned ${title} for ${head}.`);
+  if (how === "remove") {
+    const p = (t.plans || []).find(x => x.token === token);
+    return editTask(t, "plan", "-" + token, null, `Took ${title} off ${p ? p.label : token}.`);
+  }
+  if (how === "clear") return editTask(t, "plan", "", null, `Unplanned ${title}.`);
+  editTask(t, "plan", token, null, `Planned ${title} for ${head}.`);
 }
 const STAR = { on: '<path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6-4.4-4.2 6-.8z" fill="currentColor"/>',
   off: '<path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6-4.4-4.2 6-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' };
@@ -1273,14 +1449,14 @@ const starred = (t, pl) => t.priorities.some(p => p.kind === pl.star.kind && p.s
 function starButton(t, pl) {                     // ☆: a top priority for the period shown (^wk45, ^Nov, ^T3, ^yr)
   const on = starred(t, pl), b = h("button", "star" + (on ? " on" : ""));
   b.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">${on ? STAR.on : STAR.off}</svg>`;   // fixed markup
-  b.title = on ? `Top priority for ${pl.label}. Click to unmark` : pl.star.ok ? `Make it a top priority for ${pl.label}`
+  b.title = on ? `Top priority for ${pl.star.label}. Click to unmark` : pl.star.ok ? `Make it a top priority for ${pl.star.label}`
     : pl.kind === "year" ? "Year priorities can be marked for this year only" : "Too far away to mark (the notes have no years)";
   b.setAttribute("aria-label", b.title); b.setAttribute("aria-pressed", String(on));
   b.disabled = !on && !pl.star.ok;
   b.onclick = e => {
     e.stopPropagation();
     editTask(t, "priority", (on ? "-" : "") + pl.star.token, b,
-      on ? `"${t.title}" is no longer a top priority for ${pl.label}.` : `Made "${t.title}" a top priority for ${pl.label}.`);
+      on ? `"${t.title}" is no longer a top priority for ${pl.star.label}.` : `Made "${t.title}" a top priority for ${pl.star.label}.`);
   };
   return b;
 }
@@ -1291,7 +1467,7 @@ const projKey = t => t.folder || t.project || t.name;
 function planHidden() { try { return new Set(JSON.parse(store.get("plannerHidden", "[]"))); } catch (e) { return new Set(); } }
 function setPlanHidden(set) { store.set("plannerHidden", JSON.stringify([...set])); plannerView(); }
 function projectChips(d) {
-  const names = state.folio && state.all ? state.folio.projects.map(p => p.name) : [...new Set(d.targets.map(t => t.name))];
+  const names = state.folio && state.all ? folioShown().map(p => p.name) : [...new Set(d.targets.map(t => t.name))];
   if (names.length < 2) return null;
   const hidden = planHidden(), shown = names.filter(n => !hidden.has(n)), off = names.filter(n => hidden.has(n));
   const chips = shown.map(n => {
@@ -1315,26 +1491,35 @@ function projectChips(d) {
   }
   return box;
 }
-function draggable(el, t) {
+function draggable(el, t, via, due) {            // via: the plan a card stands for (a backlog row has none); due: a date card
   el.draggable = true;
-  el.addEventListener("dragstart", e => { dragged = t; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.title); });
+  el.addEventListener("dragstart", e => { dragged = { t, via, due }; e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("text/plain", t.title); });
   el.addEventListener("dragend", () => { dragged = null; });
 }
+const copying = e => e.altKey || e.shiftKey;     // ⌥/Alt or Shift while dropping a card: plan it there as well
 function dropZone(el, onDrop) {
-  el.addEventListener("dragover", e => { if (!dragged) return; e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragover", e => {
+    if (!dragged) return;
+    e.preventDefault(); el.classList.add("over");
+    e.dataTransfer.dropEffect = dragged.due || dragged.via && copying(e) ? "copy" : "move";
+  });
   el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
-  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const t = dragged; dragged = null; if (t) onDrop(t); });
+  el.addEventListener("drop", e => { e.preventDefault(); el.classList.remove("over"); const d = dragged; dragged = null; if (d) onDrop(d, copying(e)); });
 }
-function weekItem(cls, t, w, extra) {           // a planned task: status, ☆, title (+ meta); a click opens the column list, drag moves it
+function weekItem(cls, t, w, extra, via) {      // a planned task: status, ☆, title (+ meta); a click opens the column list, drag moves it
   const body = h("span", "wbody", span("wt", t.title), ...extra);
-  const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : ""), statusBox(t), starButton(t, w), body);
+  const due = cls === "wcard" && t.due;          // a date card (2.0.21): here because of its own date, not a plan
+  const el = h("div", cls + " s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : "") + (due ? " due" : ""), statusBox(t), starButton(t, w), body);
   el.dataset.line = t.line;
-  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (t.plan ? "  · planned " + t.plan_label : "") + "  (line " + t.line + ")";
+  el.title = projLabel({ name: t.project, folder: t.folder }) + "  " + t.title + (due ? "  · due " + t.when : "") + (t.plan_labels ? "  · planned " + t.plan_labels : "")
+    + "  (line " + t.line + ")" + (due ? "\nOn the calendar because of its date. Drag it to plan it for another day too (the date stays)"
+    : via ? "\nDrag to move this day; hold ⌥/Alt or Shift to plan it there as well" : "");
   el.onclick = e => {
     if ($("viewPane").classList.contains("jump") || e.target.closest("button")) return;   // Edit alongside: the click jumps instead
     e.stopPropagation(); planPick(el, t, w);
   };
-  draggable(el, t);
+  if (due) draggable(el, t, null, true);         // dropped on a column: planned there as well
+  else draggable(el, t, via === undefined ? (inPeriod(t, w)[0] || {}).token : via);   // a line, not a card: its first plan here
   return el;
 }
 /* ---------- Habits (a project's habits.kf): tasks with a frequency (*daily, *weekdays, *weekly Mon, Wed, *monthly 1st).
@@ -1346,31 +1531,47 @@ function tickButton(t, day, due) {               // one habit on one day: ticked
   b.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">${done ? TICK.on : TICK.off}</svg>`;   // fixed markup
   b.title = `${t.title}, ${day.head}: ` + (done ? "done. Click to untick" : day.future ? "not yet" : due ? "due. Click when done" : "not due (click to tick anyway)");
   b.setAttribute("aria-label", b.title); b.setAttribute("aria-pressed", String(done));
-  b.disabled = day.future && !done;
+  b.disabled = day.future && !done || !!t.held;   // a held habit is paused
+  if (t.held) b.title = `${t.title} is on hold`;
   b.onclick = e => {
     e.stopPropagation();
     editTask(t, "tick", (done ? "-" : "") + day.token, b, done ? `Unticked "${t.title}" for ${day.head}.` : `Ticked "${t.title}" for ${day.head}.`);
   };
   return b;
 }
-function habitsIn(pl, c, on) {                   // a Planner column's habits: ticks per day (Week), or how many were done
-  const hs = (pl.habits || []).filter(on).filter(t => t.due.some(x => x >= c.start && x <= c.end) || t.done.some(x => x >= c.start && x <= c.end));
+/* 2.0.25: a habit from a to b (ISO days): the days it was done, the days it counts for (due or ticked), and their
+   points (its effort per day). The same rule as planner.habit_count. */
+function habitCount(t, a, b) {
+  const inr = x => x >= a && x <= b, done = new Set(t.done.filter(inr)), days = new Set([...done, ...t.due.filter(inr)]);
+  return { done: done.size, days: days.size, pd: done.size * t.points, pt: days.size * t.points };
+}
+function habitsSum(hs, a, b) {                   // [points done, points due] of some habits from a to b
+  return hs.reduce(([d, n], t) => { const c = habitCount(t, a, b); return [d + c.pd, n + c.pt]; }, [0, 0]);
+}
+const habitMark = () => { const e = span("hmark", "🔁"); e.title = "a habit (repeats)"; e.setAttribute("aria-label", "habit"); return e; };   // 2.0.25
+const clip = (c, pl) => ({ start: c.start < pl.start ? pl.start : c.start, end: c.end > pl.end ? pl.end : c.end });   // a column inside the period
+const habitsOf = (pl, c, on) => (pl.habits || []).filter(on).filter(t => habitCount(t, c.start, c.end).days);
+function habitsIn(pl, c0, on) {                  // a Planner column's habits: ticks per day (Day, Week), or each one's count
+  const c = clip(c0, pl), hs = habitsOf(pl, c, on);   // a month's first and last weeks: only their days in the month
   if (!hs.length) return null;
   const box = h("div", "whab");
+  const effort = t => t.effort ? span("weff", t.effort.toUpperCase()) : null;
   if (pl.days.length) {
     for (const day of pl.days.filter(x => x.date >= c.start && x.date <= c.end))
       for (const t of hs) {
         const due = t.due.includes(day.date);
         if (!due && !t.done.includes(day.date)) continue;
-        const row = h("div", "whrow", tickButton(t, day, due), span("wt", t.title), c.start !== c.end ? span("wd", day.head.split(" ")[0]) : null);
-        row.title = projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "");
+        const row = h("div", "whrow" + (t.held ? " held" : ""), tickButton(t, day, due), habitMark(), span("wt", t.title),
+          c.start !== c.end ? span("wd", day.head.split(" ")[0]) : null, effort(t));
+        row.title = projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "") + (t.effort ? ` · ${pts(t.points)} a day` : "");
         box.append(row);
       }
-  } else {
-    const due = hs.reduce((n, t) => n + t.due.filter(x => x >= c.start && x <= c.end).length, 0);
-    const done = hs.reduce((n, t) => n + t.done.filter(x => x >= c.start && x <= c.end).length, 0);
-    box.append(h("div", "whsum", `Habits: ${done} of ${due} done`));
-    box.title = hs.map(t => t.title).join(", ");
+  } else {                                       // 2.0.25: Month, Season, Year: each habit, done of due here (11/12)
+    for (const t of hs) {
+      const n = habitCount(t, c.start, c.end), row = h("div", "whrow", habitMark(), span("wt", t.title), span("wd", `${n.done}/${n.days}`), effort(t));
+      row.title = `${t.title} (${t.every_label || ""}): done ${n.done} of ${n.days} days here` + (t.points ? ` · ${n.pd}/${pts(n.pt)}` : "");
+      box.append(row);
+    }
   }
   return box.children.length ? box : null;
 }
@@ -1383,12 +1584,13 @@ function vHabits(d) {
   }
   const table = h("div", "htable");
   table.style.setProperty("--ndays", pl.days.length);
-  table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"),
+  table.append(h("div", "hrow hhead", span("hname", "Habit"), span("hevery", "Every"), span("heff", "Effort"),
     ...pl.days.map(x => span("hday" + (x.today ? " today" : ""), x.head)), span("hcount", "Done"), span("", "")));
   for (const t of pl.habits) {
-    const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : ""));
+    const row = h("div", "hrow s-" + t.status + (t.notable ? " notable" : "") + (t.held ? " held" : ""));
     row.dataset.line = t.line; row.title = "line " + t.line;
     const name = span("hname", t.title);
+    name.prepend(habitMark(), " ");
     name.onclick = e => {                          // the habit's text, like a task's title (Edit alongside: jump instead)
       if ($("viewPane").classList.contains("jump")) return;
       e.stopPropagation();
@@ -1398,9 +1600,14 @@ function vHabits(d) {
       [t.every.length ? span("t", t.every_label) : span("add", "Set")],
       cell => editCell(cell, "daily, weekdays, weekly Mon, Wed, monthly 1st", t.every.join(", "),
         v => { v = v.trim(); if (v !== t.every.join(", ")) editTask(t, "every", v, null, v ? `"${t.title}" repeats ${v} now.` : `"${t.title}" doesn't repeat now.`); }, true));
+    const size = cellButton("heff mid", "Set effort", t.effort ? `effort: ${pts(t.points)} each time. Click to change` : "Set effort: XS, S, M, L or XL (counts each day it's due)",
+      [t.effort ? span("eff", t.effort.toUpperCase()) : span("add", "+")],
+      cell => pickCell(cell, "Effort", [...EFFORTS.map(([v, n]) => ({ value: v, text: v.toUpperCase(), note: pts(n), badge: true })),
+        { value: "", text: "None" }], t.effort || "", v => { if (v !== (t.effort || ""))
+          editTask(t, "effort", v, null, v ? `Set the effort of "${t.title}" to ${v.toUpperCase()}.` : `Cleared the effort of "${t.title}".`); }));
     const due = pl.days.filter(x => t.due.includes(x.date) && !x.future).length;
     const done = pl.days.filter(x => t.done.includes(x.date)).length;
-    row.append(name, every, ...pl.days.map(x => h("span", "hday" + (x.today ? " today" : ""), tickButton(t, x, t.due.includes(x.date)))),
+    row.append(name, every, size, ...pl.days.map(x => h("span", "hday" + (x.today ? " today" : ""), tickButton(t, x, t.due.includes(x.date)))),
       span("hcount", t.every.length ? `${done}/${due}` : ""), moreCell(t));
     table.append(row);
   }
@@ -1456,62 +1663,280 @@ function starBlocksFirst(items, pl) {
   return [...top, ...rest];
 }
 const groupsStarFirst = (groups, pl) => [...groups.filter(g => g.tasks.some(t => starred(t, pl))), ...groups.filter(g => !g.tasks.some(t => starred(t, pl)))];
+/* copy a column's tasks (2.0.24): each task's line as written in the notes (without its indentation), one per line */
+async function copyTasks(tasks, head) {
+  const seen = new Set(), lines = [];
+  for (const t of tasks) {
+    const k = (t.path || "") + ":" + t.line;
+    if (seen.has(k) || !t.raw) continue;
+    seen.add(k); lines.push(t.raw);
+  }
+  if (!lines.length) { state.msg = { text: "To copy tasks, restart the server (python3 planner.py --serve).", bad: true }; return showToast(); }
+  const text = lines.join("\n") + "\n";
+  let ok = true;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {                                    // no clipboard API: the old way
+    const ta = h("textarea"); ta.value = text; ta.style.cssText = "position: fixed; opacity: 0";
+    document.body.append(ta); ta.select();
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    ta.remove();
+  }
+  state.msg = ok ? { text: `Copied ${tasksN(lines.length)} from ${head}.` } : { text: "Couldn't copy to the clipboard.", bad: true };
+  showToast();
+}
+/* on hold (2.0.20): hidden from the Planner unless "Show on hold" is on (remembered per browser, "showHeld") */
+const showHeld = () => store.get("showHeld", "0") === "1";
+function withoutHeld(pl) {                       // -> [planner data without held tasks, how many tasks were left out]
+  const gone = new Set(), keep = t => !t.held || (gone.add(t.path + ":" + t.line), false);
+  const groups = gs => gs.map(g => ({ ...g, tasks: g.tasks.filter(keep) })).filter(g => g.tasks.length);
+  const out = { ...pl, columns: pl.columns.map(c => ({ ...c, tasks: c.tasks.filter(keep) })), projects: groups(pl.projects),
+    backlog: groups(pl.backlog), priorities: pl.priorities.filter(keep) };
+  return [out, gone.size];
+}
+function heldToggle(n) {
+  const on = showHeld(), b = h("button", "ghost heldtog" + (on ? " on" : ""), on ? "Hide on hold" : `Show on hold (${n})`);
+  b.title = on ? "Hide the tasks on hold" : "Show the tasks on hold, greyed";
+  b.setAttribute("aria-pressed", String(on));
+  b.onclick = () => { store.set("showHeld", on ? "0" : "1"); plannerView(); };
+  return b;
+}
+function plannerShown(d) {                      // the Planner as shown: hold, the work week; -> [planner data, held left out]
+  const [pl0, nHeld] = showHeld() ? [d.planner, (d.planner.backlog.flatMap(g => g.tasks).concat(d.planner.projects.flatMap(g => g.tasks)))
+    .filter(t => t.held).length] : withoutHeld(d.planner);
+  return [pl0.kind === "week" && workWeek() ? { ...pl0, columns: pl0.columns.filter(c => !weekend(c)) } : pl0, nHeld];   // work week: no Sat/Sun
+}
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
-  const pl = d.planner, out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
-  const unit = PLAN_UNIT[pl.kind], where = pl.current ? "this " + unit : pl.label;
-  const chips = projectChips(d);
+  const [pl, nHeld] = plannerShown(d);
+  const out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
+  const unit = PLAN_UNIT[pl.kind], where = pl.kind === "day" ? (pl.current ? "today" : pl.label) : pl.current ? "this " + unit : pl.label;
+  const starWhere = pl.star.kind === pl.kind ? where : pl.current ? "this week" : "the week of " + pl.star.label;   // a day's are its week's
+  const chips = projectChips(d) || (nHeld || showHeld() ? h("div", "pchips") : null);
   if (chips) out.append(chips);
-  const meta = t => span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
-    + (t.plan_kind !== pl.column_kind ? " · " + t.plan_label : ""));
+  if (nHeld || showHeld()) chips.append(heldToggle(nHeld));
+  const meta = (t, c) => { const p = (t.plans || []).find(x => x.token === t.via);   // a plan finer than the column: say which
+    const dueWhen = t.due ? " · due" + (c.start === c.end && t.span && t.span.start === t.span.end ? "" : " " + t.when) : "";
+    return span("wmeta", projLabel({ name: t.project, folder: t.folder }) + (t.effort ? " · " + t.effort.toUpperCase() : "")
+      + (p && p.kind !== pl.column_kind ? " · " + p.label : "") + dueWhen); };
+  const where1 = t => !inPeriod(t, pl).length ? "due " + t.when : [...new Set(inPeriod(t, pl).map(p => { const c = pl.columns.find(x => plansIn(t, x, pl).includes(p));
+    return c && p.kind === pl.column_kind ? (pl.kind === "day" ? "" : c.head.split(" ")[0]) : p.label; }))].filter(Boolean).join(", ");
   const prios = pl.priorities.filter(on);         // Top priorities for exactly this period
-  const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + where)));
+  const top = h("div", "wprio", h("h4", "grp", "Top priorities", span("when", " " + starWhere)));
   if (prios.length) top.append(...prios.map(t => weekItem("wline", t, pl, [span("wd", projLabel({ name: t.project, folder: t.folder }))])));
-  else top.append(h("div", "wempty", pl.star.ok ? `Mark a task with ☆ to make it a top priority for ${where}.`
+  else top.append(h("div", "wempty", pl.star.ok ? `Mark a task with ☆ to make it a top priority for ${starWhere}.`
     : pl.kind === "year" ? "Year priorities can be marked for this year only." : "Too far away to mark priorities (the notes have no years)."));
   out.append(top);
   const days = h("div", "wdays");
   days.style.setProperty("--ncols", pl.columns.length);   // the stylesheet stacks them in a narrow pane
   for (const c of pl.columns) {
-    const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
+    const shown = starFirst(c.tasks.filter(on), pl);
+    const head = h("div", "whead", span("", c.head + (c.today ? " · now" : "")));
+    if (shown.length) {                            // 2.0.24: click the heading to copy its tasks' lines, as written
+      head.classList.add("copyable");
+      head.title = `Copy the ${tasksN(shown.length)} here, as written in the notes`;
+      head.onclick = e => { e.stopPropagation(); copyTasks(shown, c.head); };
+    }
+    const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), head);
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
-    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t)]));
+    for (const t of shown) col.append(weekItem("wcard", t, pl, [meta(t, c)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
-    if (c.ok) dropZone(col, t => planTask(t, c.token, pl));
+    const cc = clip(c, pl), [hd, ht] = habitsSum(habitsOf(pl, cc, on), cc.start, cc.end);
+    if (shown.length || ht) {                      // 2.0.24: effort done / planned in this column (every card shown, and
+      const total = sumPts(shown) + ht, done = sumPts(shown.filter(t => t.status === "done")) + hd;   // 2.0.25: habits per day)
+      head.append(span("wpts", `${done}/${pts(total)}`));
+      head.title += ` · ${pts(done)} done of ${pts(total)} here` + (ht ? ` (habits ${hd}/${pts(ht)})` : "");
+    }
+    if (c.ok && d.targets.length) col.append(addTaskRow(null, "", c));   // a new task, planned for this column
+    if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, d.due ? "copy" : !d.via ? "plan" : copy ? "copy" : "move", d.via));
     days.append(col);
   }
   const side = h("div", "wside", h("h4", "grp", where[0].toUpperCase() + where.slice(1)));
+  const sideTotal = side.firstChild;                // 2.0.24: the period's effort done / planned, each task once (filled below)
   const groups = groupsStarFirst(pl.projects.filter(g => !hidden.has(projKey(g))), pl);
   for (const g of groups) {
     const total = sumPts(g.tasks), done = sumPts(g.tasks.filter(t => t.status === "done"));   // the tasks shown (follows the filters)
     const sum = h("div", "wsum", `${done}/${pts(total)}`);
     sum.title = `${pts(done)} done of ${pts(total)} planned`;
     side.append(h("div", "wproj", h("div", "wpname", projLabel(g)),
-      ...starFirst(g.tasks, pl).map(t => { const c = pl.columns.find(x => inColumn(t, x, pl));
-        return weekItem("wline", t, pl, [span("wd", c && t.plan_kind === pl.column_kind ? c.head.split(" ")[0] : t.plan_label)]); }),
+      ...starFirst(g.tasks, pl).map(t => weekItem("wline", t, pl, [span("wd", where1(t))])),
       sum));
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
+  // 2.0.25: the habits over the columns shown (a work week: Mon-Fri), each one's days done of due, and their effort
+  const span0 = pl.columns.length ? clip({ start: pl.columns[0].start, end: pl.columns[pl.columns.length - 1].end }, pl) : null;
+  const habs = span0 ? habitsOf(pl, span0, on) : [];
+  const [hd, ht] = habitsSum(habs, span0 && span0.start, span0 && span0.end);
+  if (habs.length) {
+    const box = h("div", "wproj whabs", h("div", "wpname", "Habits"));
+    for (const t of habs) {
+      const n = habitCount(t, span0.start, span0.end);
+      const row = h("div", "whrow" + (t.held ? " held" : ""), habitMark(), span("wt", t.title), span("wd", `${n.done}/${n.days}`),
+        t.effort ? span("weff", t.effort.toUpperCase()) : null);
+      row.title = `${projLabel({ name: t.project, folder: t.folder })} · ${t.every_label || ""}: done ${n.done} of ${n.days} days`
+        + (t.points ? ` · ${n.pd}/${pts(n.pt)}` : "");
+      box.append(row);
+    }
+    if (ht) { const sum = h("div", "wsum", `${hd}/${pts(ht)}`); sum.title = `${pts(hd)} done of ${pts(ht)} in habits`; box.append(sum); }
+    side.append(box);
+  }
+  if (groups.length || ht) {
+    const all = groups.flatMap(g => g.tasks), total = sumPts(all) + ht, done = sumPts(all.filter(t => t.status === "done")) + hd;
+    const e = span("wtotal", `${done}/${pts(total)}`);
+    e.title = `${pts(done)} done of ${pts(total)} planned for ${where}` + (ht ? ` (habits ${hd}/${pts(ht)})` : "");
+    sideTotal.append(e);
+  }
   out.append(h("div", "wtop", days, side));
-  const back = h("div", "wback", colHead("Backlog", `open tasks not planned for ${where}`));
+  const back = h("div", "wback", colHead("Backlog", `open tasks not planned or due ${where.startsWith("this") || where === "today" ? "" : "in "}${where}`));
   back.firstChild.classList.add("wrow");
   back.firstChild.children[4].textContent = "Plan";
   back.firstChild.children[4].classList.add("r");
   const bgroups = groupsStarFirst(pl.backlog.filter(g => !hidden.has(projKey(g))), pl);
-  for (const g of bgroups) {
-    back.append(h("h3", "ph", h("span", "", ...(g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name]))));
+  for (const g of bgroups) {                     // each project folds, as in Projects ("collapsedBacklog"; open while filtering)
+    const n = g.tasks.length, [head, shut] = foldHead("collapsedBacklog", (g.folder || "") + "\n" + (g.path || "") + "\n" + g.name, "project",
+      g.folder && g.folder !== g.name ? [span("at", g.folder + " · @"), g.name] : [span("at", "@"), g.name],
+      span("count", `${n} open task${n === 1 ? "" : "s"}`));
+    back.append(head);
+    if (shut) continue;
     for (const t of starBlocksFirst(g.tasks, pl)) {   // drag by the title side (the row's inputs stay selectable)
       const row = taskNode(t, { depth: t.depth, week: pl });
-      draggable(row.querySelector(".lead"), t);
+      draggable(row.querySelector(".lead"), t, null);
       back.append(row);
     }
+    back.append(addTaskRow(g));                   // like Projects: a new task at the end of this project
   }
   if (!bgroups.length) back.append(h("div", "empty", hidden.size && !groups.length && !bgroups.length ? "No projects on the calendar: add one above."
-    : d.filtered ? "No matching open tasks." : `Every open task is planned for ${where}.`));
-  dropZone(back, t => t.plan && planTask(t, "", pl));   // drop a planned task here to unplan it
+    : d.filtered ? "No matching open tasks." : `Every open task is planned or due ${where.startsWith("this") || where === "today" ? "" : "in "}${where}.`));
+  if (d.targets.length) back.append(addTaskRow(null));   // any project (one with nothing in the backlog, too)
+  dropZone(back, d => d.via && planTask(d.t, d.via, pl, "remove"));   // drop a card here: take that plan off
   out.append(back);
   return out;
+}
+
+/* ---------- Print the Planner (2.0.27): the period shown on one landscape page, to print or save as a PDF.
+   It follows what the Planner shows (filters, the projects on the calendar, the work week, on hold) and only reads
+   the data; the notes in the app stay the truth, the paper is a copy to keep beside you. ---------- */
+const printBtn = h("button", "ghost printbtn", icon("M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2M7 14h10v7H7z"));
+printBtn.title = "Print this plan on one page (or save it as a PDF)"; printBtn.setAttribute("aria-label", printBtn.title);
+printBtn.onclick = () => printPlanner();
+wbox.append(printBtn);
+const DAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const isoDay = iso => new Date(iso + "T12:00:00");
+function printHead(c, pl) {                      // -> [name, dates] of a column: Monday / Oct 12, Sat/Sun / Oct 17-18
+  if (pl.kind !== "week" && pl.kind !== "day") return [c.head, ""];
+  const a = isoDay(c.start), b = isoDay(c.end);
+  if (c.start === c.end) return [DAY_LONG[a.getDay()], `${MON3[a.getMonth()]} ${a.getDate()}`];
+  return ["Sat/Sun", `${MON3[a.getMonth()]} ${a.getDate()}-` + (b.getMonth() !== a.getMonth() ? MON3[b.getMonth()] + " " : "") + b.getDate()];
+}
+function printSheet(d) {
+  const [pl] = plannerShown(d), hidden = planHidden(), on = t => !hidden.has(projKey(t));
+  const unit = PLAN_UNIT[pl.kind], cols = pl.columns, n = cols.length;
+  const title = pl.kind === "week" ? `Week ${pl.index}` : pl.kind === "day" ? DAY_LONG[isoDay(pl.start).getDay()] : pl.label;
+  const sub = pl.kind === "week" ? `${pl.label}, ${pl.year}` + (workWeek() ? " · work week" : "") : pl.kind === "day" ? pl.label.replace(/^\w+ /, "") + ", " + pl.year : "";
+  const box = t => span("pbox" + (t.status === "done" ? " on" : t.status === "doing" ? " half" : ""));
+  const eff = t => t.effort ? span("peff", t.effort.toUpperCase()) : null;
+  const item = (t, meta, mark) => h("div", "pitem" + (t.status === "done" ? " done" : "") + (t.held ? " held" : "") + (t.notable ? " notable" : ""),
+    box(t), mark || null, h("span", "pt", t.title, meta ? span("pm", meta) : ""), eff(t));   // the note goes under the title
+  const cell = (cls, ...kids) => h("div", "pcell " + cls, ...kids.filter(Boolean));
+  const grid = h("div", "pgrid");
+  grid.style.setProperty("--n", n);
+  // heading row: the columns, today's tinted
+  grid.append(cell("pcorner"), ...cols.map(c => { const [a, b] = printHead(c, pl);
+    return cell("phead" + (c.today ? " today" : ""), span("pday", a), b ? span("pdate", b) : null); }));
+  const rows = [];                               // [label, kind] per body row, for the grid's row sizes
+  // habits: a tick box per day it's due (Week, Day), or each one's days in the column (Month, Season, Year)
+  const anyHabits = cols.some(c => habitsOf(pl, clip(c, pl), on).length);
+  if (anyHabits) {
+    grid.append(cell("plabel phab", span("", "Habits")));
+    for (const c0 of cols) {
+      const c = clip(c0, pl), hs = habitsOf(pl, c, on), out = cell("phabs" + (c0.today ? " today" : ""));
+      if (pl.days.length) {
+        for (const day of pl.days.filter(x => x.date >= c.start && x.date <= c.end))
+          for (const t of hs) {
+            const due = t.due.includes(day.date);
+            if (due || t.done.includes(day.date))
+              out.append(item({ ...t, status: t.done.includes(day.date) ? "done" : "open" }, c.start !== c.end ? day.head.split(" ")[0] : "", span("pmark", "🔁")));
+          }
+      } else for (const t of hs) { const k = habitCount(t, c.start, c.end);
+        out.append(h("div", "pitem", span("pmark", "🔁"), span("pt", t.title), span("pm", `__/${k.days}`), eff(t))); }
+      grid.append(out);
+    }
+    rows.push("auto");
+  }
+  // a row per project on the calendar with something planned or due here
+  const keys = [...new Set([...pl.projects.map(projKey), ...cols.flatMap(c => c.tasks.map(projKey))])].filter(k => !hidden.has(k));
+  const sideGroups = [];
+  for (const k of keys) {
+    grid.append(cell("plabel", span("", k)));
+    for (const c of cols) {
+      const ts = starFirst(c.tasks.filter(t => projKey(t) === k), pl), out = cell(c.today ? "today" : "");
+      for (const t of ts) {
+        const p = (t.plans || []).find(x => x.token === t.via);
+        const meta = [t.folder && t.project !== t.folder ? "@" + t.project : "", p && p.kind !== pl.column_kind ? p.label : "",
+          t.due ? "due" + (c.start === c.end && t.span && t.span.start === t.span.end ? "" : " " + t.when) : ""].filter(Boolean).join(" · ");
+        out.append(item(t, meta, starred(t, pl) ? span("pstar", "★") : null));
+      }
+      grid.append(out);
+    }
+    rows.push("P");                              // a project row: its room to write in is set by fitSheet
+    const gs = pl.projects.filter(g => projKey(g) === k), all = gs.flatMap(g => g.tasks);
+    const inCol = new Set(cols.flatMap(c => c.tasks).map(t => t.path + ":" + t.line));
+    sideGroups.push([k, all.filter(t => !inCol.has(t.path + ":" + t.line)), sumPts(all.filter(t => t.status === "done")), sumPts(all)]);
+  }
+  // a free row to write in
+  grid.append(cell("plabel pother", span("", "Other")), ...cols.map(c => cell(c.today ? "today" : "")));
+  rows.push("minmax(0.55in, 1fr)");
+  grid.dataset.rows = ["auto", ...rows].join(" ");
+  // the side panel: the period, top priorities, what's planned for the whole period, habits, effort, notes
+  const side = h("div", "pside");
+  side.append(h("div", "ptitle", span("pbig", title), sub ? span("psub", sub) : null));
+  const prios = pl.priorities.filter(on), proj = t => keys.length > 1 ? projKey(t) : "";
+  side.append(h("div", "psec", h("div", "psh", "Top priorities ", span("pstar", "★")),   // and lines to add a few by hand
+    ...prios.map(t => item(t, proj(t))), ...Array.from({ length: Math.max(1, 3 - prios.length) }, () => h("div", "pline"))));
+  const loose = sideGroups.flatMap(g => g[1]);    // planned for the whole period, not one column (>wk42 in a week)
+  if (loose.length) side.append(h("div", "psec", h("div", "psh", "Any time " + (pl.kind === "day" ? "today" : "this " + unit)),
+    ...loose.map(t => item(t, proj(t)))));
+  const span0 = cols.length ? clip({ start: cols[0].start, end: cols[n - 1].end }, pl) : null;
+  const habs = span0 ? habitsOf(pl, span0, on) : [];
+  const [, ht] = habitsSum(habs, span0 && span0.start, span0 && span0.end);
+  if (habs.length) side.append(h("div", "psec", h("div", "psh", "Habits"),
+    ...habs.map(t => { const k = habitCount(t, span0.start, span0.end);
+      return h("div", "pitem", span("pmark", "🔁"), span("pt", t.title), span("pm", `__/${k.days}`), eff(t)); })));
+  const effort = h("div", "psec peffort", h("div", "psh", "Effort"));
+  for (const [k, , , total] of sideGroups) if (total) effort.append(h("div", "prow", span("", k), span("pn", `___/${total}`)));
+  if (ht) effort.append(h("div", "prow", span("", "Habits"), span("pn", `___/${ht}`)));
+  const total = sideGroups.reduce((s, g) => s + g[3], 0) + ht;
+  effort.append(h("div", "prow ptot", span("", "Done of planned"), span("pn", `___/${pts(total)}`)));
+  side.append(effort, h("div", "psec pnotes", h("div", "psh", "Notes"), ...Array.from({ length: 40 }, () => h("div", "pline"))));   // clipped to the room left
+  // the top and the foot
+  const scope = state.folio ? (scopeName() || "All projects") : (state.file && state.file.name) || "";
+  const head = h("div", "phdr", h("span", "pbrand", h("b", "", "KAFEEN"), " Planner"), scope ? span("pscope", scope) : null,
+    span("pprinted", "Printed " + (d.today ? fmtIso(d.today) : "")));
+  const foot = h("div", "pfoot",
+    h("div", "pq", span("", "Top lesson of last " + unit + ":"), h("span", "pfill")),
+    h("div", "pq", span("", "Top priority this " + unit + ":"), h("span", "pfill")),
+    span("pkey", "Effort: XL 8 · L 5 · M 3 · S 2 · XS 1 pts   ☐ open  ◪ in progress  ☑ done  ★ top priority"));
+  return h("div", "psheet", head, h("div", "pmain", grid, side), foot);
+}
+const fmtIso = iso => { const a = isoDay(iso); return `${DAY_LONG[a.getDay()].slice(0, 3)} ${MON3[a.getMonth()]} ${a.getDate()}`; };
+function fitSheet(sheet) {                       // fit on the page: first less room to write in each project row, then smaller type
+  const grid = sheet.querySelector(".pgrid"), over = () => [sheet, grid, sheet.querySelector(".pside")].some(e => e.scrollHeight > e.clientHeight + 1);
+  let room = 1.4, fz = 9;
+  const set = () => { grid.style.gridTemplateRows = grid.dataset.rows.replace(/\bP\b/g, `minmax(${room.toFixed(2)}in, auto)`); sheet.style.fontSize = fz + "pt"; };
+  set();
+  while (over() && room > 0.45) { room -= 0.1; set(); }
+  while (over() && fz > 5) { fz -= 0.25; set(); }
+}
+function printPlanner() {
+  if (!state.data || !state.data.planner) return;
+  document.querySelectorAll(".psheet").forEach(e => e.remove());
+  const sheet = printSheet(filtered(state.data)), was = document.title;
+  document.body.append(sheet);
+  fitSheet(sheet);
+  document.title = "Plan " + state.data.planner.label.replace(/\s+/g, " ");   // the PDF's file name
+  const done = () => { sheet.remove(); document.title = was; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
 }
 
 /* ---------- markdown (small, safe: everything is escaped before any tag is added) ---------- */
@@ -1638,11 +2063,11 @@ dNew.onclick = () => ask(dNew.parentNode, "project name", "", 0, async v => {
 async function folioOp(body) {                     // POST /api/portfolio; -> the new path (the tree is updated)
   const [r, d] = await fileApi(body, "/api/portfolio");
   if (!r.ok) throw new Error(d.error || r.statusText);
-  state.folio = d.tree;
+  setFolio(d.tree);
   return d.path;
 }
 async function refreshFolio() {                     // the folder may have changed outside the page
-  try { const [r, d] = await fileApi(null, "/api/portfolio"); if (r.ok && d.name) state.folio = d; } catch (e) {}
+  try { const [r, d] = await fileApi(null, "/api/portfolio"); if (r.ok && d.name) setFolio(d); } catch (e) {}
 }
 
 /* a one-line form in the drawer (new or rename): Enter submits (a refusal is shown on the field), Esc or leaving cancels */
@@ -1730,10 +2155,10 @@ function drawDrawer() {
   const f = state.folio, here = state.all ? "" : state.file ? state.file.path : null, q = dQ.value.trim().toLowerCase();
   const opened = foldSet("folioOpen");
   dTitle.textContent = f.name; dTitle.title = "Each folder in " + f.name + " is a project";
-  const plan = state.all && state.tab === "planner";
-  const toTab = tab => () => { state.tab = tab; store.set("tab", tab); showAll(); };
-  const rows = [dRow(0, PLANNER_ICON, "Planner", { active: here === "" && plan, go: toTab("planner"), title: "Plan every project's tasks by year, season, month or week" }),
-    dRow(0, ALL_ICON, "All projects", { active: here === "" && !plan, go: toTab(state.tab === "planner" ? "projects" : state.tab),
+  const plan = state.all && state.tab === "planner", scope = scopeName();
+  const toTab = tab => () => { setScope(""); state.tab = tab; store.set("tab", tab); showAll(); };   // every project again
+  const rows = [dRow(0, PLANNER_ICON, "Planner", { active: here === "" && plan && !scope, go: toTab("planner"), title: "Plan every project's tasks by year, season, month or week" }),
+    dRow(0, ALL_ICON, "All projects", { active: here === "" && !plan && !scope, go: toTab(state.tab === "planner" ? "projects" : state.tab),
       title: "Every project's backlog together" }),
     h("div", "dlabel", "Projects")];
   for (const p of f.projects) {
@@ -1744,9 +2169,10 @@ function drawDrawer() {
       store.set("folioOpen", JSON.stringify([...opened]));
       drawDrawer();
     };
-    const head = dRow(0, null, p.name, { chev: open, go: toggle, active: !open && here && isUnder(here, p.name),
+    const head = dRow(0, null, p.name, { chev: open, go: toggle, active: (!open && here && isUnder(here, p.name)) || (here === "" && scope === p.name),
       more: row => [["New page", () => newPage(p.name, null, row, 1)], ["New section", () => newSection(p.name, row)],
-        ["Rename", () => renameItem(p.path, row, 0)], ["Delete", () => trashItem(p.path, "the project")]] });
+        ["Rename", () => renameItem(p.path, row, 0)], ["Hide", () => hideProject(p.name, true)],
+        ["Delete", () => trashItem(p.path, "the project")]] });
     rows.push(head);
     if (!open) continue;
     for (const [key, label, ic] of FOLIO_FILES)
@@ -1768,8 +2194,22 @@ function drawDrawer() {
       for (const a of p.archive) rows.push(dRow(2, null, String(a.year), { active: here === a.path, go: () => openPage(a.path) }));
     } else rows.push(dRow(1, ARCHIVE_ICON, "Archive", { disabled: true, title: "Nothing archived yet" }));
   }
-  if (!f.projects.length) rows.push(h("div", "empty", "No projects yet."));
-  else if (q && rows.length === 2) rows.push(h("div", "empty", "No project matches."));
+  const hidden = state.folioAll.projects.filter(p => hiddenProjects().includes(p.name));
+  const shownHidden = hidden.filter(p => !q || p.name.toLowerCase().includes(q));
+  if (!f.projects.length) rows.push(h("div", "empty", hidden.length ? "Every project is hidden." : "No projects yet."));
+  else if (q && rows.length === 3 && !shownHidden.length) rows.push(h("div", "empty", "No project matches."));
+  if (shownHidden.length) {                      // hidden projects: folded away at the bottom, ⋯ › Show brings one back
+    const open = !!q || store.get("folioHiddenOpen", "0") === "1";
+    rows.push(dRow(0, null, `Hidden (${hidden.length})`, { chev: open, title: "Projects you hid: they stay in the Projects folder",
+      go: () => { store.set("folioHiddenOpen", open ? "0" : "1"); drawDrawer(); } }));
+    rows[rows.length - 1].classList.add("dhidden");
+    if (open) for (const p of shownHidden) {
+      const r = dRow(1, null, p.name, { title: `${p.name} is hidden from the list, All projects and the Planner`,
+        more: row => [["Show", () => hideProject(p.name, false)], ["Delete", () => trashItem(p.path, "the project")]] });
+      r.classList.add("dhidden");
+      rows.push(r);
+    }
+  }
   dNav.replaceChildren(...rows);
 }
 function pageRow(pg, depth, here) {
@@ -1793,12 +2233,44 @@ function inTree(path) {                              // is this page still in th
   if (p.archive.some(a => a.path === path)) return true;
   return p.notes.some(n => n.path === path || (n.pages || []).some(pg => pg.path === path));
 }
+/* Hidden projects (per browser, "hiddenProjects": a list of folder names). Hide one from its ⋯ in the drawer; it leaves the project list, All projects and the Planner (the
+   server leaves it out of All projects: `hide`) and waits under "Hidden" at the bottom of the drawer, where its ⋯ shows
+   it again. Its folder is untouched. */
+if (store.get("hideExample", null) !== null) {       // 2.0.12 kept only the Example project's choice
+  if (store.get("hideExample", "0") === "1") store.set("hiddenProjects", JSON.stringify(["Example"]));
+  store.del("hideExample");
+}
+function hiddenSet() { try { return new Set(JSON.parse(store.get("hiddenProjects", "[]"))); } catch (e) { return new Set(); } }
+const hiddenProjects = () => state.folioAll ? state.folioAll.projects.map(p => p.name).filter(n => hiddenSet().has(n)) : [];
+/* the project held across tabs (2.0.24, "folioScope"): opening a project's page sets it, and All projects and the
+   Planner then show only that project, until Planner / All projects in the drawer or the × in the breadcrumb clear it */
+const scopeName = () => { const s = store.get("folioScope", "");
+  return s && state.folio && state.folio.projects.some(p => p.name === s) ? s : ""; };
+const setScope = n => store.set("folioScope", n || "");
+const allHide = () => { const s = scopeName();      // the server leaves these out of All projects' data
+  return s && state.folioAll ? state.folioAll.projects.map(p => p.name).filter(n => n !== s) : hiddenProjects(); };
+const folioShown = () => { const s = scopeName(); return s ? state.folio.projects.filter(p => p.name === s) : state.folio.projects; };
+function setFolio(tree) {                            // keep the whole tree, show the projects not hidden
+  state.folioAll = tree;
+  const hide = hiddenProjects();
+  state.folio = { ...tree, projects: tree.projects.filter(p => !hide.includes(p.name)) };
+}
+async function hideProject(name, hide) {             // hide (true) or show a project again
+  const set = hiddenSet();
+  set[hide ? "add" : "delete"](name);
+  store.set("hiddenProjects", JSON.stringify([...set]));
+  if (!state.folioAll) return;
+  setFolio(state.folioAll);
+  if (hide && state.file && state.file.path && state.file.path.split("/")[0] === name) await showAll();   // its page was open
+  else if (state.all) render(false);
+  drawDrawer();
+}
 async function startPortfolio(tree) {
-  state.folio = tree;
+  setFolio(tree);
   $("brand").disabled = false; $("brand").title = "Projects and pages";
   const last = store.get("folioActive", "");
   if (last && inTree(last)) await openPage(last); else await showAll();
-  if (!last && !tree.projects.length) openDrawer(true);
+  if (!last && !state.folio.projects.length) openDrawer(true);
 }
 async function openPage(path) {                      // show one of a project's files in the text box (autosaved)
   await leaveFile();
@@ -1813,6 +2285,7 @@ async function openPage(path) {                      // show one of a project's 
   state.all = false;
   state.mode = modeOf(path); store.set("mode", state.mode);
   store.set("folioActive", path);
+  setScope(path.split("/")[0]);                       // this project is held across the tabs
   useFile(d);
   layout();
   openDrawer(false);
@@ -1828,12 +2301,16 @@ async function showAll() {                           // All projects: every back
   render(true);
   drawDrawer();
 }
+const unscopeBtn = h("button", "unscope hidden", "×");
+unscopeBtn.onclick = () => { setScope(""); render(false); drawDrawer(); };
 function showCrumbs() {                              // the header: Project › Notes › Section › Page (click: the drawer)
   const c = $("crumbs");
   c.classList.toggle("hidden", !state.folio);
-  if (!state.folio) return;
+  if (!state.folio) return unscopeBtn.classList.add("hidden");
   let parts;
-  if (state.all || !state.file) parts = [state.tab === "planner" ? "Planner" : "All projects"];
+  const scope = scopeName();
+  if ((state.all || !state.file) && scope) parts = [scope, TABS.find(x => x[0] === state.tab)[1]];   // a held project's tab
+  else if (state.all || !state.file) parts = [state.tab === "planner" ? "Planner" : "All projects"];
   else {
     const [proj, kind, ...rest] = state.file.path.split("/");
     const named = { "backlog.kf": "Backlog", "quicknote.kf": "Quick note", "habits.kf": "Habits" }[kind];
@@ -1846,8 +2323,11 @@ function showCrumbs() {                              // the header: Project › 
     if (i) kids.push(span("sep", "›"));
     kids.push(i === parts.length - 1 ? h("b", "", t) : span("", t));
   });
+  if (!unscopeBtn.isConnected) c.after(unscopeBtn);   // × after the breadcrumb (a button can't hold one): every project again
+  unscopeBtn.classList.toggle("hidden", !(scope && state.all));
+  unscopeBtn.title = `Show every project, not just ${scope}`; unscopeBtn.setAttribute("aria-label", unscopeBtn.title);
   c.replaceChildren(...kids);
-  c.title = (state.file ? state.file.path : parts[0]) + " (click for the projects)";
+  c.title = (state.file ? state.file.path : scope && state.all ? scope + ", every tab" : parts[0]) + " (click for the projects)";
   c.onclick = () => openDrawer(true);
 }
 function folioWelcome() {                            // an empty page, or All projects with no tasks yet

@@ -108,7 +108,7 @@ class TestParse(Base):
         lines = read_example().splitlines()
         for p in planner.parse(read_example()):
             for t in p.all_tasks():
-                self.assertRegex(lines[t.line - 1].strip(), r"^(\(!\))?[!~]?-(?!-)")
+                self.assertRegex(lines[t.line - 1].strip(), r"^(\(!\))?[!~/]?-(?!-)")
                 self.assertIn(t.title.split()[0], lines[t.line - 1])
 
     def test_parse_does_not_modify_input(self):
@@ -372,7 +372,7 @@ class TestExample(Base):
     def test_counts(self):
         counts = {p.name: (sum(t.status == "done" for t in p.all_tasks()), len(list(p.all_tasks())))
                   for p in self.ps}
-        self.assertEqual(counts, {"HDC": (2, 11), "MDM": (1, 6), "OPS": (0, 6)})
+        self.assertEqual(counts, {"HDC": (2, 11), "MDM": (1, 6), "OPS": (0, 8)})
 
     def test_effort_totals(self):
         self.assertEqual({p.name: planner.effort_points(p.all_tasks()) for p in self.ps},
@@ -382,10 +382,10 @@ class TestExample(Base):
         projects = "\n".join(planner.view_projects(self.ps))
         self.assertIn("@HDC   2/11 done   10 of 12 pts left", projects)
         self.assertIn("[ ] finish proposal (KA) [L]   Oct 24", projects)
-        self.assertIn("\n@OPS   0/6 done   8 of 8 pts left", projects)
+        self.assertIn("\n@OPS   0/8 done   8 of 8 pts left", projects)
         people = "\n".join(planner.view_people(self.ps))
         self.assertIn("KA   5 task(s), 13 pts", people)
-        self.assertIn("RT   2 task(s), 9 pts", people)
+        self.assertIn("RT   3 task(s), 9 pts", people)
         self.assertIn("[~] @HDC  complete powerpoint [M]   Oct 20-23", people)
 
     def test_people(self):
@@ -423,7 +423,7 @@ class TestExample(Base):
         self.assertEqual([c["head"] for c in d["timeline"]["columns"]],
                          ["O 26", "N", "D", "J 27", "F", "M", "A", "M", "J", "J", "A", "S"])
         self.assertIsNone(d["period"])
-        self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["meet w. clients", "interviews", "update handbook"])
+        self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["meet w. clients", "interviews", "update handbook", "order new furniture", "get quotes"])
         gather = next(r for r in d["timeline"]["rows"] if r["title"] == "gather requirements")   # done tasks are sent; the page hides them on request
         self.assertEqual(gather["status"], "done")
         self.assertNotIn("gather requirements", "\n".join(planner.view_timeline(self.ps)))
@@ -481,6 +481,31 @@ class TestPeriods(Base):
         self.assertEqual([h for h, _, _ in cols], ["1-4", "5-11", "12-18", "19-25", "26-31"])
         self.assertEqual((cols[0][1], cols[-1][2]), (date(2026, 10, 1), date(2026, 10, 31)))
         self.assertEqual([h for h, _, _ in planner.period_columns("month", 2027, 2)][-1], "22-28")
+
+    def test_raw_line(self):                                  # 2.0.24: a task's line as written, for copying a Planner column
+        d = planner.to_data(planner.parse("@P\n\t(!)~- a (KA) (s) Oct14 >Oct13   \r\n- b\n"))
+        ts = d["projects"][0]["projects"][0]["tasks"]
+        self.assertEqual([t["raw"] for t in ts], ["(!)~- a (KA) (s) Oct14 >Oct13", "- b"])
+
+    def test_week_period(self):                               # 2.0.22: By week, seven day columns
+        self.assertEqual(planner.period_from({"kind": "week"}), ("week", 2026, 42))
+        self.assertEqual(planner.period_range("week", 2026, 42), (date(2026, 10, 12), date(2026, 10, 18)))
+        self.assertEqual(planner.period_step("week", 2026, 53, 1), ("week", 2027, 1))
+        self.assertEqual(planner.period_step("week", 2027, 1, -1), ("week", 2026, 53))
+        self.assertEqual(planner.period_label("week", 2026, 42), "Week 42: Oct 12-18 2026")
+        self.assertEqual(planner.period_label("week", 2026, 44, short=True), "Oct 26 - Nov 1 2026")
+        self.assertEqual([c[0] for c in planner.period_columns("week", 2026, 42)][:2], ["Mon 12", "Tue 13"])
+        for bad in [{"kind": "week", "year": 2026, "index": 54}, {"kind": "week", "year": 2026, "index": "1"}]:
+            with self.assertRaises(ValueError):
+                planner.period_from(bad)
+        d = planner.to_data(planner.parse("@P\n- a Oct14\n- b Nov20\n- c >Oct15\n- d Dec01 >Oct13\n- e\n"), ("week", 2026, 42))
+        rows = {t["title"]: (t["bar"], t["planned"]) for t in d["timeline"]["rows"]}
+        F, T = False, True
+        self.assertEqual(rows, {"a": ([F, F, T, F, F, F, F], [F] * 7), "c": ([F] * 7, [F, F, F, T, F, F, F]),
+                                "d": ([F] * 7, [F, T, F, F, F, F, F])})            # b is outside; d is in by its plan
+        d = planner.to_data(planner.parse("@P\n- c >Oct15\n- e\n"))
+        self.assertEqual([t["title"] for t in d["timeline"]["rows"]], ["c"])          # planned, no date: a row of plan marks
+        self.assertEqual([t["title"] for t in d["timeline"]["unscheduled"]], ["e"])
 
     def test_fall_2026(self):
         d = self.data("season", 2026, 2)
@@ -552,7 +577,7 @@ class TestSetStatus(Base):
         t = self.find(planner.parse(text), "send to board")
         new = planner.set_status(text, t.line, "done", t.title)
         self.assertEqual(self.changed_lines(text, new),
-                         [(t.line, "\t(!)- send to board (s) Oct24 >Oct14 *Oct23\n", "\t(!)!- send to board (s) Oct24 >Oct14 *Oct23\n")])
+                         [(t.line, "\t(!)- send to board (s) Oct24 >Oct14 >Oct16 *Oct23\n", "\t(!)!- send to board (s) Oct24 >Oct14 >Oct16 *Oct23\n")])
 
     def test_all_transitions(self):
         for old, new, want in [("- a", "doing", "~- a"), ("~- a", "done", "!- a"), ("!- a", "open", "- a"),
@@ -700,7 +725,7 @@ class TestAddAssignees(EditBase):
         text = read_example()
         t = self.find(planner.parse(text), "send to board")
         out = planner.add_assignees(text, t.line, "RT", t.title)
-        self.assert_one_line_changed(text, out, t.line, "\t(!)- send to board (RT) (s) Oct24 >Oct14 *Oct23\n")
+        self.assert_one_line_changed(text, out, t.line, "\t(!)- send to board (RT) (s) Oct24 >Oct14 >Oct16 *Oct23\n")
 
     def test_new_group_before_reminder_or_at_end(self):
         self.assertEqual(planner.add_assignees("- a *daily\n", 1, "KA"), "- a (KA) *daily\n")
@@ -762,9 +787,12 @@ class TestPlanToken(Base):
         t = self.task("call RT >Oct13")
         self.assertEqual((t.title, t.plan, t.end), ("call RT", planner.date(2026, 10, 13), None))
 
-    def test_first_valid_only_and_bad_ones_stay_in_title(self):
-        t = self.task("a >Oct13 >Oct14")
-        self.assertEqual((t.plan, t.title, t.end), (planner.date(2026, 10, 13), "a >Oct14", None))   # never read as a date
+    def test_every_valid_one_and_bad_ones_stay_in_title(self):
+        t = self.task("a >Oct14 >Oct13 b")
+        self.assertEqual((t.plan, t.title, t.end), (planner.date(2026, 10, 13), "a b", None))   # plan: the earliest
+        self.assertEqual([p[1] for p in t.plans], ["Oct14", "Oct13"])                           # as written
+        t = self.task("a >wk45 >Oct14 >Oct14 >Feb30")                  # mixed levels, a duplicate, a bad one
+        self.assertEqual(([p[0] for p in t.plans], t.title), (["week", "day", "day"], "a >Feb30"))
         t = self.task("a >Feb30 b")
         self.assertEqual((t.plan, t.title), (None, "a >Feb30 b"))
         t = self.task("x->Oct13 y>Oct13")                       # needs a space (or the start) before >
@@ -780,10 +808,66 @@ class TestSetPlan(EditBase):
         text = "@P\r\n\t- a (KA) Oct24 *Oct13  \r\n- b\n"
         out = planner.set_plan(text, 2, "Oct14", "a")
         self.assert_one_line_changed(text, out, 2, "\t- a (KA) Oct24 >Oct14 *Oct13  \r\n")
-        out2 = planner.set_plan(out, 2, ">Oct16", "a")
+        out2 = planner.set_plan(out, 2, {"from": ">Oct14", "to": "Oct16"}, "a")
         self.assert_one_line_changed(out, out2, 2, "\t- a (KA) Oct24 >Oct16 *Oct13  \r\n")
         self.assertEqual(planner.set_plan(out2, 2, "", "a"), text)
         self.assertEqual(planner.set_plan(text, 3, "Oct17", "b"), "@P\r\n\t- a (KA) Oct24 *Oct13  \r\n- b >Oct17\n")
+
+    def test_several(self):
+        text = "@P\r\n\t- a (KA) Oct24 >Oct14 ^wk42 *Oct13  \r\n"
+        out = planner.set_plan(text, 2, "+Oct16", "a")                  # also: right after the last plan
+        self.assert_one_line_changed(text, out, 2, "\t- a (KA) Oct24 >Oct14 >Oct16 ^wk42 *Oct13  \r\n")
+        self.assertEqual(planner.set_plan(out, 2, "+Oct16", "a"), out)  # already
+        self.assertEqual(planner.set_plan(out, 2, "Oct16", "a"), out)   # already, and nothing past to drop
+        self.assertEqual(planner.set_plan(out, 2, "-Oct14", "a"), "@P\r\n\t- a (KA) Oct24 >Oct16 ^wk42 *Oct13  \r\n")
+        self.assertEqual(planner.set_plan(out, 2, "-Oct16", "a"), text)
+        self.assertEqual(planner.set_plan(out, 2, {"from": "Oct14", "to": "Oct15"}, "a"),
+                         "@P\r\n\t- a (KA) Oct24 >Oct15 >Oct16 ^wk42 *Oct13  \r\n")   # moved in place
+        self.assertEqual(planner.set_plan(out, 2, {"from": "Oct14", "to": "Oct16"}, "a"),
+                         "@P\r\n\t- a (KA) Oct24 >Oct16 ^wk42 *Oct13  \r\n")          # already there: just goes
+        self.assertEqual(planner.set_plan(out, 2, "", "a"), "@P\r\n\t- a (KA) Oct24 ^wk42 *Oct13  \r\n")
+        self.assertEqual(planner.set_plan("- a >Oct4\n", 1, "-Oct04"), "- a\n")             # by meaning
+        self.assertEqual(planner.set_plan("- a >Oct14 >Oct14\n", 1, "-Oct14"), "- a\n")      # both copies
+
+    def test_plain_drops_past_plans(self):                     # TODAY is Oct 12
+        text = "- a >Oct05 >wk40 >Oct20 >Nov\n"
+        self.assertEqual(planner.set_plan(text, 1, "Oct14"), "- a >Oct20 >Nov >Oct14\n")
+        self.assertEqual(planner.set_plan(text, 1, "+Oct14"), "- a >Oct05 >wk40 >Oct20 >Nov >Oct14\n")
+        self.assertEqual(planner.set_plan(text, 1, "Oct20"), "- a >Oct20 >Nov\n")          # had it: past ones go
+        self.assertEqual(planner.set_plan("- a >Oct05 ^wk42\n", 1, "Oct14"), "- a >Oct14 ^wk42\n")
+        self.assertEqual(planner.set_plan("- a >Oct05\n", 1, "Oct05"), "- a >Oct05\n")   # the one asked for stays
+
+    def test_several_at_once(self):                           # the Planner's list: one edit, one Undo
+        text = "- a >wk41 >wk42 >Nov ^wk42\r\n"                  # TODAY is Oct 12 (wk42); wk41 is past
+        self.assertEqual(planner.set_plan(text, 1, {"add": ["wk43", "wk45"], "remove": ["wk42"]}),
+                         "- a >wk41 >Nov >wk43 >wk45 ^wk42\r\n")
+        self.assertEqual(planner.set_plan(text, 1, {"add": ["wk43", ">wk43", "wk42"], "past": True}),
+                         "- a >wk42 >Nov >wk43 ^wk42\r\n")
+        self.assertEqual(planner.set_plan("- a\n", 1, {"add": ["Oct13", "Oct15"]}), "- a >Oct13 >Oct15\n")
+        self.assertEqual(planner.set_plan(text, 1, {"add": ["wk42"]}), text)              # nothing to do
+        self.assertEqual(planner.set_plan(text, 1, {"remove": ["wk41", "wk42", "Nov"]}), "- a ^wk42\r\n")
+        for bad in [{"remove": ["wk45"]}, {"add": ["wk45"], "remove": ["wk45"]}, {"add": "wk45"}, {"add": ["Q1"]},
+                    {"add": [3]}]:
+            with self.subTest(bad=bad), self.assertRaises(planner.EditError):
+                planner.set_plan(text, 1, bad)
+
+    def test_add_planned(self):                               # the Planner's column + Add task
+        out = planner.add_with_fields("task", "@P\n- a\n", 1, {"title": "b", "who": "KA", "plan": "Oct14"}, "P")
+        self.assertEqual(out, "@P\n- a\n- b (KA) >Oct14\n")
+        with self.assertRaises(planner.EditError):
+            planner.add_with_fields("task", "@P\n- a\n", 1, {"title": "b", "plan": "Oct32"}, "P")
+
+    def test_several_refused(self):
+        for value in ["-Oct15", {"from": "Oct15", "to": "Oct16"}, {"from": "Oct14", "to": "Q1"}, {"to": "Oct16"},
+                      "+Oct32", "-", "+"]:
+            with self.subTest(value=value), self.assertRaises(planner.EditError):
+                planner.set_plan("- a >Oct14\n", 1, value)
+
+    def test_other_edits_on_several_plans(self):
+        text = "- a >Oct14 >Oct16 ^wk42\n"
+        self.assertEqual(planner.set_date(text, 1, "Oct24"), "- a Oct24 >Oct14 >Oct16 ^wk42\n")
+        self.assertEqual(planner.set_priority(text, 1, "Nov"), "- a >Oct14 >Oct16 ^wk42 ^Nov\n")
+        self.assertEqual(planner.set_effort(text, 1, "m"), "- a (m) >Oct14 >Oct16 ^wk42\n")
 
     def test_other_edits_keep_the_order(self):                # initials, effort, date, plan, reminder
         text = "- a >Oct14 *Oct13\n"
@@ -811,13 +895,31 @@ class TestPlanner(Base):
 
     def groups(self, ps, period):
         cols, planned, backlog, prios = planner.planner_groups(ps, period)
-        return {c[0]: [t.title for _, t in c[5]] for c in cols if c[5]}, planned, backlog, prios
+        return {c[0]: [t.title for _, t, _ in c[5]] for c in cols if c[5]}, planned, backlog, prios
+
+    def test_due_cards(self):                                 # 2.0.21: a task's own date puts it on the calendar
+        text = "@P\n- one Oct14\n- range Oct15--17\n- planned Oct14 >Oct14\n- both Oct16 >Oct13\n- loose ~wk43\n!- done Oct13\n- free\n"
+        ps = planner.parse(text)
+        cols, planned, backlog, _ = planner.planner_groups(ps, ("week", 2026, 42))
+        self.assertEqual({c[0]: [(t.title, via) for _, t, via in c[5]] for c in cols if c[5]},
+                         {"Tue 13": [("both", "Oct13"), ("done", None)], "Wed 14": [("planned", "Oct14"), ("one", None)],
+                          "Thu 15": [("range", None)], "Fri 16": [("range", None), ("both", None)], "Sat/Sun 17-18": [("range", None)]})
+        self.assertEqual([t.title for _, ts in planned for t in ts], ["both", "done", "one", "planned", "range"])
+        self.assertEqual([t.title for _, items in backlog for _, t in items], ["loose", "free"])   # ~wk43 fits no day
+        cols = planner.planner_groups(ps, ("month", 2026, 10))[0]                    # a loose date in the week it names
+        self.assertEqual([t.title for c in cols if c[0].startswith("Oct 19") for _, t, _ in c[5]], ["loose"])
+        d = planner.to_data(ps)
+        wed = next(c for c in d["planner"]["columns"] if c["token"] == "Oct14")
+        self.assertEqual([(t["title"], t["via"], t["due"]) for t in wed["tasks"]], [("planned", "Oct14", False), ("one", None, True)])
+        out = "\n".join(planner.view_week(ps))
+        self.assertIn("one  (due Oct 14)", out)
+        self.assertIn("due Oct 15-17 range", out)
 
     def test_week_columns_planned_and_backlog(self):
         cols, planned, backlog, _ = planner.planner_groups(self.ps, ("week", 2026, 42))
         self.assertEqual([c[0] for c in cols], ["Mon 12", "Tue 13", "Wed 14", "Thu 15", "Fri 16", "Sat/Sun 17-18"])
         self.assertEqual([c[3] for c in cols], ["Oct12", "Oct13", "Oct14", "Oct15", "Oct16", "Oct17"])
-        self.assertEqual(self.groups(self.ps, ("week", 2026, 42))[0], {"Mon 12": ["gather requirements"], "Wed 14": ["send to board"]})
+        self.assertEqual(self.groups(self.ps, ("week", 2026, 42))[0], {"Mon 12": ["gather requirements"], "Wed 14": ["send to board"], "Fri 16": ["send to board"]})
         self.assertEqual([(p.name, [t.title for t in ts]) for p, ts in planned], [("HDC", ["gather requirements", "send to board"])])
         self.assertEqual(planner.effort_points(planned[0][1])[1], 4)      # (s) + (s), done ones count
         hdc = dict((p.name, items) for p, items in backlog)["HDC"]
@@ -829,7 +931,7 @@ class TestPlanner(Base):
     def test_weekend_and_other_weeks(self):
         ps = planner.parse("@P\n- sat >Oct17\n- sun >Oct18\n- next >Oct19\n")
         cols, _, backlog, _ = planner.planner_groups(ps, ("week", 2026, 42))
-        self.assertEqual([t.title for _, t in cols[5][5]], ["sat", "sun"])
+        self.assertEqual([t.title for _, t, _ in cols[5][5]], ["sat", "sun"])
         self.assertEqual([t.title for _, t in backlog[0][1]], ["next"])   # planned for another week: still in the backlog
         self.assertEqual(self.groups(ps, ("week", 2026, 43))[0], {"Mon 19": ["next"]})
 
@@ -845,6 +947,27 @@ class TestPlanner(Base):
         self.assertEqual(self.groups(ps, ("year", 2026, 0))[0], {"Fall Sep-Dec": ["day", "week", "month", "season", "edge"]})
         cols, *_ = planner.planner_groups(ps, ("year", 2026, 0))
         self.assertEqual([c[4] for c in cols], [False, True, True])      # Winter 2026 is past: >T1 means Winter 2027
+
+    def test_several_plans(self):
+        ps = planner.parse("@P\n- a (m) >Oct16 >Oct14 >Oct14 >wk42\n- b (s) >Oct05 >Oct20\n- c >Nov >Nov03\n")
+        cols, planned, backlog, _ = planner.planner_groups(ps, ("week", 2026, 42))
+        self.assertEqual({c[0]: [(t.title, via) for _, t, via in c[5]] for c in cols if c[5]},
+                         {"Wed 14": [("a", "Oct14")], "Fri 16": [("a", "Oct16")]})   # once per column; >wk42: no column
+        self.assertEqual([t.title for _, ts in planned for t in ts], ["a"])               # once
+        self.assertEqual(planner.effort_points(planned[0][1]), (3, 3))                   # its points once
+        self.assertEqual([t.title for _, items in backlog for _, t in items], ["b", "c"])
+        self.assertEqual(self.groups(ps, ("week", 2026, 43))[0], {"Tue 20": ["b"]})
+        self.assertEqual(self.groups(ps, ("month", 2026, 11))[0], {"Nov 2-8": ["c"]})     # >Nov03 places it
+        _, planned, _, _ = planner.planner_groups(ps, ("month", 2026, 11))
+        self.assertEqual([t.title for _, ts in planned for t in ts], ["c"])
+        t = ps[0].tasks[0]
+        self.assertEqual(planner.plan_labels(t), "Oct 12-18, Oct 14, Oct 16")
+        d = planner.to_data(ps)["planner"]
+        self.assertEqual([(x["title"], x["via"]) for c in d["columns"] for x in c["tasks"]], [("a", "Oct14"), ("a", "Oct16")])
+        self.assertEqual([x["token"] for x in d["columns"][2]["tasks"][0]["plans"]], ["Oct16", "Oct14", "Oct14", "wk42"])
+        out = "\n".join(planner.view_week(ps))
+        self.assertEqual(out.count("@P  a"), 2)
+        self.assertIn("(planned Oct 5, Oct 20)", out)
 
     def test_month_columns_are_mon_sun_weeks(self):
         cols = planner.planner_columns("month", 2026, 11)
@@ -866,12 +989,30 @@ class TestPlanner(Base):
         self.assertEqual(planner.planner_from({"kind": "season"}), ("season", 2026, 2))
         self.assertEqual(planner.planner_from({"kind": "year"}), ("year", 2026, 0))
         self.assertEqual(planner.planner_from({"kind": "week", "year": 2027, "index": 1}), ("week", 2027, 1))
-        for bad in ({"kind": "day"}, {"kind": "week", "year": 2026, "index": 60}, {"kind": "month", "year": 2026, "index": 13},
+        for bad in ({"kind": "hour"}, {"kind": "day", "year": 2026, "index": 366}, {"kind": "week", "year": 2026, "index": 60}, {"kind": "month", "year": 2026, "index": 13},
                     {"kind": "year", "year": 2026, "index": 2}, {"kind": "week", "year": "2026", "index": 3}, 5):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 planner.planner_from(bad)
         self.assertEqual(planner.planner_step("week", 2026, 53, 1), ("week", 2027, 1))
         self.assertEqual(planner.planner_step("year", 2026, 0, -1), ("year", 2025, 0))
+
+    def test_day(self):                                       # TODAY is Mon Oct 12 2026, day 285
+        self.assertEqual(planner.planner_from({"kind": "day"}), ("day", 2026, 285))
+        self.assertEqual(planner.planner_from({"kind": "day", "year": 2028, "index": 366}), ("day", 2028, 366))
+        self.assertEqual(planner.planner_step("day", 2026, 365, 1), ("day", 2027, 1))
+        self.assertEqual(planner.planner_label("day", 2026, 285), "Mon Oct 12")
+        self.assertEqual(planner.planner_label("day", 2027, 1), "Fri Jan 1 2027")
+        self.assertEqual(planner.planner_columns("day", 2026, 286), [("Tue 13", date(2026, 10, 13), date(2026, 10, 13), "Oct13")])
+        self.assertEqual(planner.planner_star("day", 2026, 286), ("wk42", True))        # a day's ☆ marks its week
+        ps = planner.parse("@P\n- a >Oct13\n- b >Oct12 >Oct13 ^wk42\n- c >wk42\n- d\n")
+        cols, planned, backlog, prios = planner.planner_groups(ps, ("day", 2026, 286))
+        self.assertEqual([[t.title for _, t, _ in c[5]] for c in cols], [["a", "b"]])
+        self.assertEqual([t.title for _, items in backlog for _, t in items], ["c", "d"])
+        self.assertEqual([t.title for _, t in prios], ["b"])
+        d = planner.to_data(ps, None, ("day", 2026, 286))["planner"]
+        self.assertEqual((d["label"], d["column_kind"], d["prev"]["label"], d["star"]["kind"], d["star"]["label"]),
+                         ("Tue Oct 13", "day", "Mon Oct 12", "week", "Oct 12-18"))
+        self.assertEqual([x["date"] for x in d["days"]], ["2026-10-13"])                  # habits tick on that day
 
     def test_week_monday(self):
         self.assertEqual(planner.week_monday(), planner.date(2026, 10, 12))
@@ -886,7 +1027,8 @@ class TestPlanner(Base):
         self.assertEqual((w["columns"][5]["start"], w["columns"][5]["end"]), ("2026-10-17", "2026-10-18"))
         t = w["columns"][2]["tasks"][0]
         self.assertEqual((t["plan_label"], t["plan_kind"], t["plan_token"], t["plan_end"]), ("Oct 14", "day", "Oct14", "2026-10-14"))
-        self.assertEqual(w["star"], {"token": "wk42", "ok": True, "kind": "week", "start": "2026-10-12", "end": "2026-10-18"})
+        self.assertEqual(w["star"], {"token": "wk42", "ok": True, "kind": "week", "start": "2026-10-12", "end": "2026-10-18",
+                                     "label": "Oct 12-18"})
         self.assertEqual([(g["name"], g["points"]) for g in w["projects"]], [("HDC", 4)])
         self.assertEqual(w["backlog"][0]["tasks"][1]["depth"], 1)
         w = planner.to_data(self.ps, None, ("season", 2026, 2))["planner"]
@@ -920,7 +1062,8 @@ class TestPlanLevels(EditBase):
 
     def test_set_plan_any_level(self):
         self.assertEqual(planner.set_plan("- a (KA) Oct24 ^wk42 *daily\n", 1, "Nov"), "- a (KA) Oct24 >Nov ^wk42 *daily\n")
-        self.assertEqual(planner.set_plan("- a >Nov\n", 1, ">wk45"), "- a >wk45\n")
+        self.assertEqual(planner.set_plan("- a >Nov\n", 1, ">wk45"), "- a >Nov >wk45\n")          # >Nov is still to come
+        self.assertEqual(planner.set_plan("- a >Nov\n", 1, {"from": "Nov", "to": "wk45"}), "- a >wk45\n")
         self.assertEqual(planner.set_plan("- a >T3\n", 1, ""), "- a\n")
         for bad in ("wk54", "Q1", "Fall"):
             with self.subTest(bad=bad), self.assertRaises(planner.EditError):
@@ -1076,6 +1219,88 @@ class TestAddTask(EditBase):
             with self.subTest(line=line), self.assertRaises(planner.EditError):
                 planner.add_task("@P\n- a\n", line, "x", title)
 
+
+
+class TestSortTasks(unittest.TestCase):                       # op "sort" (2.0.19): done, in progress, then open
+    TEXT = "Work\n@A\n\t-- about A\n\t- one Oct20\n\t\t!- sub\n\t\t-- n1\n\n\t!- two\n\t~- three\n\t!- four\n@B\n- x\n!- y"
+
+    def test_one_project(self):
+        out = planner.sort_tasks(self.TEXT, 2, "", "A")
+        self.assertEqual(out, "Work\n@A\n\t-- about A\n\t!- four\n\n\t!- two\n\t~- three\n\t- one Oct20\n\t\t!- sub\n\t\t-- n1\n"
+                              "@B\n- x\n!- y")                 # the gap stays put, B untouched, no final newline added
+        self.assertEqual(sorted(out.splitlines()), sorted(self.TEXT.splitlines()))
+
+    def test_all_and_already_sorted(self):
+        out = planner.sort_tasks(self.TEXT, 0, "all")
+        self.assertTrue(out.endswith("@B\n!- y\n- x"))
+        self.assertEqual(planner.sort_tasks(out, 0, "all"), out)          # already in order: unchanged
+        self.assertEqual(planner.sort_tasks("@P\n- a\n", 1, "", "P"), "@P\n- a\n")
+
+    def test_alphabetical_within_status(self):                # A to Z by title, ignoring case and tokens
+        text = "@P\n- pear (KA) Oct20\n!- Zebra\n- Apple >Oct14\n!- apricot\n- apple\n"
+        out = planner.sort_tasks(text, 1, "", "P")
+        self.assertEqual([t.title for t in planner.parse(out)[0].tasks], ["apricot", "Zebra", "Apple", "apple", "pear"])
+
+    def test_own_project_and_crlf(self):
+        text = "- a\r\n~- b\r\n!- c\r\n@S\r\n- d\r\n"
+        self.assertEqual(planner.sort_tasks(text, 0, ""), "!- c\r\n~- b\r\n- a\r\n@S\r\n- d\r\n")
+        self.assertEqual(planner.apply_edit(text, {"op": "sort", "line": 1, "title": "Mine", "value": ""}),
+                         "!- c\r\n~- b\r\n- a\r\n@S\r\n- d\r\n")
+
+    def test_example(self):
+        text = read_example()
+        out = planner.sort_tasks(text, 0, "all")
+        self.assertEqual(sorted(out.splitlines()), sorted(text.splitlines()))
+        for p in planner.parse(out):
+            ranks = [(planner.STATUS_ORDER[t.status], t.title.casefold()) for t in p.tasks]
+            self.assertEqual(ranks, sorted(ranks), p.name)
+
+    def test_refused(self):
+        for line, value, title in [(2, "", "B"), (99, "", None), (2, "status", "A"), (3, "", None)]:
+            with self.subTest(line=line, value=value), self.assertRaises(planner.EditError):
+                planner.sort_tasks(self.TEXT, line, value, title)
+
+
+class TestHold(unittest.TestCase):                            # on hold, /- (2.0.20)
+    TEXT = "@P\n/- wait Oct01 *daily\n\t- sub Oct02\n(!)/- star\n- go Oct03\n"
+
+    def test_parse(self):
+        tasks = {t.title: t for t in planner.parse(self.TEXT)[0].all_tasks()}
+        self.assertEqual([tasks[k].status for k in ("wait", "sub", "star", "go")], ["hold", "open", "hold", "open"])
+        self.assertEqual([tasks[k].held for k in ("wait", "sub", "star", "go")], [True, True, True, False])
+        self.assertTrue(tasks["star"].notable)
+        self.assertEqual([tasks[k].overdue() for k in ("wait", "sub", "go")], [False, False, True])
+
+    def test_set_status(self):
+        text = "@P\r\n\t(!)~- a\r\n- b\r\n"
+        out = planner.set_status(text, 2, "hold", "a")
+        self.assertEqual(out, "@P\r\n\t(!)/- a\r\n- b\r\n")
+        self.assertEqual(planner.set_status(out, 2, "open", "a"), "@P\r\n\t(!)- a\r\n- b\r\n")
+        self.assertEqual(planner.set_status(out, 2, "done", "a"), "@P\r\n\t(!)!- a\r\n- b\r\n")
+
+    def test_paused_everywhere(self):
+        ps = planner.parse(self.TEXT)
+        horizon, overdue, due, doing, reminders = planner.upcoming_groups(ps)
+        self.assertEqual([t.title for _, _, t in overdue], ["go"])
+        self.assertEqual(reminders, [])
+        a = date(2026, 10, 12)
+        self.assertEqual(planner.habit_rows(ps, a, a), [])                       # the Planner: a held habit isn't there
+        rows = planner.habit_rows(ps, a, a, every=True)                           # the Habits page: listed, never due
+        self.assertEqual([(t.title, due) for _, t, _, due, _ in rows if t.title == "wait"], [("wait", [])])
+        with self.assertRaises(planner.EditError):                                # Archive done: not finished
+            planner.take_done("@P\n/- a\n")
+        self.assertEqual(planner.sort_tasks("@P\n/- a\n- b\n!- c\n", 1, "", "P"), "@P\n!- c\n- b\n/- a\n")
+
+    def test_data_and_cli(self):
+        d = planner.to_data(planner.parse(self.TEXT))
+        t = d["projects"][0]["projects"][0]["tasks"][0]
+        self.assertEqual((t["status"], t["held"], t["children"][0]["held"]), ("hold", True, True))
+        back = {x["title"]: x["held"] for g in d["planner"]["backlog"] for x in g["tasks"]}
+        self.assertEqual(back, {"wait": True, "sub": True, "star": True, "go": False})
+        out = "\n".join(planner.view_projects(planner.parse(self.TEXT)))
+        self.assertIn("[/] wait", out)
+        self.assertIn("[/] sub", out)
+        self.assertNotIn("wait", "\n".join(planner.view_upcoming(planner.parse(self.TEXT))))
 
 class TestNotesFile(unittest.TestCase):
     def setUp(self):
@@ -1235,6 +1460,43 @@ class TestServer(Base):
         req = urllib.request.Request(self.url + "/api/file", headers={"Origin": "https://evil.example"})
         self.assertEqual(self.send(req)[0], 403)
 
+    def test_plan_move_over_the_api(self):
+        code, res = self.post("/api/edit", {"text": "- a >Oct14 >Oct16\n", "line": 1, "title": "a", "op": "plan",
+                                            "value": {"from": "Oct14", "to": "Oct15"}, "today": "Oct12"})
+        self.assertEqual((code, res["text"]), (200, "- a >Oct15 >Oct16\n"))
+        code, _ = self.post("/api/edit", {"text": "- a >Oct14\n", "line": 1, "op": "plan", "value": {"from": 1, "to": "Oct15"}})
+        self.assertEqual(code, 409)
+
+    def test_today_follows_the_clock_unless_pinned(self):
+        real = planner.date
+
+        class Clock(real):
+            now = real(2026, 11, 21)
+
+            @classmethod
+            def today(cls):
+                return cls.now
+
+        def started(pinned):                    # a server started on Nov 21, with or without --today
+            planner.TODAY, planner.TODAY_PINNED = Clock.now, pinned
+            server = planner.make_server(0, None)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            return f"http://127.0.0.1:{server.server_address[1]}"
+
+        planner.date = Clock
+        self.addCleanup(setattr, planner, "date", real)
+        self.addCleanup(setattr, planner, "TODAY_PINNED", False)
+        free, pinned = started(False), started(True)
+        Clock.now = real(2026, 11, 22)          # midnight passes while they run
+        for url, day in [(free, "2026-11-22"), (pinned, "2026-11-21")]:
+            self.url = url
+            self.assertEqual(self.post("/api/parse", {"text": "- a"})[1]["today"], day)
+            self.assertEqual(self.post("/api/parse", {"text": "- a", "today": "Oct12"})[1]["today"], "2026-10-12")
+        self.url = free
+        self.assertEqual(self.post("/api/parse", {"text": "- a"})[1]["today"], "2026-11-22")   # a pin lasts one request
+
     def test_no_notes_file(self):
         with urllib.request.urlopen(self.url + "/api/file") as r:
             self.assertEqual(json.loads(r.read()), {"name": None})
@@ -1250,6 +1512,17 @@ class TestServer(Base):
                 self.assertTrue(r.headers["Content-Type"].startswith(ctype))
                 self.assertEqual(r.headers["Cache-Control"], "no-cache")
                 self.assertIn(inside, r.read())
+
+    def test_page_prints_the_planner(self):
+        # 2.0.27: the Planner prints on one landscape page (built by the page, printed through @media print)
+        with urllib.request.urlopen(self.url + "/app.js") as r:
+            js = r.read()
+        for name in (b"function printPlanner", b"function printSheet", b"function fitSheet", b"printBtn"):
+            self.assertIn(name, js)
+        with urllib.request.urlopen(self.url + "/app.css") as r:
+            css = r.read()
+        self.assertIn(b"@media print", css)
+        self.assertIn(b"size: landscape", css)
 
     def test_no_portfolio(self):
         with urllib.request.urlopen(self.url + "/api/portfolio") as r:
@@ -1307,7 +1580,7 @@ class TestServer(Base):
         code, d = self.post("/api/edit", {"text": "@P\n- a Oct24\n- b Feb02\n", "line": 2, "op": "status",
                                           "value": "done", "today": "2026-10-12", "period": period})
         self.assertEqual([t["title"] for t in d["data"]["projects"][0]["projects"][0]["tasks"]], ["a"])
-        self.assertEqual(self.post("/api/parse", {"text": "", "period": {"kind": "week"}})[0], 400)
+        self.assertEqual(self.post("/api/parse", {"text": "", "period": {"kind": "day"}})[0], 400)
 
     def test_parse_and_edit_with_planner(self):
         week = {"kind": "week", "year": 2026, "index": 43}
@@ -1430,6 +1703,7 @@ class TestCLI(unittest.TestCase):
             self.assertIn(heading, out)
         self.assertIn("site visit prep   Sep 30   OVERDUE", out)
         self.assertIn("Mon 12\n    [x] @HDC  gather requirements (RT)\n    [ ] @HDC  inbox zero  (habit)", out)
+        self.assertIn("Habits\n    Oct 12    @HDC  inbox zero   (Weekdays)\n", out)                 # 2.0.25: Upcoming too
         with tempfile.TemporaryDirectory() as d:
             for rel, text in (("A/backlog.kf", "- own\n@Stream\n- b\n"), ("A/habits.kf", "- walk *weekly Sat, Sun\n")):
                 os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
@@ -1625,6 +1899,22 @@ class TestHabits(EditBase):
         self.assertEqual(h["stretch"]["done"], ["2026-11-02"])
         page = planner.page_data("- stretch *daily\n- no frequency yet\n!- retired *daily\n", "HDC", None, ("week", 2026, 45), habits=True)
         self.assertEqual([(x["title"], x["every"]) for x in page["planner"]["habits"]], [("stretch", ["daily"]), ("no frequency yet", [])])
+
+    def test_habit_counts_and_effort(self):                            # 2.0.25: done of due, and effort per day
+        d, D = planner.date, lambda n: planner.date(2026, 11, n)
+        self.assertEqual(planner.habit_count([D(2), D(4), D(6)], [D(2), D(6)]), (2, 3))
+        self.assertEqual(planner.habit_count([D(2), D(4)], [D(2), D(3)]), (2, 3))          # an extra tick counts for both
+        self.assertEqual(planner.habit_count([D(2), D(4), D(6)], [D(2)], D(3), D(6)), (0, 2))
+        text = self.TEXT.replace("- gym (KA) *weekly", "- gym (KA) (m) *weekly").replace("\t-- with RT\n", "\t-- done Nov02 Nov06\n")
+        ts = planner.parse(text)[0].tasks
+        self.assertEqual((ts[1].effort, ts[1].points, ts[1].reminders[0][0]), ("m", 3, "weekly Mon, Wed, Fri"))
+        self.assertEqual(planner.set_effort(self.TEXT, 2, "s", "gym"), self.TEXT.replace("(KA) *weekly", "(KA) (s) *weekly"))
+        month = planner.to_data([], None, ("month", 2026, 11), planner.parse(text))["planner"]
+        gym = next(x for x in month["habits"] if x["title"] == "gym")
+        self.assertEqual((gym["count"], gym["points"]), ({"done": 2, "days": 13}, 3))     # Nov: 13 Mon/Wed/Fri
+        out = "\n".join(planner.view_week([], D(2), planner.parse(text)))
+        self.assertIn("Habits (done of due)\n", out)
+        self.assertIn("    2/3  @(no project)  gym  (Mon, Wed, Fri)  6/9 pts", out)
 
     def test_archive_last_years_log(self):
         planner.set_today("2027-01-05")
@@ -1927,6 +2217,30 @@ class TestServerPortfolio(Base):
         self.assertEqual((code, out["text"]), (200, "- first (RT)\n"))
         self.assertIn("OPS", [p["name"] for sec in out["data"]["projects"] for p in sec["projects"]])
 
+    def test_hide_projects(self):
+        self.write("Example/backlog.kf", "- sample (KA) Oct14\n")
+        self.write("Example/habits.kf", "- stretch *daily\n")
+        names = lambda d: [p["folder"] for sec in d["projects"] for p in sec["projects"]]
+        d = self.post("/api/parse", {"all": True, "today": "2026-10-12"})[1]
+        self.assertIn("Example", names(d))
+        d = self.post("/api/parse", {"all": True, "today": "2026-10-12", "hide": ["Example"]})[1]
+        self.assertNotIn("Example", names(d) + [t["folder"] for t in d["targets"]] + [h["folder"] for h in d["planner"]["habits"]])
+        self.assertFalse(any(p.startswith("Example/") for p in d["versions"]))
+        code, out = self.post("/api/edit", {"path": "HDC/backlog.kf", "version": d["versions"]["HDC/backlog.kf"], "all": True,
+                                            "hide": ["Example"], "line": 0, "title": "HDC", "op": "task", "value": "b"})
+        self.assertEqual(code, 200)
+        self.assertNotIn("Example", names(out["data"]))
+        self.assertEqual(self.post("/api/parse", {"all": True, "hide": "Example"})[0], 400)
+
+    def test_sort_over_the_api(self):                         # All projects: a folder heading sorts every group
+        self.write("HDC/backlog.kf", "- own\n!- own done\n@Stream\n- a\n~- b\n")
+        d = self.post("/api/parse", {"all": True})[1]
+        code, out = self.post("/api/edit", {"path": "HDC/backlog.kf", "version": d["versions"]["HDC/backlog.kf"], "all": True,
+                                            "line": 0, "title": None, "op": "sort", "value": "all"})
+        self.assertEqual(code, 200)
+        self.assertEqual(out["text"], "!- own done\n- own\n@Stream\n~- b\n- a\n")
+        self.assertEqual(planner.read_notes(os.path.join(self.root, "HDC/backlog.kf"))[0], out["text"])
+
     def test_all_projects_merges_sections_by_title(self):
         self.write("A/backlog.kf", "Fall\n- a\n")
         self.write("B/backlog.kf", "Fall\n- b\nWinter\n- c\n")
@@ -1991,6 +2305,25 @@ class TestServerPortfolio(Base):
         self.assertEqual(d["planner"]["habits"][0]["done"], ["2026-11-06"])
         code, d = self.post("/api/parse", {"text": "- x *daily\n\t-- done Dec30\n", "name": "HDC", "habits": True, "year": 2025})
         self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["log"], ["2025-12-30"])   # an archive: its own year
+
+    def test_habits_in_upcoming_on_a_backlog_page(self):                 # 2.0.25: the project's own habits, ticked on disk
+        self.write("HDC/habits.kf", "- stretch (s) *daily\n- gym *weekly Mon\n")
+        code, d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "today": "2026-11-06"})
+        u = d["upcoming"]["habits"]
+        self.assertEqual([(x["title"], x["next"], x["due"], x["path"]) for x in u],
+                         [("stretch", "2026-11-06", ["2026-11-06"], "HDC/habits.kf"), ("gym", "2026-11-09", [], "HDC/habits.kf")])
+        self.assertEqual((d["upcoming"]["today"]["token"], list(d["versions"])), ("Nov06", ["HDC/habits.kf"]))
+        code, out = self.post("/api/edit", {"path": "HDC/habits.kf", "version": d["versions"]["HDC/habits.kf"], "habits": True,
+                                            "today": "2026-11-06", "line": 1, "title": "stretch", "op": "tick", "value": "Nov06"})
+        self.assertEqual((code, out["text"]), (200, "- stretch (s) *daily\n\t-- done Nov06\n- gym *weekly Mon\n"))
+        d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "today": "2026-11-06"})[1]
+        self.assertEqual([(x["title"], x["next"], x["done"]) for x in d["upcoming"]["habits"]],
+                         [("stretch", "2026-11-07", ["2026-11-06"]), ("gym", "2026-11-09", [])])   # ticked: the next one
+        d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "habits": True, "today": "2026-11-06"})[1]
+        self.assertEqual(d["upcoming"]["habits"], [])                                     # the Habits page itself: none
+        d = self.post("/api/parse", {"all": True, "today": "2026-11-06"})[1]
+        self.assertEqual([x["title"] for x in d["upcoming"]["habits"]], ["stretch", "gym"])
+        self.assertEqual(self.post("/api/parse", {"text": "- a\n", "today": "2026-11-06"})[1]["upcoming"]["habits"], [])
 
     def test_archive_habit_log(self):
         self.write("HDC/habits.kf", "- stretch *daily\n\t-- done Dec30 Jan02\n")
