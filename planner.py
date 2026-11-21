@@ -17,11 +17,12 @@ USAGE
                                        server follows the clock, moving on at midnight
   --import notes.txt [FOLDER] [--split]  make a project from notes.txt in Projects/, or in FOLDER
                                        (--split: one project per @ line)
-  --serve [--port 8765]                open the web page on the Projects folder next to planner.py (made if it's
+  --serve [--port 8765] [--host ADDR]  open the web page on the Projects folder next to planner.py (made if it's
                                        missing): one sub-folder per project (backlog.kf, quicknote.kf, habits.kf,
-                                       notes/, archive/YYYY.kf). Click the logo for the projects: All projects
+                                       notes/, archive/YYYY.kf). --host 0.0.0.0 serves the whole network (no
+                                       login; for a trusted LAN). Click the logo for the projects: All projects
                                        (every backlog together) and each project's pages
-  --serve notes.txt [--port 8765]      the web page on that one file instead; Save writes back to it
+  --serve notes.txt [--port 8765] [--host ADDR]  the web page on that one file instead; Save writes back to it
                                        The page: tabs Projects / Timeline / People / Upcoming / Week;
                                        click a task's box, title or Who / Effort / Date / + cells
                                        to edit it (Tab moves between them), + Add task (with Who / Effort /
@@ -38,7 +39,7 @@ NOTE FORMAT (quick reference)
   <Tab>                         one level deeper = subtask
   -- text                       note on the task above (never a task)
   (KA)  (KA, RT)                assignees
-  (xs) (s) (m) (l) (xl)         effort: 1, 1, 3, 5 or 8 points (lowercase only)
+  (xs) (s) (m) (l) (xl)         effort: 1, 2, 3, 5 or 8 points (lowercase only)
   Oct24                         due date
   Oct23--26  Oct23--Nov03       date range
   ~Q1  ~T1  ~Nov  ~wk43         loose date: sometime in that period (T1-T3: trimesters
@@ -85,7 +86,7 @@ BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]", "hold": "[/]"}
 def box(t):
     """A task's box in the text views: [/] for one on hold, also through its parent (unless done)."""
     return BOX["hold"] if t.held and t.status != "done" else BOX[t.status]
-EFFORT = {"xs": 1, "s": 1, "m": 3, "l": 5, "xl": 8}   # effort size -> points
+EFFORT = {"xs": 1, "s": 2, "m": 3, "l": 5, "xl": 8}   # effort size -> points
 TODAY = date.today()
 TODAY_PINNED = False            # --today given: the server keeps that day; otherwise it reads the clock per request
 
@@ -2454,8 +2455,9 @@ def _hide(req):
     return tuple(hide)
 
 
-def make_server(port, notes_path=None, portfolio=None):
-    """The local server (127.0.0.1 only). Port 0 picks a free port.
+def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
+    """The server: 127.0.0.1 only unless `host` says otherwise (`--host 0.0.0.0`: every network interface, for a
+    trusted LAN; no Host/Origin check or login then). Port 0 picks a free port.
 
     With `portfolio` (a folder; `--serve` passes PROJECTS), GET /api/portfolio lists its projects, POST /api/portfolio
     makes, renames and deletes (moves to .trash) projects, sections and pages, and
@@ -2464,7 +2466,8 @@ def make_server(port, notes_path=None, portfolio=None):
     With `notes_path`, GET/POST /api/file read and save that one file. Nothing else is ever written.
     """
     import json
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
     from urllib.parse import parse_qs, urlsplit
 
@@ -2475,8 +2478,14 @@ def make_server(port, notes_path=None, portfolio=None):
     statics = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
                "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8")}
     folio = os.path.realpath(portfolio) if portfolio else None
+    # Requests run on their own threads, so a stalled browser connection can't block the others. TODAY and
+    # LOG_END are module globals set per request, and files are read-modify-written, so API work takes turns.
+    lock = threading.RLock()
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 10                                   # seconds a connection may sit silent before it is dropped
+        MAX_BODY = 32 * 1024 * 1024
+
         def _send(self, code, body, ctype):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -2489,7 +2498,10 @@ def make_server(port, notes_path=None, portfolio=None):
             self._send(code, json.dumps(obj).encode(), "application/json")
 
         def _trusted(self):
-            """Only this page may use the API: blocks other sites (Origin) and DNS rebinding (Host)."""
+            """Only this page may use the API: blocks other sites (Origin) and DNS rebinding (Host).
+            Not checked when `--host` opens the server to the network: any address may then reach it."""
+            if host != "127.0.0.1":
+                return True
             hosts = {f"localhost:{self.server.server_address[1]}", f"127.0.0.1:{self.server.server_address[1]}"}
             origin = self.headers.get("Origin")
             if self.headers.get("Host") in hosts and (origin is None or origin in {"http://" + h for h in hosts}):
@@ -2505,11 +2517,13 @@ def make_server(port, notes_path=None, portfolio=None):
             elif path == "/api/portfolio":
                 if not self._trusted():
                     return
-                self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
+                with lock:
+                    self._json(200, {"name": None} if folio is None else portfolio_tree(folio))
             elif path == "/api/file":
                 if not self._trusted():
                     return
-                self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
+                with lock:
+                    self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -2520,10 +2534,31 @@ def make_server(port, notes_path=None, portfolio=None):
                 return
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 return self._json(415, {"error": "send JSON"})
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+                if not 0 <= length <= self.MAX_BODY:
+                    raise ValueError
+            except ValueError:
+                return self._json(400, {"error": "bad request: a valid Content-Length is needed"})
+            try:
+                raw = self.rfile.read(length)           # read before taking the lock: a slow client holds up only itself
+            except OSError:
+                return                                  # the connection timed out or went away
+            if len(raw) < length:
+                return self._json(400, {"error": "bad request: the body ended early"})
+            try:
+                with lock:
+                    self._post(raw)
+            except OSError:
+                pass                                    # the browser left before the answer was sent
+            except Exception as e:                      # one bad request must never take the server down
+                self._json(500, {"error": f"server error: {type(e).__name__}: {e}"})
+
+        def _post(self, raw):
             global TODAY, LOG_END
             LOG_END = None
             try:
-                req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                req = json.loads(raw)
                 if self.path == "/api/file":
                     return self._save(req)
                 if self.path == "/api/portfolio":
@@ -2709,21 +2744,27 @@ def make_server(port, notes_path=None, portfolio=None):
         def log_message(self, *args):
             pass
 
-    return HTTPServer(("127.0.0.1", port), Handler)
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True                          # a stuck request never keeps the program from exiting
+        request_queue_size = 128                       # the default 5 resets connections when a browser opens a burst
+
+    return Server((host, port), Handler)
 
 
-def serve(port, notes_path=None, portfolio=None):
+def serve(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     import threading
     import webbrowser
 
-    server = make_server(port, notes_path, portfolio=portfolio)
+    server = make_server(port, notes_path, portfolio=portfolio, host=host)
+    local = host == "127.0.0.1"
     url = f"http://localhost:{port}"
-    print(f"Planner running at {url}  (Ctrl-C to stop)")
+    print(f"Planner running at {url if local else f'http://{host}:{port}  (anyone on the network can use it and change the files)'}  (Ctrl-C to stop)")
     if portfolio:
         print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
-    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    if local:                                          # a server on the network is usually headless
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -2778,6 +2819,7 @@ def main(argv):
     if "--serve" in args:
         args.remove("--serve")
         port = take_option(args, "--port") or "8765"
+        host = take_option(args, "--host") or "127.0.0.1"
         if not port.isdigit() or not 0 < int(port) < 65536:
             sys.exit(f"planner.py: bad --port value {port!r}")
         if len(args) > 1 or any(a.lower() in VIEWS for a in args):
@@ -2787,7 +2829,7 @@ def main(argv):
                 os.makedirs(PROJECTS, exist_ok=True)
             except OSError as e:
                 sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
-            return serve(int(port), portfolio=PROJECTS)
+            return serve(int(port), portfolio=PROJECTS, host=host)
         notes = os.path.realpath(args[0])                      # follow a symlink to the real file
         if os.path.isdir(notes):
             sys.exit(f"planner.py: --serve takes no folder: your projects live in {PROJECTS}")
@@ -2797,7 +2839,7 @@ def main(argv):
             read_notes(notes)
         except (OSError, UnicodeDecodeError) as e:
             sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
-        return serve(int(port), notes)
+        return serve(int(port), notes, host=host)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())

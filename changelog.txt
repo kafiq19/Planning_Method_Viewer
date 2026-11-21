@@ -5,6 +5,18 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.28  2026-11-21  Merged main: S is 2 points, threaded server, --host
+-------------------------------------------------
+- The changes made on main (listed below as "on main") join the rest:
+  (s) is worth 2 points (sizes 1, 2, 3, 5, 8), the server runs requests
+  on their own threads (?debug=1 shows a request log), the Planner
+  doesn't redraw when nothing changed, and --serve --host 0.0.0.0 serves
+  the page on a trusted network.
+- The printed Planner's effort key reads S 2.
+- Code: the two branches both used 2.0.10-2.0.13; main's four entries
+  keep their numbers, marked "(on main)".
+
+
 2.0.27  2026-11-21  Print the Planner on one page
 -------------------------------------------------
 - New: a printer button next to the Planner's week control prints the
@@ -259,6 +271,53 @@ for people using the tool, then notes for anyone working on the code.
   pinned or test TODAY, else date.today() per request). Page: showToday,
   dayTick (a minute timer and visibilitychange); the old localStorage
   key "today" is removed.
+
+
+2.0.13 (on main)  2026-11-11  --host for a network server
+-------------------------------------------------
+- New: python planner.py --serve --host 0.0.0.0 serves the page to every
+  machine on your network (for example a Linux box on your LAN), at
+  http://ADDRESS:8765. There is no login and no address check in that
+  mode, so use it only on a network you trust. It doesn't open a
+  browser. Without --host nothing changes: only this computer can connect.
+- Code: make_server / serve take host; _trusted skips the Host/Origin
+  check for a non-loopback host.
+
+
+2.0.12 (on main)  2026-11-10  Fewer redraws
+-------------------------------------------------
+- Changed: the Planner views no longer redraw when the server's answer
+  is the same as what is already shown (for example after a window
+  focus or a keystroke that changes nothing), so your place, cursor and
+  any open editor stay put. A refresh that is still waiting is cancelled
+  when a newer one starts, and typing waits for a 400 ms pause (it was
+  200) before the view updates.
+- Code: render() / unchanged() / state.shown / state.ctl in web/app.js.
+
+
+2.0.11 (on main)  2026-11-09  Stability: threaded server, debug log
+-------------------------------------------------
+- Fixed: the server handled one request at a time, so a browser
+  connection that stalled (or one slow request) froze the whole page.
+  Requests now run on their own threads; a silent connection is dropped
+  after 10 seconds, a bad Content-Length is refused with a message, and
+  an unexpected error is answered as an error instead of dropping the
+  connection. The listen queue is larger, so a burst of requests from
+  the browser is no longer reset.
+- New: open the page with ?debug=1 to see each request's time and any
+  error in a small overlay (and the console), to help track down freezes.
+- Code: ThreadingHTTPServer; request bodies are read before taking the
+  server lock, and API work takes turns under it (TODAY and LOG_END are
+  per-request globals). Tests cover a stalled connection, bad lengths
+  and parallel requests.
+
+
+2.0.10 (on main)  2026-11-09  Effort S is worth 2 points
+-------------------------------------------------
+- Changed: (s) is now worth 2 points (it was 1), so the sizes are
+  1, 2, 3, 5 and 8. Point totals in the views change accordingly.
+- Code: EFFORT in planner.py, EFFORTS in web/app.js, the docs and the
+  tests that sum points.
 
 
 2.0.9  2026-11-09  Fold projects in All projects; starred first; points done

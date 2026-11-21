@@ -565,3 +565,4 @@ table.tl td.w.plan { color: var(--muted); }
   body > *:not(.psheet) { display: none !important; }
   .psheet { position: static; left: auto; }
 }
+#debugLog { position: fixed; right: 8px; bottom: 8px; z-index: 99; max-width: 60vw; max-height: 40vh; overflow: auto; margin: 0; padding: 6px 8px; font: 11px/1.4 ui-monospace, monospace; background: rgba(0, 0, 0, .8); color: #fff; border-radius: 6px; pointer-events: none; white-space: pre-wrap; }

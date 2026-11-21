@@ -7,6 +7,38 @@ const store = {
 };
 const state = { mode: store.get("mode", "plain"), tab: store.get("tab", "projects"), data: null, seq: 0, msg: null };
 
+/* ---------- debug log: open the page with ?debug=1 (or store "debug" = 1) to see each request's time and any error ---------- */
+(function () {
+  let on = false;
+  try { on = /[?&]debug=1\b/.test(location.search) || store.get("debug", "") === "1"; } catch (e) {}
+  if (!on) return;
+  const lines = [];
+  let box = null;
+  const log = (kind, text) => {
+    lines.push(new Date().toLocaleTimeString() + " " + kind + " " + text);
+    if (lines.length > 12) lines.shift();
+    console.log("[planner]", kind, text);
+    if (!box) { box = document.createElement("pre"); box.id = "debugLog"; document.body.append(box); }
+    box.textContent = lines.join("\n");
+  };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    const t0 = performance.now(), name = String(url).split("?")[0] + (opts && opts.method ? " " + opts.method : "");
+    try {
+      const r = await realFetch(url, opts);
+      const ms = Math.round(performance.now() - t0);
+      log(ms > 1000 ? "SLOW" : "ok", name + " " + r.status + " " + ms + "ms");
+      return r;
+    } catch (e) {
+      log("FAIL", name + " " + e.message + " after " + Math.round(performance.now() - t0) + "ms");
+      throw e;
+    }
+  };
+  window.addEventListener("error", e => log("ERROR", e.message + " (" + (e.filename || "").split("/").pop() + ":" + e.lineno + ")"));
+  window.addEventListener("unhandledrejection", e => log("REJECTED", String(e.reason && e.reason.message || e.reason)));
+  log("debug", "on; turn off with localStorage.removeItem('debug') and leave ?debug=1 off the address");
+})();
+
 /* ---------- small DOM helper (text is always set as text, never as HTML) ---------- */
 function h(tag, cls, ...kids) {
   const n = document.createElement(tag);
@@ -308,7 +340,15 @@ function goToLine(n) {
 }
 
 let timer;
-function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 200); }
+function schedule() { clearTimeout(timer); timer = setTimeout(() => render(false), 400); }   // typing: wait for a pause before asking the server
+
+// Is the planner view already showing exactly this data (for this page, tab and mode)?
+const shownKey = () => [state.file && state.file.path, state.all, state.tab, state.mode, state.switched].join("|");
+function unchanged(data) {
+  const view = $("viewPane");
+  return !!state.shown && state.shown.key === shownKey() && view.children.length === 2 && view.firstChild === tabsRow
+    && JSON.stringify(state.shown.data) === JSON.stringify(data);
+}
 
 async function render(relayout) {
   if (relayout) layout();
@@ -320,21 +360,24 @@ async function render(relayout) {
     return;
   }
   const seq = ++state.seq;
+  if (state.ctl) state.ctl.abort();                          // the server needn't finish an answer nobody will read
+  const ctl = state.ctl = new AbortController();
   try {
     const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.all ? { all: true, hide: allHide(), ...when } : { text: editor.value, name: folioName(), ...when }) });
+      body: JSON.stringify(state.all ? { all: true, hide: allHide(), ...when } : { text: editor.value, name: folioName(), ...when }), signal: ctl.signal });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
       if (state.period) { setPeriod(null); return; }        // e.g. a stored period the server rejects: fall back to all dates
       throw new Error(data.error || r.statusText);
     }
+    if (unchanged(data)) return;                             // same answer as the one on screen: leave the view (focus, scroll, open editors) alone
     state.data = data;
     showToday();
     plannerView();
   } catch (err) {
-    if (seq !== state.seq) return;
+    if (err.name === "AbortError" || seq !== state.seq) return;
     view.replaceChildren(h("div", "err", "Could not parse: " + err.message +
       ". Planner mode needs the server: run  python planner.py --serve"));
   }
@@ -856,6 +899,7 @@ function showToast() {                           // the last edit's message, wit
 }
 
 function plannerView() {
+  state.shown = null;                                // set again below once it is drawn
   if (state.switched) {                             // another file: drop a person or project filter it doesn't have
     state.switched = false;
     if (filt.who && filt.who !== "(unassigned)" && !state.data.people.some(g => g.name === filt.who)) { filt.who = ""; store.set(FKEYS.who, ""); }
@@ -906,6 +950,7 @@ function plannerView() {
   plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
   showToast();
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
+  state.shown = { key: shownKey(), data: state.data };
 }
 
 const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
@@ -1094,7 +1139,7 @@ async function archiveOp(body, target, year) {
   plannerView();
 }
 const pts = n => n + (n === 1 ? " pt" : " pts");
-const EFFORTS = [["xs", 1], ["s", 1], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
+const EFFORTS = [["xs", 1], ["s", 2], ["m", 3], ["l", 5], ["xl", 8]];   // the choices in the Effort cell (planner.py's EFFORT)
 const sumPts = tasks => tasks.reduce((n, t) => n + t.points, 0);   // simple sum of what the server sent
 const tasksN = n => n + (n === 1 ? " task" : " tasks");
 
@@ -1870,7 +1915,7 @@ function printSheet(d) {
   const foot = h("div", "pfoot",
     h("div", "pq", span("", "Top lesson of last " + unit + ":"), h("span", "pfill")),
     h("div", "pq", span("", "Top priority this " + unit + ":"), h("span", "pfill")),
-    span("pkey", "Effort: XL 8 · L 5 · M 3 · S 1 · XS 1 pts   ☐ open  ◪ in progress  ☑ done  ★ top priority"));
+    span("pkey", "Effort: XL 8 · L 5 · M 3 · S 2 · XS 1 pts   ☐ open  ◪ in progress  ☑ done  ★ top priority"));
   return h("div", "psheet", head, h("div", "pmain", grid, side), foot);
 }
 const fmtIso = iso => { const a = isoDay(iso); return `${DAY_LONG[a.getDay()].slice(0, 3)} ${MON3[a.getMonth()]} ${a.getDate()}`; };
