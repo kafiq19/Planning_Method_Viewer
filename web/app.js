@@ -323,7 +323,7 @@ async function render(relayout) {
   try {
     const when = { today: $("today").value.trim() || null, period: archiveYear() ? null : state.period, planner: planFor(), year: archiveYear(), habits: isHabitsPage() };
     const r = await fetch("/api/parse", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.all ? { all: true, hide: hiddenProjects(), ...when } : { text: editor.value, name: folioName(), ...when }) });
+      body: JSON.stringify(state.all ? { all: true, hide: allHide(), ...when } : { text: editor.value, name: folioName(), ...when }) });
     const data = await r.json();
     if (seq !== state.seq) return;
     if (!r.ok) {
@@ -369,7 +369,7 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
   try {
     if (state.all) {                                     // All projects: the server edits the task's backlog on disk
       const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, hide: hiddenProjects(), line: t.line, title: t.title, op, value, ...when }) });
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], all: true, hide: allHide(), line: t.line, title: t.title, op, value, ...when }) });
       const res = await r.json();
       if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
       if (seq !== state.seq) return true;
@@ -1065,7 +1065,7 @@ async function archiveOp(body, target, year) {
   let res;
   try {
     const r = await fetch("/api/archive", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, hide: hiddenProjects(), name: folioName(),
+      body: JSON.stringify({ ...body, path, version, archive_year: year, all: !!state.all, hide: allHide(), name: folioName(),
         today: $("today").value.trim() || null, period: state.period, planner: planFor() }) });
     res = await r.json();
     if (!r.ok) throw new Error(res.conflict ? "that project changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
@@ -1147,7 +1147,7 @@ function foldHead(name, key, what, label, count) {   // a project or person head
 /* All projects: one heading per project (its folder), which folds everything in it ("collapsedFolders"); inside, its
    tasks by section, and its @ sub-groups with their own fold. A project with no tasks yet still shows, with + Add task. */
 function vAllProjects(d) {
-  const out = h("div"), by = new Map(state.folio.projects.map(f => [f.name, []]));
+  const out = h("div"), by = new Map(folioShown().map(f => [f.name, []]));
   for (const sec of d.projects)
     for (const p of sec.projects) {
       const f = p.folder || p.name;
@@ -1402,7 +1402,7 @@ const projKey = t => t.folder || t.project || t.name;
 function planHidden() { try { return new Set(JSON.parse(store.get("plannerHidden", "[]"))); } catch (e) { return new Set(); } }
 function setPlanHidden(set) { store.set("plannerHidden", JSON.stringify([...set])); plannerView(); }
 function projectChips(d) {
-  const names = state.folio && state.all ? state.folio.projects.map(p => p.name) : [...new Set(d.targets.map(t => t.name))];
+  const names = state.folio && state.all ? folioShown().map(p => p.name) : [...new Set(d.targets.map(t => t.name))];
   if (names.length < 2) return null;
   const hidden = planHidden(), shown = names.filter(n => !hidden.has(n)), off = names.filter(n => hidden.has(n));
   const chips = shown.map(n => {
@@ -1577,6 +1577,27 @@ function starBlocksFirst(items, pl) {
   return [...top, ...rest];
 }
 const groupsStarFirst = (groups, pl) => [...groups.filter(g => g.tasks.some(t => starred(t, pl))), ...groups.filter(g => !g.tasks.some(t => starred(t, pl)))];
+/* copy a column's tasks (2.0.24): each task's line as written in the notes (without its indentation), one per line */
+async function copyTasks(tasks, head) {
+  const seen = new Set(), lines = [];
+  for (const t of tasks) {
+    const k = (t.path || "") + ":" + t.line;
+    if (seen.has(k) || !t.raw) continue;
+    seen.add(k); lines.push(t.raw);
+  }
+  if (!lines.length) { state.msg = { text: "To copy tasks, restart the server (python3 planner.py --serve).", bad: true }; return showToast(); }
+  const text = lines.join("\n") + "\n";
+  let ok = true;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {                                    // no clipboard API: the old way
+    const ta = h("textarea"); ta.value = text; ta.style.cssText = "position: fixed; opacity: 0";
+    document.body.append(ta); ta.select();
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    ta.remove();
+  }
+  state.msg = ok ? { text: `Copied ${tasksN(lines.length)} from ${head}.` } : { text: "Couldn't copy to the clipboard.", bad: true };
+  showToast();
+}
 /* on hold (2.0.20): hidden from the Planner unless "Show on hold" is on (remembered per browser, "showHeld") */
 const showHeld = () => store.get("showHeld", "0") === "1";
 function withoutHeld(pl) {                       // -> [planner data without held tasks, how many tasks were left out]
@@ -1619,16 +1640,29 @@ function vPlanner(d) {
   const days = h("div", "wdays");
   days.style.setProperty("--ncols", pl.columns.length);   // the stylesheet stacks them in a narrow pane
   for (const c of pl.columns) {
-    const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), h("div", "whead", c.head + (c.today ? " · now" : "")));
+    const shown = starFirst(c.tasks.filter(on), pl);
+    const head = h("div", "whead", span("", c.head + (c.today ? " · now" : "")));
+    if (shown.length) {                            // 2.0.24: click the heading to copy its tasks' lines, as written
+      head.classList.add("copyable");
+      head.title = `Copy the ${tasksN(shown.length)} here, as written in the notes`;
+      head.onclick = e => { e.stopPropagation(); copyTasks(shown, c.head); };
+    }
+    const col = h("div", "wday" + (c.today ? " today" : "") + (c.ok ? "" : " off"), head);
     col.title = c.ok ? `${c.start} to ${c.end}: plan with >${c.token}` : "Too far away to plan here (the notes have no years)";
-    for (const t of starFirst(c.tasks.filter(on), pl)) col.append(weekItem("wcard", t, pl, [meta(t, c)], t.via));
+    for (const t of shown) col.append(weekItem("wcard", t, pl, [meta(t, c)], t.via));
     const hab = habitsIn(pl, c, on);
     if (hab) col.append(hab);
+    if (shown.length) {                            // 2.0.24: effort done / planned in this column (every card shown), beside its name
+      const total = sumPts(shown), done = sumPts(shown.filter(t => t.status === "done"));
+      head.append(span("wpts", `${done}/${pts(total)}`));
+      head.title += ` · ${pts(done)} done of ${pts(total)} here`;
+    }
     if (c.ok && d.targets.length) col.append(addTaskRow(null, "", c));   // a new task, planned for this column
     if (c.ok) dropZone(col, (d, copy) => planTask(d.t, c.token, pl, d.due ? "copy" : !d.via ? "plan" : copy ? "copy" : "move", d.via));
     days.append(col);
   }
   const side = h("div", "wside", h("h4", "grp", where[0].toUpperCase() + where.slice(1)));
+  const sideTotal = side.firstChild;                // 2.0.24: the period's effort done / planned, each task once (filled below)
   const groups = groupsStarFirst(pl.projects.filter(g => !hidden.has(projKey(g))), pl);
   for (const g of groups) {
     const total = sumPts(g.tasks), done = sumPts(g.tasks.filter(t => t.status === "done"));   // the tasks shown (follows the filters)
@@ -1639,6 +1673,12 @@ function vPlanner(d) {
       sum));
   }
   if (!groups.length) side.append(h("div", "wempty", d.filtered ? "Nothing planned matches." : "Nothing planned yet."));
+  else {
+    const all = groups.flatMap(g => g.tasks), total = sumPts(all), done = sumPts(all.filter(t => t.status === "done"));
+    const e = span("wtotal", `${done}/${pts(total)}`);
+    e.title = `${pts(done)} done of ${pts(total)} planned for ${where}`;
+    sideTotal.append(e);
+  }
   out.append(h("div", "wtop", days, side));
   const back = h("div", "wback", colHead("Backlog", `open tasks not planned or due ${where.startsWith("this") || where === "today" ? "" : "in "}${where}`));
   back.firstChild.classList.add("wrow");
@@ -1882,10 +1922,10 @@ function drawDrawer() {
   const f = state.folio, here = state.all ? "" : state.file ? state.file.path : null, q = dQ.value.trim().toLowerCase();
   const opened = foldSet("folioOpen");
   dTitle.textContent = f.name; dTitle.title = "Each folder in " + f.name + " is a project";
-  const plan = state.all && state.tab === "planner";
-  const toTab = tab => () => { state.tab = tab; store.set("tab", tab); showAll(); };
-  const rows = [dRow(0, PLANNER_ICON, "Planner", { active: here === "" && plan, go: toTab("planner"), title: "Plan every project's tasks by year, season, month or week" }),
-    dRow(0, ALL_ICON, "All projects", { active: here === "" && !plan, go: toTab(state.tab === "planner" ? "projects" : state.tab),
+  const plan = state.all && state.tab === "planner", scope = scopeName();
+  const toTab = tab => () => { setScope(""); state.tab = tab; store.set("tab", tab); showAll(); };   // every project again
+  const rows = [dRow(0, PLANNER_ICON, "Planner", { active: here === "" && plan && !scope, go: toTab("planner"), title: "Plan every project's tasks by year, season, month or week" }),
+    dRow(0, ALL_ICON, "All projects", { active: here === "" && !plan && !scope, go: toTab(state.tab === "planner" ? "projects" : state.tab),
       title: "Every project's backlog together" }),
     h("div", "dlabel", "Projects")];
   for (const p of f.projects) {
@@ -1896,7 +1936,7 @@ function drawDrawer() {
       store.set("folioOpen", JSON.stringify([...opened]));
       drawDrawer();
     };
-    const head = dRow(0, null, p.name, { chev: open, go: toggle, active: !open && here && isUnder(here, p.name),
+    const head = dRow(0, null, p.name, { chev: open, go: toggle, active: (!open && here && isUnder(here, p.name)) || (here === "" && scope === p.name),
       more: row => [["New page", () => newPage(p.name, null, row, 1)], ["New section", () => newSection(p.name, row)],
         ["Rename", () => renameItem(p.path, row, 0)], ["Hide", () => hideProject(p.name, true)],
         ["Delete", () => trashItem(p.path, "the project")]] });
@@ -1969,6 +2009,14 @@ if (store.get("hideExample", null) !== null) {       // 2.0.12 kept only the Exa
 }
 function hiddenSet() { try { return new Set(JSON.parse(store.get("hiddenProjects", "[]"))); } catch (e) { return new Set(); } }
 const hiddenProjects = () => state.folioAll ? state.folioAll.projects.map(p => p.name).filter(n => hiddenSet().has(n)) : [];
+/* the project held across tabs (2.0.24, "folioScope"): opening a project's page sets it, and All projects and the
+   Planner then show only that project, until Planner / All projects in the drawer or the × in the breadcrumb clear it */
+const scopeName = () => { const s = store.get("folioScope", "");
+  return s && state.folio && state.folio.projects.some(p => p.name === s) ? s : ""; };
+const setScope = n => store.set("folioScope", n || "");
+const allHide = () => { const s = scopeName();      // the server leaves these out of All projects' data
+  return s && state.folioAll ? state.folioAll.projects.map(p => p.name).filter(n => n !== s) : hiddenProjects(); };
+const folioShown = () => { const s = scopeName(); return s ? state.folio.projects.filter(p => p.name === s) : state.folio.projects; };
 function setFolio(tree) {                            // keep the whole tree, show the projects not hidden
   state.folioAll = tree;
   const hide = hiddenProjects();
@@ -2004,6 +2052,7 @@ async function openPage(path) {                      // show one of a project's 
   state.all = false;
   state.mode = modeOf(path); store.set("mode", state.mode);
   store.set("folioActive", path);
+  setScope(path.split("/")[0]);                       // this project is held across the tabs
   useFile(d);
   layout();
   openDrawer(false);
@@ -2019,12 +2068,16 @@ async function showAll() {                           // All projects: every back
   render(true);
   drawDrawer();
 }
+const unscopeBtn = h("button", "unscope hidden", "×");
+unscopeBtn.onclick = () => { setScope(""); render(false); drawDrawer(); };
 function showCrumbs() {                              // the header: Project › Notes › Section › Page (click: the drawer)
   const c = $("crumbs");
   c.classList.toggle("hidden", !state.folio);
-  if (!state.folio) return;
+  if (!state.folio) return unscopeBtn.classList.add("hidden");
   let parts;
-  if (state.all || !state.file) parts = [state.tab === "planner" ? "Planner" : "All projects"];
+  const scope = scopeName();
+  if ((state.all || !state.file) && scope) parts = [scope, TABS.find(x => x[0] === state.tab)[1]];   // a held project's tab
+  else if (state.all || !state.file) parts = [state.tab === "planner" ? "Planner" : "All projects"];
   else {
     const [proj, kind, ...rest] = state.file.path.split("/");
     const named = { "backlog.kf": "Backlog", "quicknote.kf": "Quick note", "habits.kf": "Habits" }[kind];
@@ -2037,8 +2090,11 @@ function showCrumbs() {                              // the header: Project › 
     if (i) kids.push(span("sep", "›"));
     kids.push(i === parts.length - 1 ? h("b", "", t) : span("", t));
   });
+  if (!unscopeBtn.isConnected) c.after(unscopeBtn);   // × after the breadcrumb (a button can't hold one): every project again
+  unscopeBtn.classList.toggle("hidden", !(scope && state.all));
+  unscopeBtn.title = `Show every project, not just ${scope}`; unscopeBtn.setAttribute("aria-label", unscopeBtn.title);
   c.replaceChildren(...kids);
-  c.title = (state.file ? state.file.path : parts[0]) + " (click for the projects)";
+  c.title = (state.file ? state.file.path : scope && state.all ? scope + ", every tab" : parts[0]) + " (click for the projects)";
   c.onclick = () => openDrawer(true);
 }
 function folioWelcome() {                            // an empty page, or All projects with no tasks yet

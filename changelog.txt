@@ -5,6 +5,23 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.24  2026-11-21  Held project; effort per column; copy a day
+-------------------------------------------------
+- New: the project you open stays chosen across the tabs. From HDC's
+  Backlog, the Planner (and All projects' tabs) show only HDC; the
+  breadcrumb reads "HDC › Planner". It's remembered after a reload; ×
+  beside the breadcrumb, or Planner / All projects in the drawer, show
+  every project again.
+- New: each Planner column's heading shows the effort done / planned of
+  its cards at the right (3/10 pts), like the side panel's heading for
+  the period's total (each task once).
+- New: click a Planner column's heading to copy its tasks, each line as
+  written in the notes (without indentation), one per line.
+- Code: folioScope, scopeName, setScope, allHide (sent as hide),
+  folioShown, unscopeBtn; .wpts, .wtotal, copyTasks; task dicts carry
+  raw (Task.raw, set by parse).
+
+
 2.0.23  2026-11-21  Work week in the Planner
 -------------------------------------------------
 - New: in the Planner, click Week again to switch to the Work week

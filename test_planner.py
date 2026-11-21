@@ -481,6 +481,11 @@ class TestPeriods(Base):
         self.assertEqual((cols[0][1], cols[-1][2]), (date(2026, 10, 1), date(2026, 10, 31)))
         self.assertEqual([h for h, _, _ in planner.period_columns("month", 2027, 2)][-1], "22-28")
 
+    def test_raw_line(self):                                  # 2.0.24: a task's line as written, for copying a Planner column
+        d = planner.to_data(planner.parse("@P\n\t(!)~- a (KA) (s) Oct14 >Oct13   \r\n- b\n"))
+        ts = d["projects"][0]["projects"][0]["tasks"]
+        self.assertEqual([t["raw"] for t in ts], ["(!)~- a (KA) (s) Oct14 >Oct13", "- b"])
+
     def test_week_period(self):                               # 2.0.22: By week, seven day columns
         self.assertEqual(planner.period_from({"kind": "week"}), ("week", 2026, 42))
         self.assertEqual(planner.period_range("week", 2026, 42), (date(2026, 10, 12), date(2026, 10, 18)))

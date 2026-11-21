@@ -473,3 +473,15 @@ table.tl td.w.plan { color: var(--muted); }
 .tlkey b.kplan { display: inline-block; width: 8px; height: 8px; margin-left: 8px; transform: rotate(45deg); background: var(--effort, #6d28d9); }
 .tlbar .donetog { padding: 0 8px; font-size: calc(12px * var(--fz)); }
 .tlbar .donetog.on { color: var(--accent); }
+
+/* the held project's × beside the breadcrumb (2.0.24) */
+.unscope { flex: none; margin-left: -2px; padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; }
+.unscope:hover { color: var(--text); }
+
+/* Planner columns (2.0.24): click a heading to copy its tasks; effort done / planned at the foot, and the period's total */
+.wday .whead.copyable { cursor: copy; }
+.wday .whead.copyable:hover { color: var(--accent); }
+.wday .whead { display: flex; align-items: baseline; gap: 6px; }
+.wday .whead > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wday .whead .wpts { flex: none; margin-left: auto; font-weight: 400; color: var(--muted); }
+.wside h4 .wtotal { float: right; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }

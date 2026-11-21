@@ -465,6 +465,7 @@ def parse(text, name=None):
             t.notable = bool(m.group(1))     # (!) before the mark: circled in purple
             t.col = len(ws) + m.start(3)
             t.text = m.group(3)              # the task's text after the dash, as written (for the `text` edit)
+            t.raw = line                     # the whole line as written, without its indentation (2.0.24: copy a day)
             while stack and stack[-1].level >= level:
                 stack.pop()
             if stack:
@@ -1037,7 +1038,7 @@ def task_data(t, keep=None):
         return None
     sp = t.span()
     d = {
-        "title": t.title, "text": t.text, "status": t.status, "notable": t.notable, "line": t.line, "path": t.project and t.project.path,
+        "title": t.title, "text": t.text, "raw": getattr(t, "raw", None), "status": t.status, "notable": t.notable, "line": t.line, "path": t.project and t.project.path,
         "log": [iso(x) for x in t.log()],
         "date_text": t.date_text, "assignees": t.assignees, "notes": [n for n in t.notes if log_of(n) is None],
         "effort": t.effort, "points": t.points,
