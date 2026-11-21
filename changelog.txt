@@ -5,6 +5,15 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.23  2026-11-21  Work week in the Planner
+-------------------------------------------------
+- New: in the Planner, click Week again to switch to the Work week
+  (Monday to Friday; the button says "Work week"), and again for the
+  full week. Remembered in the browser. The line above the Planner says
+  how many tasks are planned on the hidden Sat/Sun.
+- Code: workWeek ("workWeek" in localStorage), weekend; page only.
+
+
 2.0.22  2026-11-21  Timeline by week, with plans
 -------------------------------------------------
 - New: By week in the period menu (▾): Mon-Sun, with ‹ › stepping a week

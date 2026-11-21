@@ -732,9 +732,16 @@ wSeg.setAttribute("role", "radiogroup"); wSeg.setAttribute("aria-label", "Plan b
 for (const [k, label] of PLAN_LEVELS) {
   const b = h("button", "", label);
   b.dataset.kind = k; b.setAttribute("role", "radio");
-  b.onclick = () => { store.set("planKind", k); setPlan({ kind: k }); };
+  b.onclick = () => {                            // Week again: work week (Mon-Fri) <-> full week (2.0.23)
+    if (k === "week" && !isHabitsPage() && state.data && state.data.planner && state.data.planner.kind === "week") {
+      store.set("workWeek", workWeek() ? "0" : "1"); return plannerView();
+    }
+    store.set("planKind", k); setPlan({ kind: k });
+  };
   wSeg.append(b);
 }
+const workWeek = () => store.get("workWeek", "0") === "1";
+const weekend = c => [0, 6].includes(new Date(c.start + "T12:00:00").getDay());   // the Sat/Sun column
 state.habitWeek = { kind: "week" };                       // the Habits page has its own week (not remembered)
 const isHabitsPage = () => !!(state.folio && !state.all && state.file && /^[^/]+\/habits\.kf$/.test(state.file.path));
 const planFor = () => isHabitsPage() ? state.habitWeek : state.plan;
@@ -752,6 +759,9 @@ function showPlan(pl, on) {
   if (!on) return;
   const unit = PLAN_UNIT[pl.kind];
   for (const b of wSeg.children) { const sel = b.dataset.kind === pl.kind; b.classList.toggle("on", sel); b.setAttribute("aria-checked", String(sel)); }
+  const wk = wSeg.querySelector('[data-kind="week"]'), ww = workWeek() && !isHabitsPage();
+  wk.textContent = ww ? "Work week" : "Week";
+  wk.title = pl.kind !== "week" ? "Plan by week" : ww ? "Monday to Friday. Click for the full week" : "The full week. Click for the work week (Mon-Fri)";
   wctl.classList.toggle("away", !pl.current);
   wMid.textContent = pl.label;
   wMid.title = pl.current ? `This ${unit}. Use ‹ › to step` : `Back to this ${unit}: ${pl.now.label}`;
@@ -874,6 +884,10 @@ function plannerView() {
       : `Drag a task onto a ${unit}, or use its Plan cell (⌥/Shift-drag a card to plan it there as well)`)
       + ` · ☆ marks a top priority for this ${PLAN_UNIT[pl.star.kind]}`
       + (per ? " · the period doesn't apply here" : ""));
+    if (pl.kind === "week" && workWeek()) {       // work week: say what the hidden Sat/Sun holds
+      const n = pl.columns.filter(weekend).reduce((a, c) => a + c.tasks.length, 0);
+      bits.push("Work week: Sat/Sun hidden" + (n ? ` (${n} planned there)` : "") + ", click Week for the full week");
+    }
   }
   else if (per) bits.push(per.label + (per.current ? ` (this ${per.kind})` : ""),
     state.tab === "upcoming" ? "Upcoming always shows the next " + d.upcoming.days + " days" : "undated tasks are hidden");
@@ -1581,8 +1595,9 @@ function heldToggle(n) {
 }
 function vPlanner(d) {
   if (!d.targets.length && !d.filtered) return welcome();   // no notes yet
-  const [pl, nHeld] = showHeld() ? [d.planner, (d.planner.backlog.flatMap(g => g.tasks).concat(d.planner.projects.flatMap(g => g.tasks)))
+  const [pl0, nHeld] = showHeld() ? [d.planner, (d.planner.backlog.flatMap(g => g.tasks).concat(d.planner.projects.flatMap(g => g.tasks)))
     .filter(t => t.held).length] : withoutHeld(d.planner);
+  const pl = pl0.kind === "week" && workWeek() ? { ...pl0, columns: pl0.columns.filter(c => !weekend(c)) } : pl0;   // work week: no Sat/Sun
   const out = h("div"), hidden = planHidden(), on = t => !hidden.has(projKey(t));
   const unit = PLAN_UNIT[pl.kind], where = pl.kind === "day" ? (pl.current ? "today" : pl.label) : pl.current ? "this " + unit : pl.label;
   const starWhere = pl.star.kind === pl.kind ? where : pl.current ? "this week" : "the week of " + pl.star.label;   // a day's are its week's
