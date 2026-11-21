@@ -200,6 +200,19 @@ The header shows where you are (`HDC › Notes › Kickoff call`); click it to o
 
 **Habits.** Each project has a **Habits** page (`habits.kf`) for repeating tasks. Every habit is a task with how often it repeats: `- stretch *daily`, `- gym (KA) *weekly Mon, Wed, Fri`, `- standup *weekdays`, `- rent *monthly 1st`. The page shows this week with a tick box per day; click one when you've done it (days that haven't come yet can't be ticked). Ticks are written in a note under the habit, `-- done Nov02 Nov03`. Click **Every** to change how often, and **+ Add habit** to add one (a name and how often). **‹ ›** steps through the weeks. Your habits also show in the **Planner**, each marked 🔁: on the Day and Week levels, each day lists the habits due that day, with the same tick boxes; on the Month, Season and Year levels, each column lists every habit with the days done out of those due there (`gym 11/12`), and the panel on the right lists them for the whole period. A day you tick that wasn't due counts too (as done and as a day). **Upcoming** lists them too, under **Habits**: each habit due in the next 14 days with its next day, and a tick box when it's due today (on All projects, and on a project's Backlog page with that project's habits). Give a habit an effort in the Habits page's **Effort** column (or write it, `- gym (KA) (m) *weekly Mon, Wed, Fri`): it counts once per day, so it adds to each column's `done/planned` points and the period's total. In January, the page offers to move last year's ticks to the archive. To retire a habit, mark it done (or delete it from its **⋯**).
 
+## Sync across your devices (being built)
+
+KAFEEN is learning to keep your notes the same on every device: your computers each run KAFEEN on their own copy, and a **hub** on an always-on home computer keeps them in step, live, over [Tailscale](https://tailscale.com) (free) so it works at home and away. Your notes never leave your own machines. Phones open the hub's page.
+
+Ready now (2.1.1): the hub. On the home computer:
+
+```
+python3 planner.py --setup-hub          # once: makes the pairing code (shown once; keep it)
+python3 planner.py --serve --hub --host 0.0.0.0
+```
+
+The hub keeps a numbered log of every change and every version of every file in `Projects/.kafeen/` (hidden). Pairing your other computers (`--pair`) comes next, then the full setup guide. `--setup-hub --new-code` replaces a lost code (every device then pairs again).
+
 ---
 
 ## Files

@@ -3,6 +3,7 @@ Tests for planner.py. Standard library only:  python -m unittest -v
 
 Every test pins TODAY (default Oct 12 2026) because dates are written without years.
 """
+import base64
 import contextlib
 import io
 import json
@@ -1729,11 +1730,11 @@ class TestCLI(unittest.TestCase):
                 unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")), \
                 unittest.mock.patch.object(planner, "serve") as serve:
             planner.main(["planner.py", "--serve", "--port", "9001"])          # made if it's missing
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1")
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1", hub=False)
             self.assertTrue(os.path.isdir(planner.PROJECTS))
             serve.reset_mock()
             planner.main(["planner.py", "--serve", "--port", "9001", "--host", "0.0.0.0"])
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0")
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0", hub=False)
 
     def test_import_defaults_to_the_projects_folder(self):
         with tempfile.TemporaryDirectory() as d, \
@@ -2492,3 +2493,178 @@ class TestLive(Base):                                         # 2.1.0: /api/even
         self.assertIsNone(nxt())
         self.server = planner.make_server(0, None)                           # for tearDown
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+
+class TestHub(Base):                                          # 2.1.1: the sync hub (/sync/*)
+    write = TestPortfolio.write
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.write("HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.write("HDC/notes/Kick.md", "# hi\n")
+        self.code = planner.setup_hub(self.root)
+        self.start()
+
+    def start(self):
+        self.server = planner.make_server(0, None, portfolio=self.root, hub=True)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def tearDown(self):
+        self.stop()
+        self.dir.cleanup()
+        super().tearDown()
+
+    def call(self, path, payload=None, code=None, device="Laptop"):
+        headers = {"Authorization": "Bearer " + (code or self.code), "X-Kafeen-Device": device}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self.url + path, None if payload is None else json.dumps(payload).encode(), headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read()
+                return r.status, (json.loads(body) if r.headers["Content-Type"] == "application/json" else body)
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def put(self, rel, text, base, device="Laptop"):
+        return self.call("/sync/put", {"path": rel, "base": base, "data": base64.b64encode(text.encode()).decode()}, device=device)
+
+    def disk(self, rel):
+        with open(os.path.join(self.root, *rel.split("/")), encoding="utf-8", newline="") as f:
+            return f.read()
+
+    def sha(self, text):
+        return planner._sha(text.encode())
+
+    def test_setup(self):
+        self.assertTrue(self.code.startswith("kfn-"))
+        with open(os.path.join(self.root, ".kafeen", "hub.json")) as f:
+            self.assertNotIn(self.code, f.read())                       # only its hash is kept
+        with self.assertRaises(ValueError):
+            planner.setup_hub(self.root)
+        self.assertNotEqual(planner.setup_hub(self.root, new=True), self.code)
+        with self.assertRaises(ValueError):                             # not a hub: refused
+            planner.make_server(0, None, portfolio=tempfile.mkdtemp(), hub=True)
+
+    def test_the_pairing_code_is_needed(self):
+        self.assertEqual(self.call("/sync/state", code="kfn-wrong")[0], 401)
+        req = urllib.request.Request(self.url + "/sync/state")
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        e.exception.close()
+        self.assertEqual(e.exception.code, 401)
+        self.assertEqual(self.call("/sync/put", {"path": "x.kf", "data": ""}, code="nope")[0], 401)
+        plain = planner.make_server(0, None, portfolio=self.root)       # not a hub: no /sync at all
+        threading.Thread(target=plain.serve_forever, daemon=True).start()
+        self.addCleanup(plain.server_close)
+        self.addCleanup(plain.shutdown)
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{plain.server_address[1]}/sync/state",
+                                                          headers={"Authorization": "Bearer " + self.code}))
+        e.exception.close()
+        self.assertEqual(e.exception.code, 404)
+
+    def test_state_and_blobs(self):
+        code, st = self.call("/sync/state")
+        self.assertEqual(code, 200)
+        self.assertEqual(st["files"], {"HDC/backlog.kf": self.sha("- a\n- b\n- c\n"), "HDC/notes/Kick.md": self.sha("# hi\n")})
+        self.assertEqual(st["dirs"], ["HDC", "HDC/notes"])               # .kafeen is never listed
+        self.assertEqual(self.call("/sync/blob/" + st["files"]["HDC/backlog.kf"]), (200, b"- a\n- b\n- c\n"))
+        self.assertEqual(self.call("/sync/blob/" + "0" * 64)[0], 404)
+        self.assertEqual(self.call("/sync/blob/../hub.json")[0], 404)
+
+    def test_put(self):
+        base = self.sha("- a\n- b\n- c\n")
+        code, d = self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", base)
+        self.assertEqual((code, d["status"], d["hash"]), (200, "ok", self.sha("!- a\n- b\n- c\n")))
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        # another device, still on the old base, ticked c: merged
+        code, d = self.put("HDC/backlog.kf", "- a\n- b\n!- c\n", base, device="Desktop")
+        self.assertEqual((d["status"], base64.b64decode(d["data"])), ("merged", b"!- a\n- b\n!- c\n"))
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n!- c\n")
+        # the same line changed differently: a conflict, the hub's file untouched
+        code, d = self.put("HDC/backlog.kf", "~- a\n- b\n- c\n", base, device="Phone")
+        self.assertEqual((d["status"], d["hash"]), ("conflict", self.sha("!- a\n- b\n!- c\n")))
+        self.assertEqual(d["clashes"][0]["mine"], ["~- a\n"])
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n!- c\n")
+        # a new file, in a new folder
+        self.assertEqual(self.put("MDM/backlog.kf", "- x\r\n", None)[1]["status"], "ok")
+        self.assertEqual(self.disk("MDM/backlog.kf"), "- x\r\n")         # bytes exactly as sent
+        # unchanged: nothing logged
+        seq = self.call("/sync/state")[1]["seq"]
+        self.assertEqual(self.put("MDM/backlog.kf", "- x\r\n", None)[1]["status"], "ok")
+        self.assertEqual(self.call("/sync/state")[1]["seq"], seq)
+
+    def test_bad_paths_are_refused(self):
+        for rel in ("../x.kf", ".kafeen/hub.json", "HDC/.trash/x", "/etc/x", "HDC//x", "a\\b", ""):
+            self.assertEqual(self.put(rel, "x", None)[0], 400, rel)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.root), "x.kf")))
+
+    def test_delete_and_folders(self):
+        h = self.sha("# hi\n")
+        self.assertEqual(self.call("/sync/delete", {"path": "HDC/notes/Kick.md", "base": "0" * 64})[1]["status"], "changed")
+        self.assertEqual(self.call("/sync/delete", {"path": "HDC/notes/Kick.md", "base": h})[1]["status"], "ok")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "HDC", "notes", "Kick.md")))
+        self.assertEqual(self.disk(".trash/HDC/notes/Kick.md"), "# hi\n")  # moved, never removed
+        self.assertEqual(self.call("/sync/mkdir", {"path": "HDC/notes/Client"})[1]["status"], "ok")
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "HDC", "notes", "Client")))
+        self.assertEqual(self.call("/sync/rmdir", {"path": "HDC"})[1]["status"], "changed")   # still has files
+        self.assertEqual(self.call("/sync/rmdir", {"path": "HDC/notes/Client"})[1]["status"], "ok")
+        st = self.call("/sync/state")[1]
+        self.assertNotIn("HDC/notes/Kick.md", st["files"])
+        self.assertEqual(st["dirs"], ["HDC", "HDC/notes"])
+
+    def test_changes_are_numbered_and_wait(self):
+        seq = self.call("/sync/state")[1]["seq"]
+        self.assertEqual(self.call(f"/sync/changes?since={seq}&wait=0")[1]["changes"], [])
+        got = {}
+        t = threading.Thread(target=lambda: got.update(r=self.call(f"/sync/changes?since={seq}&wait=10")))
+        t.start()
+        time.sleep(0.3)
+        t0 = time.time()
+        self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", self.sha("- a\n- b\n- c\n"), device="Desktop")
+        t.join()
+        self.assertLess(time.time() - t0, 2)                            # woke at once
+        [e] = got["r"][1]["changes"]
+        self.assertEqual((e["seq"], e["kind"], e["path"], e["device"]), (seq + 1, "put", "HDC/backlog.kf", "Desktop"))
+        self.assertEqual(self.call("/sync/changes?since=999&wait=0")[1]["reset"], True)
+
+    def test_edits_on_the_hub_are_logged(self):
+        seq = self.call("/sync/state")[1]["seq"]
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # by hand, or on the hub's own page
+            f.write("- d\n")
+        d = self.call(f"/sync/changes?since={seq}&wait={planner.SCAN_SECONDS + 3}")[1]
+        self.assertEqual([(e["kind"], e["path"], e["device"]) for e in d["changes"]], [("put", "HDC/backlog.kf", "hub")])
+
+    def test_the_log_survives_a_restart(self):
+        self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", self.sha("- a\n- b\n- c\n"))
+        seq = self.call("/sync/state")[1]["seq"]
+        self.stop()
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # changed while the hub was off
+            f.write("- d\n")
+        self.start()
+        st = self.call("/sync/state")[1]
+        self.assertEqual(st["seq"], seq + 1)
+        self.assertEqual(st["files"]["HDC/backlog.kf"], self.sha("!- a\n- b\n- c\n- d\n"))
+        old = self.call(f"/sync/changes?since={seq - 1}&wait=0")[1]["changes"]
+        self.assertEqual([e["seq"] for e in old], [seq, seq + 1])
+
+    def test_cli_setup_hub(self):
+        folder = os.path.join(self.root, "Other")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            planner.main(["planner.py", "--setup-hub", folder])
+        self.assertIn("kfn-", out.getvalue())
+        self.assertTrue(os.path.exists(os.path.join(folder, ".kafeen", "hub.json")))
+        with self.assertRaises(SystemExit):
+            planner.main(["planner.py", "--setup-hub", folder])           # already one
+        with self.assertRaises(SystemExit):
+            planner.main(["planner.py", "--serve", "--hub", "notes.txt"])  # a hub serves the Projects folder

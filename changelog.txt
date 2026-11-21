@@ -5,6 +5,26 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.1  2026-11-21  The sync hub
+-------------------------------------------------
+- New: python3 planner.py --setup-hub makes this computer's Projects
+  folder the sync hub and shows a pairing code (once; only its hash is
+  kept). --new-code replaces it. python3 planner.py --serve --hub
+  --host 0.0.0.0 then serves it: your pages as usual, plus the sync
+  service your other devices will pair with (next: --pair).
+- The hub numbers every change to every file and folder (made by a
+  device, on its own page, or by hand, even while it wasn't running)
+  and keeps every version of every file, in Projects/.kafeen/ (hidden).
+  A device's change made from an older version is merged line by line;
+  a clash on the same line leaves the hub's file as it is and is
+  reported. Deleted files go to .trash, never removed.
+- Code: SYNC_DIR, sync_path, write_bytes, to_trash, setup_hub, Hub
+  (refresh, put, delete, mkdir, rmdir, state, changes, blob);
+  make_server(…, hub) answers /sync/state, /sync/changes (long-poll),
+  /sync/blob/<hash>, POST /sync/put, /sync/delete, /sync/mkdir,
+  /sync/rmdir with a Bearer pairing code.
+
+
 2.1.0  2026-11-21  The page is live
 -------------------------------------------------
 - New: when a notes file changes on disk (by hand in another editor, from
