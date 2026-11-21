@@ -490,3 +490,12 @@ table.tl td.w.plan { color: var(--muted); }
 .wday .whead .wpts { flex: none; margin-left: auto; font-weight: 400; color: var(--muted); }
 .wside h4 .wtotal { float: right; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
 .hmark { flex: none; margin-right: 3px; font-size: .85em; line-height: 1; }
+/* Upcoming's Habits (2.0.25): tick (today) · 🔁 title · project and frequency · effort · next day */
+.urow { display: flex; align-items: center; gap: 6px; min-height: calc(28px * var(--fz)); padding: 0 8px; border-radius: 5px; font-size: calc(14px * var(--fz)); }
+.urow:hover { background: var(--hover); }
+.urow .utick { width: 22px; flex: none; }
+.urow .wt { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urow .wd { flex: none; color: var(--muted); font-size: calc(12.5px * var(--fz)); }
+.urow .weff { flex: none; font-size: calc(10px * var(--fz)); font-weight: 700; padding: 0 4px; border-radius: 3px; background: var(--effort); color: var(--effort-text); }
+.urow .unext { flex: none; width: calc(80px * var(--fz)); text-align: right; color: var(--muted); font-size: calc(12.5px * var(--fz)); }
+.urow .unext.now { color: var(--accent); font-weight: 600; }

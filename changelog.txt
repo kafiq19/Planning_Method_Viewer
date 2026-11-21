@@ -5,6 +5,20 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.0.26  2026-11-21  Habits in Upcoming
+-------------------------------------------------
+- New: Upcoming has a Habits group (marked 🔁): each habit due in the
+  next 14 days, its project and how often, its effort, and its next day.
+  One due today has its tick box; once ticked it stays, with "next …".
+  On All projects it lists every project's habits; on a project's Backlog
+  page, that project's. Ticking from a Backlog page writes the project's
+  habits.kf (the backlog is untouched), with Undo.
+- CLI: the upcoming view over a projects folder lists the habits too.
+- Code: upcoming_habits, own_habits; page_data(…, own) adds the
+  project's habits and their version; to_data upcoming.habits and
+  upcoming.today; editTask edits a habit on disk from a page.
+
+
 2.0.25  2026-11-21  Habits in the Planner: counts, effort, 🔁
 -------------------------------------------------
 - New: every habit in the Planner and on the Habits page is marked 🔁.

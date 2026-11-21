@@ -1631,6 +1631,7 @@ class TestCLI(unittest.TestCase):
             self.assertIn(heading, out)
         self.assertIn("site visit prep   Sep 30   OVERDUE", out)
         self.assertIn("Mon 12\n    [x] @HDC  gather requirements (RT)\n    [ ] @HDC  inbox zero  (habit)", out)
+        self.assertIn("Habits\n    Oct 12    @HDC  inbox zero   (Weekdays)\n", out)                 # 2.0.25: Upcoming too
         with tempfile.TemporaryDirectory() as d:
             for rel, text in (("A/backlog.kf", "- own\n@Stream\n- b\n"), ("A/habits.kf", "- walk *weekly Sat, Sun\n")):
                 os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
@@ -2229,6 +2230,25 @@ class TestServerPortfolio(Base):
         self.assertEqual(d["planner"]["habits"][0]["done"], ["2026-11-06"])
         code, d = self.post("/api/parse", {"text": "- x *daily\n\t-- done Dec30\n", "name": "HDC", "habits": True, "year": 2025})
         self.assertEqual(d["projects"][0]["projects"][0]["tasks"][0]["log"], ["2025-12-30"])   # an archive: its own year
+
+    def test_habits_in_upcoming_on_a_backlog_page(self):                 # 2.0.25: the project's own habits, ticked on disk
+        self.write("HDC/habits.kf", "- stretch (s) *daily\n- gym *weekly Mon\n")
+        code, d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "today": "2026-11-06"})
+        u = d["upcoming"]["habits"]
+        self.assertEqual([(x["title"], x["next"], x["due"], x["path"]) for x in u],
+                         [("stretch", "2026-11-06", ["2026-11-06"], "HDC/habits.kf"), ("gym", "2026-11-09", [], "HDC/habits.kf")])
+        self.assertEqual((d["upcoming"]["today"]["token"], list(d["versions"])), ("Nov06", ["HDC/habits.kf"]))
+        code, out = self.post("/api/edit", {"path": "HDC/habits.kf", "version": d["versions"]["HDC/habits.kf"], "habits": True,
+                                            "today": "2026-11-06", "line": 1, "title": "stretch", "op": "tick", "value": "Nov06"})
+        self.assertEqual((code, out["text"]), (200, "- stretch (s) *daily\n\t-- done Nov06\n- gym *weekly Mon\n"))
+        d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "today": "2026-11-06"})[1]
+        self.assertEqual([(x["title"], x["next"], x["done"]) for x in d["upcoming"]["habits"]],
+                         [("stretch", "2026-11-07", ["2026-11-06"]), ("gym", "2026-11-09", [])])   # ticked: the next one
+        d = self.post("/api/parse", {"text": "- a task\n", "name": "HDC", "habits": True, "today": "2026-11-06"})[1]
+        self.assertEqual(d["upcoming"]["habits"], [])                                     # the Habits page itself: none
+        d = self.post("/api/parse", {"all": True, "today": "2026-11-06"})[1]
+        self.assertEqual([x["title"] for x in d["upcoming"]["habits"]], ["stretch", "gym"])
+        self.assertEqual(self.post("/api/parse", {"text": "- a\n", "today": "2026-11-06"})[1]["upcoming"]["habits"], [])
 
     def test_archive_habit_log(self):
         self.write("HDC/habits.kf", "- stretch *daily\n\t-- done Dec30 Jan02\n")

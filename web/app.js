@@ -379,6 +379,16 @@ async function editTask(t, op, value, btn, done) {   // -> true if the text chan
       plannerView();
       return true;
     }
+    if (t.path && state.data.versions && t.path in state.data.versions && !(state.file && state.file.path === t.path)) {
+      // 2.0.25: a habit shown on a project's Backlog page (Upcoming): its habits.kf is edited on disk, then the page redrawn
+      const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: t.path, version: state.data.versions[t.path], line: t.line, title: t.title, op, value, ...when, habits: true }) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.conflict ? "its habits changed on disk; the view is up to date now, so try again" : res.error || r.statusText);
+      state.msg = { text: done, undo: { path: t.path, before: res.before, after: res.text, version: res.version } };
+      await render(false);
+      return true;
+    }
     const r = await fetch("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: before, name: folioName(), line: t.line, title: t.title, op, value, ...when }) });
     const res = await r.json();
@@ -659,7 +669,7 @@ function filtered(d) {
     timeline: { ...d.timeline, rows: flat(d.timeline.rows).filter(shown), unscheduled: flat(d.timeline.unscheduled).filter(shown) },
     people: d.people.filter(g => !filt.who || g.name === filt.who)
       .map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
-    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing) },
+    upcoming: { ...u, overdue: flat(u.overdue), due: flat(u.due), reminders: flat(u.reminders), doing: flat(u.doing), habits: flat(u.habits || []) },
     planner: { ...d.planner, columns: d.planner.columns.map(x => ({ ...x, tasks: flat(x.tasks).filter(shown) })),
       projects: d.planner.projects.map(g => ({ ...g, tasks: flat(g.tasks).filter(shown) })).filter(g => g.tasks.length),
       backlog: d.planner.backlog.map(g => ({ ...g, tasks: flat(g.tasks) })).filter(g => g.tasks.length),
@@ -1335,6 +1345,15 @@ function vUpcoming(d) {
   group("In progress", u.doing, t => taskNode(t, { project: true, span: true }));
   group("Due soon", u.due, t => taskNode(t, { project: true, span: true }));
   group("Reminders", u.reminders, t => taskNode(t, { project: true, date: t.date, rem: "*" + t.spec }));
+  group("Habits", u.habits || [], t => {          // 2.0.25: each habit's next day due; due today: its tick box (ticked stays here)
+    const dueToday = t.due.length > 0, now = t.next === u.today.date, row = h("div", "urow");   // no data-line: its line is in habits.kf
+    row.append(...[dueToday ? tickButton(t, u.today, true) : span("utick"), habitMark(), span("wt", t.title),
+      span("wd", projLabel({ name: t.project, folder: t.folder }) + " · " + (t.every_label || "")),
+      t.effort ? span("weff", t.effort.toUpperCase()) : null, span("unext" + (now ? " now" : ""), now ? "today" : (dueToday ? "next " : "") + t.next_label)].filter(Boolean));
+    row.title = `${t.title}: ${t.every_label || ""}, ` + (dueToday && !now ? "done today; " : "") + `next ${now ? "today" : t.next_label}`
+      + (t.effort ? ` · ${pts(t.points)} each time` : "");
+    return row;
+  });
   if (out.children.length === 1) out.append(h("div", "empty", d.filtered ? "Nothing matches in the next " + u.days + " days."
     : "Nothing due, overdue or in progress in the next " + u.days + " days."));
   if (d.targets.length) out.append(addTaskRow(null));

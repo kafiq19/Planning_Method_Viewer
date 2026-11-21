@@ -46,7 +46,7 @@ NOTE FORMAT (quick reference)
   *Oct17  *weekly Fri  *monthly 1st  *daily     reminder
   *weekdays  *weekly Mon, Wed, Fri                repeating: in habits.kf, a habit's frequency
   -- done Nov02 Nov03           a habit's log: the days it was done
-  - gym (m) *weekly Mon, Wed   a habit's effort counts once per day due (the Planner's totals)
+  - gym (m) *weekly Mon, Wed   a habit's effort counts once per day due (the Planner's totals); habits show in Upcoming
   >Oct14  >wk45  >Nov  >T3      planned: when you mean to work on it (the Planner; separate from the date);
                                 several are fine: >Oct14 >Oct16
   ^wk45  ^Nov  ^T3  ^yr         a top priority for that week, month, trimester or this year
@@ -978,7 +978,18 @@ def upcoming_groups(projects):
     return horizon, overdue, due, doing, reminders
 
 
-def view_upcoming(projects):
+def upcoming_habits(habits):
+    """2.0.25: [(next, project, task, specs, due today, done today)] for each habit due from TODAY to the horizon:
+    its next day due that isn't ticked yet (today until it is ticked), by that day."""
+    out = []
+    for p, t, specs, due, done in habit_rows(habits or [], TODAY, TODAY + timedelta(days=UPCOMING_DAYS)):
+        nxt = next((d for d in due if d not in done), None)
+        if nxt:
+            out.append((nxt, p, t, specs, TODAY in due, TODAY in done))
+    return sorted(out, key=lambda r: r[0])
+
+
+def view_upcoming(projects, habits=None):
     horizon, overdue, due, doing, reminders = upcoming_groups(projects)
     out = ["UPCOMING", "========", f"Today is {fd(TODAY)}; looking ahead {UPCOMING_DAYS} days to {fd(horizon)}"]
 
@@ -993,6 +1004,9 @@ def view_upcoming(projects):
     section("Due soon", [f"    {fd(d):<9} @{p.name}  {t.label()}" for d, p, t in sorted(due, key=lambda r: r[0])])
     section("Reminders", [f"    {fd(d):<9} @{p.name}  {t.label()}   (*{spec})"
                           for d, spec, p, t in sorted(reminders, key=lambda r: r[0])])
+    if habits:                                            # 2.0.25: each habit's next day due (a portfolio's habits.kf)
+        section("Habits", [f"    {fd(d):<9} @{p.name}  {t.title}   ({', '.join(every_label(x) for x in specs)})"
+                           + (f"  [{t.effort.upper()}]" if t.effort else "") for d, p, t, specs, _, _ in upcoming_habits(habits)])
     return out
 
 
@@ -1177,7 +1191,13 @@ def to_data(projects, period=None, plan=None, habits=None, every=False):
             "overdue": [flat(p, t) for _, p, t in sorted(overdue, key=lambda r: r[0])],
             "due": [flat(p, t) for _, p, t in sorted(due, key=lambda r: r[0])],
             "reminders": [dict(flat(p, t), spec=spec, date=fd(d)) for d, spec, p, t in sorted(reminders, key=lambda r: r[0])],
-            "doing": [flat(p, t) for p, t in doing]},
+            "doing": [flat(p, t) for p, t in doing],
+            "today": {"date": iso(TODAY), "head": f"{('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[TODAY.weekday()]} {TODAY.day}",
+                      "token": f"{MONTH_NAMES[TODAY.month - 1]}{TODAY.day:02d}", "today": True, "future": False},
+            "habits": [dict(flat(p, t), every=specs, every_label=", ".join(every_label(x) for x in specs) or None,
+                            next=iso(d), next_label=fd(d), due=[iso(TODAY)] if due_today else [],
+                            done=[iso(TODAY)] if done_today else [])
+                       for d, p, t, specs, due_today, done_today in ([] if every else upcoming_habits(habits))]},
         "planner": {
             **pref(plan), "start": iso(pstart), "end": iso(pend), "current": plan == pnow,
             "prev": pref(planner_step(*plan, -1)), "next": pref(planner_step(*plan, 1)), "now": pref(pnow),
@@ -2331,11 +2351,20 @@ def import_notes(text, root, name, split=False):
     return out
 
 
-def page_data(text, name=None, period=None, plan=None, habits=False):
+def page_data(text, name=None, period=None, plan=None, habits=False, own=None):
     """to_data for one notes text; with `name` (a portfolio page: its project's name) the tasks before
-    any @ belong to that project, and `targets` always offers it (line 0 when it has no tasks yet)."""
+    any @ belong to that project, and `targets` always offers it (line 0 when it has no tasks yet).
+    `own` (2.0.25, a project's Backlog): (its habits.kf path, text, version), for Upcoming's and the Planner's
+    habits; the habits carry that `path` and `versions` gets its version, so the page edits (ticks) them on disk."""
     projects = parse(text, name)
-    d = to_data(projects, period, plan, projects if habits else None, habits)
+    hab = None
+    if own and not habits:
+        hab = parse(own[1], name)
+        for hp in hab:
+            hp.path, hp.folder = own[0], name
+    d = to_data(projects, period, plan, projects if habits else hab, habits)
+    if hab is not None:
+        d["versions"] = {own[0]: own[2]}
     if name and not any(t["name"] == name and t["line"] for t in d["targets"]):
         d["targets"].insert(0, {"name": name, "line": 0, "path": None, "folder": None, "section": None})
     return d
@@ -2400,6 +2429,21 @@ def apply_edit(text, req):
     elif not isinstance(req["value"], str):
         raise EditError("value must be text")
     return op(text, req["line"], req["value"], req.get("title"))
+
+
+def own_habits(root, name, req):
+    """2.0.25: (path, text, version) of the project `name`'s habits.kf for its Backlog page, or None (not a
+    portfolio, a Habits or archive page, no such project)."""
+    if not root or not name or req.get("habits") or req.get("year") is not None:
+        return None
+    rel = f"{name}/habits.kf"
+    try:
+        p = portfolio_path(root, rel)
+    except PortfolioError:
+        return None
+    if not os.path.isdir(os.path.dirname(p)):
+        return None
+    return (rel,) + read_notes(p)
 
 
 def _hide(req):
@@ -2503,11 +2547,11 @@ def make_server(port, notes_path=None, portfolio=None):
                         if folio is None:
                             return self._json(409, {"error": "no projects folder is being served (planner.py --serve)"})
                         return self._json(200, portfolio_data(folio, period, monday, _hide(req)))
-                    return self._json(200, page_data(text, name, period, monday, bool(req.get("habits"))))
+                    return self._json(200, page_data(text, name, period, monday, bool(req.get("habits")), own_habits(folio, name, req)))
                 if "path" in req:
                     return self._edit_file(req, period, monday)
                 text = apply_edit(text, req)
-                self._json(200, {"text": text, "data": page_data(text, name, period, monday, bool(req.get("habits")))})
+                self._json(200, {"text": text, "data": page_data(text, name, period, monday, bool(req.get("habits")), own_habits(folio, name, req))})
             except EditError as e:
                 self._json(409, {"error": str(e)})
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -2530,7 +2574,8 @@ def make_server(port, notes_path=None, portfolio=None):
             except FileConflict:
                 return self._json(409, {"error": "the file changed on disk since it was loaded", "conflict": True,
                                         "version": read_notes(p)[1]})
-            data = portfolio_data(folio, period, monday, _hide(req)) if folio and req.get("all") else page_data(text, name, period, monday, hab)
+            data = (portfolio_data(folio, period, monday, _hide(req)) if folio and req.get("all")
+                    else page_data(text, name, period, monday, hab, None if hab else own_habits(folio, name, req)))
             self._json(200, {"text": text, "before": before, "version": version, "data": data})
 
         def _archive(self, req, period, monday):
@@ -2576,7 +2621,8 @@ def make_server(port, notes_path=None, portfolio=None):
                                         "version": read_notes(src)[1]})
             name = project_name(path)
             data = (portfolio_data(folio, period, monday, _hide(req)) if req.get("all")
-                    else page_data(rest, name, period, monday, portfolio_kind(path) == "habits"))
+                    else page_data(rest, name, period, monday, portfolio_kind(path) == "habits",
+                                   None if portfolio_kind(path) == "habits" else own_habits(folio, name, req)))
             self._json(200, {"text": rest, "version": version, "data": data, "archive": arel,
                              "moved": sum(1 for _, b in moved for r in b if RE_TASK.match(r.strip()) and not r.strip().startswith("--")),
                              "tree": portfolio_tree(folio),
@@ -2794,7 +2840,8 @@ def main(argv):
         print("No projects or tasks found.")
         return
     for name in chosen or list(VIEWS):
-        print("\n".join(view_week(projects, None, habits) if name == "week" else VIEWS[name](projects)))
+        print("\n".join(view_week(projects, None, habits) if name == "week" else view_upcoming(projects, habits)
+                         if name == "upcoming" else VIEWS[name](projects)))
         print()
 
 
