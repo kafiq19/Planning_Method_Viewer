@@ -2742,6 +2742,23 @@ class TestDeviceSync(SyncBase):                               # 2.1.2: devices p
         self.assertEqual(self.get(self.b, "MDM/notes/Plan.md"), "# plan\n")
         self.assertEqual(self.cb.round(), {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0})   # in step
 
+    def test_empty_folders_settle(self):                              # 2.1.5: a pushed or pulled empty folder stays
+        still = {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0}
+        self.ca.round()
+        os.makedirs(os.path.join(self.a, "HDC", "archive"))              # empty on A
+        os.makedirs(os.path.join(self.hubdir, "HDC", "notes"))           # empty on the hub
+        self.ca.round()
+        for _ in range(3):
+            self.assertEqual(self.ca.round(), still)
+        for d in ("HDC/archive", "HDC/notes"):
+            self.assertTrue(os.path.isdir(os.path.join(self.a, d)), d)
+            self.assertTrue(os.path.isdir(os.path.join(self.hubdir, d)), d)
+        self.assertFalse(os.path.exists(os.path.join(self.a, ".trash")))
+        self.assertFalse(os.path.exists(os.path.join(self.hubdir, ".trash")))
+        seq = self.ca._req("GET", "/sync/state")["seq"]
+        self.ca.round()
+        self.assertEqual(self.ca._req("GET", "/sync/state")["seq"], seq)     # nothing more logged
+
     def test_offline_edits_merge(self):
         self.ca.round(); self.cb.round()
         self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")            # both edit while apart

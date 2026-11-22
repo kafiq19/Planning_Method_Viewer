@@ -3002,10 +3002,12 @@ class SyncClient:
                 with self.lock:
                     os.makedirs(self._local(d), exist_ok=True)
                 self.bdirs.add(d)
+                dirs.add(d)                             # 2.1.5: on both sides now, so it isn't "gone" below
                 n["pulled"] += 1
             elif here and not known:
                 self._req("POST", "/sync/mkdir", {"path": d})
                 self.bdirs.add(d)
+                HD.add(d)
                 n["pushed"] += 1
         for rel in sorted(set(files) | set(H) | set(self.base)):
             L, B, Hh = files.get(rel), self.base.get(rel), H.get(rel)
