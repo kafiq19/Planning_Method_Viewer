@@ -5,6 +5,19 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.5  2026-11-21  Empty folders no longer loop
+-------------------------------------------------
+- Fixed: a device with an empty folder the hub didn't have (a project's
+  notes/ or archive/) kept sending it to the hub, then moving it to .trash
+  and removing it there, over and over: the sync pill flickered between
+  Synced and Syncing and the hub's log grew by thousands of entries. Only
+  empty folders were affected; no file was touched.
+- Code: SyncClient.round adds a folder it just sent (or pulled) to the
+  hub's (or its own) list for the rest of the round, so the "folders gone
+  on one side" step doesn't take it for removed. Test:
+  test_empty_folders_settle.
+
+
 2.1.4  2026-11-21  Install on every device
 -------------------------------------------------
 - New: python3 planner.py --autostart on starts KAFEEN when you log in
