@@ -494,6 +494,7 @@ const shownKey = () => [state.file && state.file.path, state.all, state.tab, sta
 function unchanged(data) {
   const view = $("viewPane");
   return !!state.shown && state.shown.key === shownKey() && view.children.length === 2 && view.firstChild === tabsRow
+    && state.shown.msg === state.msg                         // 2.1.7: a new message (a refused edit, a failed Undo) still shows
     && JSON.stringify(state.shown.data) === JSON.stringify(data);
 }
 
@@ -1097,7 +1098,7 @@ function plannerView() {
   plannerBody.replaceChildren((habitsPage ? vHabits : { projects: vProjects, timeline: vTimeline, people: vPeople, upcoming: vUpcoming, planner: vPlanner }[state.tab])(d));
   showToast();
   if (view.children.length !== 2 || view.firstChild !== tabsRow) view.replaceChildren(tabsRow, contentBox);
-  state.shown = { key: shownKey(), data: state.data };
+  state.shown = { key: shownKey(), data: state.data, msg: state.msg };
 }
 
 const BELL = "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0";
@@ -2432,6 +2433,7 @@ async function openPage(path) {                      // show one of a project's 
     return showToast();
   }
   state.all = false;
+  if (state.tab === "planner") { state.tab = "projects"; store.set("tab", "projects"); }   // 2.1.7: the Planner is All projects' only
   state.mode = modeOf(path); store.set("mode", state.mode);
   store.set("folioActive", path);
   setScope(path.split("/")[0]);                       // this project is held across the tabs

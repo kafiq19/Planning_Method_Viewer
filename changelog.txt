@@ -5,6 +5,23 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.7  2026-11-21  Refused edits say why again; one Planner
+-------------------------------------------------
+- Fixed: opening a project's page from the drawer while the Planner tab
+  was selected showed that page with its Planner tab (DFO > Backlog, with
+  the Text / Planner / Markdown switch), which looks almost like the real
+  Planner (DFO > Planner, no switch), so two devices could show "the same
+  page" differently. Opening a page (or reloading on one) now switches to
+  the Projects tab; the Planner is only ever the one for every project.
+- Fixed: when an edit was refused (a date like Feb30, a stale view), or an
+  Undo or an archive failed, no message appeared: the edit just didn't
+  happen. Since 2.0.28 (the merge of main's "fewer redraws"), the page
+  skipped redrawing when the data hadn't changed, and the message is shown
+  by that redraw. It now redraws when a new message is waiting.
+- Code: unchanged() also compares state.msg with the message last drawn
+  (state.shown.msg). Checked in the browser against 2.0.27.
+
+
 2.1.6  2026-11-21  New pairing codes without restarts
 -------------------------------------------------
 - Fixed: --setup-hub --new-code wrote the new code, but the running hub
