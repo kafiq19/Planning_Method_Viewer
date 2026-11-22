@@ -5,6 +5,24 @@ Newest first. Versions are MAJOR.MINOR.PATCH. Each entry lists what changed
 for people using the tool, then notes for anyone working on the code.
 
 
+2.1.6  2026-11-21  New pairing codes without restarts
+-------------------------------------------------
+- Fixed: --setup-hub --new-code wrote the new code, but the running hub
+  kept accepting only the old one until it was restarted, so pairing with
+  the new code said "the pairing code is wrong". The hub now picks up a new
+  code by itself (and the old one stops working at once). --new-code says
+  so, and that each device pairs again.
+- Fixed: pairing again while KAFEEN was running could be undone: the
+  running KAFEEN wrote the old pairing back. It now takes the new pairing
+  (and notices --unpair) instead.
+- Pairing again with the same hub keeps the device's name and what was
+  already in step, so edits not yet sent don't turn into clashes. No need
+  to --unpair first.
+- Code: Hub._load_token (checked in allowed); pair keeps seq/base/dirs for
+  the same hub; SyncClient._reload, _use, _conf_sig, and _save skips a
+  device.json changed since it was read. Test: test_new_code_while_running.
+
+
 2.1.5  2026-11-21  Empty folders no longer loop
 -------------------------------------------------
 - Fixed: a device with an empty folder the hub didn't have (a project's

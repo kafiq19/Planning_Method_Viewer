@@ -2729,6 +2729,25 @@ class TestDeviceSync(SyncBase):                               # 2.1.2: devices p
         with self.assertRaises(ValueError):
             planner.pair(self.b, "http://127.0.0.1:1", self.code)         # nobody there
 
+    def test_new_code_while_running(self):                           # 2.1.6: no restarts needed
+        self.ca.round()
+        new = planner.setup_hub(self.hubdir, new=True)                   # the running hub takes it at once
+        with self.assertRaises(ValueError):
+            self.ca.round()                                              # the old code is refused
+        planner.pair(self.a, self.url, new)                              # paired again while A's client runs
+        self.ca._save()                                                  # the running client doesn't write it back
+        with open(os.path.join(self.a, ".kafeen", "device.json")) as f:
+            conf = json.load(f)
+        self.assertEqual((conf["code"], conf["name"]), (new, "A"))       # same hub: name and what was agreed kept
+        self.assertIn("HDC/backlog.kf", conf["base"])
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        self.assertEqual(self.ca.round()["pushed"], 1)                   # and it syncs with the new code
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        os.remove(os.path.join(self.a, ".kafeen", "device.json"))       # --unpair while running
+        with self.assertRaises(ValueError):
+            self.ca.round()
+        self.assertFalse(os.path.exists(os.path.join(self.a, ".kafeen", "device.json")))
+
     def test_first_sync_and_edits_both_ways(self):
         self.assertEqual(self.ca.round()["pulled"], 2)                    # HDC/ and its backlog
         self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
