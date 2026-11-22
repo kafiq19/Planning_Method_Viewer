@@ -31,6 +31,7 @@ USAGE
                                        and plan tasks for days in Week (and print the plan on one page)
                                        The page is live: notes changed on disk show at once (2.1.0)
   --setup-hub [FOLDER] [--new-code]    make the Projects folder (or FOLDER) the sync hub; prints the pairing code
+                                       (--new-code: a running hub takes it at once; pair each device again) (2.1.6)
   --serve --hub [--host ADDR]          serve the hub: paired devices keep their Projects folder in step (2.1.1)
   --autostart on|off [--hub]           start KAFEEN (or the hub) when you log in: systemd (Linux), LaunchAgent
                                        (macOS), Startup folder (Windows) (2.1.4). --no-browser: --serve opens none
@@ -2652,10 +2653,8 @@ class Hub:
         import json
         import threading
         self.root, self.dir = os.path.realpath(root), os.path.join(os.path.realpath(root), SYNC_DIR)
-        try:
-            with open(os.path.join(self.dir, "hub.json")) as f:
-                self.token = json.load(f)["token"]
-        except (OSError, ValueError, KeyError):
+        self.token, self.token_sig = None, None
+        if not self._load_token():
             raise ValueError("this folder isn't a hub yet: run planner.py --setup-hub first")
         self.cond = threading.Condition()
         self.files, self.dirs, self.entries, self.stats = {}, set(), [], {}
@@ -2676,8 +2675,25 @@ class Hub:
     def seq(self):
         return self.entries[-1]["seq"] if self.entries else 0
 
+    def _load_token(self):
+        """(Re)read the code's hash from hub.json when the file changed (2.1.6: --setup-hub --new-code takes
+        effect on a running hub); a file that can't be read keeps the code it had. -> whether there is one."""
+        import json
+        path = os.path.join(self.dir, "hub.json")
+        try:
+            st = os.stat(path)
+            sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+            if sig != self.token_sig:
+                with open(path) as f:
+                    self.token = json.load(f)["token"]
+                self.token_sig = sig
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return bool(self.token)
+
     def allowed(self, header):
         import hmac
+        self._load_token()
         code = header[7:].strip() if isinstance(header, str) and header.startswith("Bearer ") else ""
         return bool(code) and hmac.compare_digest(_sha(code.encode()), self.token)
 
@@ -2850,7 +2866,8 @@ def _sync_request(hub, code, name, method, path, payload=None, timeout=15):
 
 def pair(root, hub, code, name=None):
     """Pair the Projects folder `root` with the hub at `hub` (2.1.2): checks the code, writes .kafeen/device.json
-    (readable only by you: it holds the code); -> the hub's state. ValueError if refused or unreachable."""
+    (readable only by you: it holds the code); -> the hub's state. ValueError if refused or unreachable. Paired
+    again with the same hub (2.1.6: a new code), it keeps its name and what was last agreed (seq, base, dirs)."""
     import json
     import socket
     from urllib.parse import urlsplit
@@ -2864,14 +2881,24 @@ def pair(root, hub, code, name=None):
         raise ValueError(f"{hub!r} isn't a hub address (like http://kafeen-hub:8765)")
     if u.port is None and u.scheme == "http":
         hub += ":8765"
-    name = (name or socket.gethostname().split(".")[0] or "a device")[:60]
+    path = os.path.join(root, SYNC_DIR, "device.json")
+    old = {}
+    try:                                                # 2.1.6: paired again with the same hub (a new code):
+        with open(path) as f:                           # keep what was agreed, so pending edits aren't clashes
+            old = json.load(f)
+        if old.get("hub") != hub:
+            old = {}
+    except (OSError, ValueError):
+        pass
+    name = (name or old.get("name") or socket.gethostname().split(".")[0] or "a device")[:60]
     try:
         state = _sync_request(hub, code, name, "GET", "/sync/state")
     except OSError as e:
         raise ValueError(f"can't reach the hub at {hub} ({e}); is it running, and is Tailscale on?")
     os.makedirs(os.path.join(root, SYNC_DIR), exist_ok=True)
-    path = os.path.join(root, SYNC_DIR, "device.json")
-    write_bytes(path, json.dumps({"hub": hub, "code": code, "name": name, "seq": 0, "base": {}, "dirs": []}, indent=1).encode())
+    keep = {k: old[k] for k in ("seq", "base", "dirs") if k in old}
+    write_bytes(path, json.dumps({"hub": hub, "code": code, "name": name, "seq": 0, "base": {}, "dirs": [], **keep},
+                                 indent=1).encode())
     os.chmod(path, 0o600)
     return state
 
@@ -2891,11 +2918,9 @@ class SyncClient:
         self.root = os.path.realpath(root)
         self.dir = os.path.join(self.root, SYNC_DIR)
         self.conf_path = os.path.join(self.dir, "device.json")
+        self.conf_sig = self._conf_sig()
         with open(self.conf_path) as f:
-            self.conf = json.load(f)
-        self.hub, self.code, self.name = self.conf["hub"], self.conf["code"], self.conf["name"]
-        self.base, self.bdirs = dict(self.conf.get("base", {})), set(self.conf.get("dirs", []))
-        self.seq = self.conf.get("seq", 0)
+            self._use(json.load(f))
         self.lock = lock or threading.RLock()
         self.on_change, self.on_status = on_change, on_status
         self.blobs = os.path.join(self.dir, "blobs")
@@ -2904,6 +2929,39 @@ class SyncClient:
         self.cache, self.wake, self.stop = {}, threading.Event(), threading.Event()
         self.status = {"state": "syncing", "waiting": 0, "conflicts": self._conflict_count(), "hub": self.hub,
                        "name": self.name, "last": None, "error": None}
+
+    def _use(self, conf):
+        self.conf = conf
+        self.hub, self.code, self.name = conf["hub"], conf["code"], conf["name"]
+        self.base, self.bdirs = dict(conf.get("base", {})), set(conf.get("dirs", []))
+        self.seq = conf.get("seq", 0)
+
+    def _conf_sig(self):
+        try:
+            st = os.stat(self.conf_path)
+            return (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            return None
+
+    def _reload(self):
+        """2.1.6: device.json changed under a running server (--pair again, or --unpair): take the new pairing
+        (its hub, code and a fresh start) instead of writing the old one back. ValueError once it's unpaired."""
+        import json
+        sig = self._conf_sig()
+        if sig == self.conf_sig:
+            return False
+        if sig is None:
+            raise ValueError("this folder isn't paired any more (pair it again with --pair)")
+        try:
+            with open(self.conf_path) as f:
+                conf = json.load(f)
+            conf["hub"], conf["code"], conf["name"]
+        except (OSError, ValueError, KeyError):
+            return False                                # half written: the next round looks again
+        self._use(conf)
+        self.conf_sig = sig
+        self.status.update(hub=self.hub, name=self.name)
+        return True
 
     @staticmethod
     def paired(root):
@@ -2926,8 +2984,11 @@ class SyncClient:
 
     def _save(self):
         import json
+        if self._conf_sig() != self.conf_sig:           # paired again (or unpaired) meanwhile: leave it be
+            return
         self.conf.update(seq=self.seq, base=self.base, dirs=sorted(self.bdirs))
         write_bytes(self.conf_path, json.dumps(self.conf, indent=1).encode())
+        self.conf_sig = self._conf_sig()
 
     def _conflict_count(self):
         try:
@@ -2989,6 +3050,7 @@ class SyncClient:
     def round(self):
         """Bring this folder and the hub's into step once; -> {pulled, pushed, merged, conflicts}."""
         import base64
+        self._reload()
         st = self._req("GET", "/sync/state")
         with self.lock:
             files, dirs, self.cache = scan_tree(self.root, self.cache, self.keep)
@@ -3131,8 +3193,8 @@ class SyncClient:
                     self.kick()                         # another device (or the hub) changed something
                 seq = d["seq"]
             except (OSError, ValueError, KeyError):
-                if self.status.get("state") not in ("offline", "error"):
-                    self.kick()                         # let a round find out what's wrong and say so
+                if self.status.get("state") not in ("offline", "error") or self._conf_sig() != self.conf_sig:
+                    self.kick()                         # let a round find out what's wrong (or use a new pairing)
                 self.stop.wait(5)
 
 
@@ -4152,6 +4214,9 @@ Start the hub (and keep it running):
 Then, on each computer:
     python3 planner.py --pair http://THIS-COMPUTER:8765 {code}
 (THIS-COMPUTER: its Tailscale name, like kafeen-hub.)""")
+        if new:
+            print("\nThe old code stops working now (a running hub takes the new one by itself).\n"
+                  "Pair each device again with the new code; KAFEEN can keep running while you do.")
         return
     if "--pair" in args:                                       # 2.1.2: this computer's Projects folder follows the hub
         args.remove("--pair")

@@ -244,9 +244,9 @@ Pair the computer that has your projects first: an empty hub takes them. Any com
 
 | Command | What it does |
 |---|---|
-| `--setup-hub [--new-code]` | Make this computer's `Projects` the hub; `--new-code` replaces a lost code (every device then pairs again) |
+| `--setup-hub [--new-code]` | Make this computer's `Projects` the hub; `--new-code` replaces a lost or shared code: the running hub switches to it at once, and each device pairs again with the new one (no restarts, nothing to unpair first) |
 | `--serve --hub --host 0.0.0.0` | Run the hub by hand (what `--autostart on --hub` runs) |
-| `--pair URL CODE [--name NAME]` | Pair this computer (its name in the hub's log is the computer's name unless you give one) |
+| `--pair URL CODE [--name NAME]` | Pair this computer (its name in the hub's log is the computer's name unless you give one). Pairing again with the same hub (a new code) keeps the name and what's already in step; KAFEEN can keep running |
 | `--unpair` | Stop syncing; the files stay as they are |
 | `--autostart on` / `off` (`--hub`) | Start KAFEEN (or the hub) at login, or stop that: a systemd user service on Linux, a LaunchAgent on macOS, the Startup folder on Windows |
 | `--serve --no-browser` | Run without opening a browser window |
