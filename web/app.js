@@ -196,6 +196,7 @@ async function leaveFile() {                                // before showing an
 }
 
 async function startFileMode() {
+  listen();
   let r, d;
   try { [r, d] = await fileApi(); } catch (e) { return showFile(); }   // page opened without the server
   if (!r.ok) return showFile();
@@ -216,11 +217,15 @@ async function save(force) {
   f.saving = true;
   showFile(["Saving…"]);
   try {
-    const body = { path: f.path, text, version: f.version, force: !!force };
+    const body = { path: f.path, text, version: f.version, force: !!force, base: f.saved };   // base: the server merges (2.1.0)
     const [r, d] = await fileApi(body);
     if (r.status === 409 && d.conflict) return conflict();
     if (!r.ok) throw new Error(d.error || r.statusText);
-    f.version = d.version; f.saved = text; f.blocked = false;
+    f.blocked = false;
+    if (d.merged && state.file === f && editor.value === text) {   // changed on disk meanwhile (another device, another
+      f.version = d.version; f.saved = nl(d.text); replaceText(f.saved); schedule();   // editor): both changes kept
+    } else if (d.merged) { f.version = ""; f.saved = text; }   // typed on since: the next save merges again from here
+    else { f.version = d.version; f.saved = text; }
     if (state.file === f) remember();
     showFile();
   } catch (e) {
@@ -244,15 +249,128 @@ function conflict() {                                       // the file changed 
     b("Keep mine and overwrite", () => save(true))]);
 }
 
-window.addEventListener("focus", async () => {              // pick up edits made in another editor
+async function checkDisk() {                                 // pick up edits made elsewhere (another editor, another device)
   if (state.all) return render(false);                      // All projects: read the backlogs again
   if (!state.file || state.file.saving) return;
   const f = state.file;
   let r, d;
   try { [r, d] = await fetchFile(f); } catch (e) { return; }
   if (!r.ok || state.file !== f || f.saving || d.version === f.version) return;
-  if (unsaved()) conflict(); else setFile(d.text, d.version);
-});
+  if (!unsaved()) setFile(d.text, d.version);
+  else if (!f.blocked) save();                              // 2.1.0: the server merges both changes, or says they clash
+  else conflict();
+}
+window.addEventListener("focus", checkDisk);
+/* 2.1.0: live. The server says when notes change on disk (/api/events); the page shown follows at once:
+   the open file is read again (or merged with what is being typed), the views redrawn, the drawer refreshed. */
+let liveTimer = null;
+function onDiskChange(ch) {
+  if (ch.tree && state.folio) refreshFolio().then(() => drawDrawer());
+  if (state.folio && ch.paths.includes("settings.json")) pullSettings();   // 2.1.4: changed on another device
+  const f = state.file;
+  if (f && ch.paths.includes(f.path)) checkDisk();
+  if (state.mode !== "planner" || state.all || !f || !ch.paths.includes(f.path)) {
+    clearTimeout(liveTimer);                                // views over other files (All projects, a page's habits)
+    const redraw = () => {
+      if (document.querySelector("#viewPane input:focus, #viewPane textarea:focus, #viewPane .pickbox")) return void (liveTimer = setTimeout(redraw, 1000));
+      if (state.mode === "planner") render(false);           // an open editor in the views waits until it's closed
+    };
+    redraw();
+  }
+}
+function listen() {
+  if (!window.EventSource || location.protocol === "file:") return;
+  const es = new EventSource("/api/events");
+  es.addEventListener("changed", e => { try { onDiskChange(JSON.parse(e.data)); } catch (err) {} });
+  es.addEventListener("sync", e => { try { showSync(JSON.parse(e.data)); } catch (err) {} });
+  es.addEventListener("error", () => showSync({ state: "server" }));   // the local server itself went away
+  es.addEventListener("open", () => fetch("/api/sync").then(r => r.json()).then(showSync).catch(() => {}));
+}
+/* 2.1.2: the sync pill: where this device stands with the hub (hidden when the folder isn't paired) */
+const SYNC_TEXT = { synced: "Synced", syncing: "Syncing…", offline: "Offline", error: "Sync stopped", hub: "Hub", server: "Not connected" };
+function showSync(st) {
+  const pill = $("syncPill");
+  if (!st || !SYNC_TEXT[st.state] || st.state === "server" && pill.classList.contains("hidden")) return pill.classList.add("hidden");
+  const n = st.conflicts || 0, wait = st.state === "offline" && st.waiting ? ` · ${st.waiting} waiting` : "";
+  pill.className = "syncpill s-" + st.state + (n ? " clash" : "");
+  pill.textContent = SYNC_TEXT[st.state] + wait + (n ? ` · ${n} clash${n === 1 ? "" : "es"}` : "");
+  const when = st.last ? " Last synced " + st.last.slice(11, 16) + "." : "";
+  pill.title = st.state === "hub" ? "This computer is the sync hub: your paired devices keep in step with its Projects folder."
+    : st.state === "server" ? "Lost touch with KAFEEN on this computer; it reconnects by itself when it's running again."
+    : st.state === "offline" ? `Can't reach the hub at ${st.hub}. Your changes are kept here and sent when it's back` + (st.waiting ? ` (${st.waiting} waiting).` : ".") + when
+    : st.state === "error" ? "Sync stopped: " + (st.error || "") : `In step with the hub at ${st.hub}, as "${st.name}".` + when;
+  if (n) pill.title += `\n${n} change${n === 1 ? "" : "s"} clashed with another device's. Click to choose which to keep.`;
+  pill.onclick = n ? () => reviewClashes() : null;
+  pill.onkeydown = n ? e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reviewClashes(); } } : null;
+  pill.style.cursor = n ? "pointer" : "";
+  showClashBar(n);
+}
+/* 2.1.3: clashes. A change made here that the hub couldn't merge (the same line changed on another device while
+   apart) is kept aside; the bar says so and the review panel lets the user choose, per clash, which to keep. */
+const clashBar = h("div", "clashbar hidden");
+document.querySelector("header").after(clashBar);
+function showClashBar(n) {
+  clashBar.classList.toggle("hidden", !n);
+  if (!n) return;
+  const b = h("button", "", "Review");
+  b.onclick = () => reviewClashes();
+  clashBar.replaceChildren(span("", "⚠"), span("", ` ${n} change${n === 1 ? "" : "s"} made here clashed with another device's. Nothing is lost: choose which to keep. `), b);
+}
+const linesText = ls => ls.length ? ls.map(x => x.replace(/\r?\n$/, "")).join("\n") : "(removed)";
+async function reviewClashes() {
+  let list = [];
+  try { list = (await (await fetch("/api/clashes")).json()).clashes; } catch (e) { return; }
+  document.querySelectorAll(".clashdlg, .clashscrim").forEach(x => x.remove());
+  if (!list.length) return;
+  const scrim = h("div", "clashscrim"), dlg = h("div", "clashdlg");
+  dlg.setAttribute("role", "dialog"); dlg.setAttribute("aria-modal", "true"); dlg.setAttribute("aria-label", "Clashes");
+  const close = () => { scrim.remove(); dlg.remove(); document.removeEventListener("keydown", esc, true); };
+  const esc = e => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  document.addEventListener("keydown", esc, true);
+  scrim.onclick = close;
+  const x = h("button", "ghost dclose", "×"); x.setAttribute("aria-label", "Close"); x.onclick = close;
+  dlg.append(h("div", "chead", h("h3", "", "Clashes"), x),
+    h("p", "cnote", "These changes were made on this device while another device changed the same lines. The other device's version is what you see now; yours was set aside. Choose what to keep."));
+  for (const c of list) {
+    const where = pathParts(c.path).join(" › "), when = c.time ? `${MON3[+c.time.slice(5, 7) - 1]} ${+c.time.slice(8, 10)}, ${c.time.slice(11, 16)}` : "";
+    const card = h("div", "ccard", h("div", "cwhere", h("b", "", where), span("cwhen", ` · your change from ${when}`)));
+    const choices = c.whole ? ["theirs"] : c.clashes.map(() => "theirs");
+    const seg = (i, opts) => {
+      const box = h("span", "seg cseg");
+      for (const [v, label] of opts) {
+        const b = h("button", v === choices[i] ? "on" : "", label);
+        b.onclick = () => { choices[i] = v; [...box.children].forEach(y => y.classList.toggle("on", y === b)); };
+        box.append(b);
+      }
+      return box;
+    };
+    if (c.whole) {
+      card.append(h("div", "cpair one", h("div", "cside", span("clab", "Yours (set aside)"), h("pre", "", (c.mine || "").split("\n").slice(0, 14).join("\n")))),
+        seg(0, [["theirs", "Keep what's there"], ["mine", "Use yours instead"], ["both", "Keep both (yours as a copy)"]]));
+    } else c.clashes.forEach((k, i) => {
+      card.append(h("div", "cline", `Line ${k.line}`),
+        h("div", "cpair", h("div", "cside", span("clab", "Now (the other device's)"), h("pre", "", linesText(k.theirs))),
+          h("div", "cside mine", span("clab", "Yours (set aside)"), h("pre", "", linesText(k.mine)))),
+        seg(i, [["theirs", "Keep theirs"], ["mine", "Keep yours"], ["both", "Keep both"]]));
+    });
+    const apply = h("button", "primary", "Apply");
+    apply.onclick = async () => {
+      const r = await fetch("/api/clashes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: c.id, choices }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { state.msg = { text: "Can't apply: " + (d.error || r.statusText), bad: true }; return showToast(); }
+      const kept = choices.every(v => v === "theirs") ? "Kept what's there" : choices.every(v => v === "mine") ? "Kept your version" : "Kept both";
+      state.msg = d.copy ? { text: `${kept}: yours is saved as ${baseName(d.copy)}.` }
+        : { text: `${kept} in ${where}.`, undo: choices.every(v => v === "theirs") ? undefined : { files: [{ path: d.path, before: d.before, version: d.version }] } };
+      showToast();
+      if (state.file && !state.all && state.file.path === d.path) checkDisk(); else render(false);
+      reviewClashes();
+    };
+    card.append(h("div", "cfoot", apply));
+    dlg.append(card);
+  }
+  document.body.append(scrim, dlg);
+  dlg.querySelector("button.primary").focus();
+}
 window.addEventListener("beforeunload", e => { if (unsaved()) { e.preventDefault(); e.returnValue = ""; } });
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
@@ -263,10 +381,39 @@ $("saveItem").onclick = () => { closePops(); save(); };
 for (const ev of ["dragover", "drop"]) document.body.addEventListener(ev, e => e.preventDefault());   // a dropped file must not replace the page
 store.del("today");                                         // a pinned Today used to be kept for good; now the page follows the date
 $("defWho").value = store.get("defWho", "");                // new-task defaults (⋯): prefill + Add task's Who / Effort
-$("defWho").onchange = () => store.set("defWho", $("defWho").value.trim());
+$("defWho").onchange = () => { store.set("defWho", $("defWho").value.trim()); putSetting("defWho", $("defWho").value.trim()); };
 for (const [v] of [["xs"], ["s"], ["m"], ["l"], ["xl"]]) { const o = document.createElement("option"); o.value = v; o.textContent = v.toUpperCase(); $("defEffort").append(o); }
 $("defEffort").value = store.get("defEffort", "");
-$("defEffort").onchange = () => store.set("defEffort", $("defEffort").value);
+$("defEffort").onchange = () => { store.set("defEffort", $("defEffort").value); putSetting("defEffort", $("defEffort").value); };
+/* 2.1.4: settings that follow you across devices: hidden projects, My initials and Default effort live in
+   Projects/settings.json (synced like the notes). The browser keeps a copy; the file wins, and a choice this
+   browser made before the file had it is shared once. */
+const SYNCED_SETTINGS = { hiddenProjects: "[]", defWho: "", defEffort: "" };
+function putSetting(key, value) {
+  if (!state.folioAll) return;
+  fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ set: { [key]: value } }) }).catch(() => {});
+}
+async function pullSettings() {
+  if (!state.folioAll) return;
+  let d;
+  try { d = (await (await fetch("/api/settings")).json()).settings; } catch (e) { return; }
+  if (!d) return;
+  const share = {};
+  let changed = false;
+  for (const [k, empty] of Object.entries(SYNCED_SETTINGS)) {
+    const mine = store.get(k, empty);
+    if (k in d) {
+      const v = k === "hiddenProjects" ? JSON.stringify(d[k]) : d[k];
+      if (mine !== v) { store.set(k, v); changed = true; }
+    } else if (mine !== empty) {
+      try { share[k] = k === "hiddenProjects" ? JSON.parse(mine) : mine; } catch (e) {}
+    }
+  }
+  if (Object.keys(share).length)
+    fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ set: share }) }).catch(() => {});
+  $("defWho").value = store.get("defWho", ""); $("defEffort").value = store.get("defEffort", "");
+  if (changed) { setFolio(state.folioAll); drawDrawer(); if (state.all) render(false); }
+}
 $("today").onchange = () => { showToday(); render(true); };
 $("todayReset").onclick = e => { e.preventDefault(); $("today").value = ""; showToday(); render(true); };
 const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -2259,6 +2406,7 @@ async function hideProject(name, hide) {             // hide (true) or show a pr
   const set = hiddenSet();
   set[hide ? "add" : "delete"](name);
   store.set("hiddenProjects", JSON.stringify([...set]));
+  putSetting("hiddenProjects", [...set]);
   if (!state.folioAll) return;
   setFolio(state.folioAll);
   if (hide && state.file && state.file.path && state.file.path.split("/")[0] === name) await showAll();   // its page was open
@@ -2267,6 +2415,7 @@ async function hideProject(name, hide) {             // hide (true) or show a pr
 }
 async function startPortfolio(tree) {
   setFolio(tree);
+  await pullSettings();
   $("brand").disabled = false; $("brand").title = "Projects and pages";
   const last = store.get("folioActive", "");
   if (last && inTree(last)) await openPage(last); else await showAll();
@@ -2303,6 +2452,15 @@ async function showAll() {                           // All projects: every back
 }
 const unscopeBtn = h("button", "unscope hidden", "×");
 unscopeBtn.onclick = () => { setScope(""); render(false); drawDrawer(); };
+function pathParts(path) {                           // a portfolio path as the page names it: [HDC, Notes, Client, Plan]
+  const [proj, kind, ...rest] = path.split("/");
+  const named = { "backlog.kf": "Backlog", "quicknote.kf": "Quick note", "habits.kf": "Habits" }[kind];
+  const strip = n => extOf(n) === "kf" ? n.slice(0, -3) : n;
+  if (named) return [proj, named];
+  if (kind === "notes" && rest.length) return [proj, "Notes", ...rest.slice(0, -1), strip(rest[rest.length - 1])];
+  if (kind === "archive" && rest.length) return [proj, "Archive", rest[0].slice(0, 4)];
+  return path.split("/");
+}
 function showCrumbs() {                              // the header: Project › Notes › Section › Page (click: the drawer)
   const c = $("crumbs");
   c.classList.toggle("hidden", !state.folio);
@@ -2311,13 +2469,7 @@ function showCrumbs() {                              // the header: Project › 
   const scope = scopeName();
   if ((state.all || !state.file) && scope) parts = [scope, TABS.find(x => x[0] === state.tab)[1]];   // a held project's tab
   else if (state.all || !state.file) parts = [state.tab === "planner" ? "Planner" : "All projects"];
-  else {
-    const [proj, kind, ...rest] = state.file.path.split("/");
-    const named = { "backlog.kf": "Backlog", "quicknote.kf": "Quick note", "habits.kf": "Habits" }[kind];
-    const strip = n => extOf(n) === "kf" ? n.slice(0, -3) : n;
-    parts = named ? [proj, named] : kind === "notes" ? [proj, "Notes", ...rest.slice(0, -1), strip(rest[rest.length - 1])]
-      : [proj, "Archive", rest[0].slice(0, 4)];
-  }
+  else parts = pathParts(state.file.path);
   const kids = [];
   parts.forEach((t, i) => {
     if (i) kids.push(span("sep", "›"));

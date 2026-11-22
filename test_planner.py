@@ -3,6 +3,7 @@ Tests for planner.py. Standard library only:  python -m unittest -v
 
 Every test pins TODAY (default Oct 12 2026) because dates are written without years.
 """
+import base64
 import contextlib
 import io
 import json
@@ -11,14 +12,16 @@ import stat
 import subprocess
 import tempfile
 import sys
+import shutil
 import socket
 import threading
+import time
 import unittest
 import unittest.mock
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import planner
 
@@ -1728,11 +1731,14 @@ class TestCLI(unittest.TestCase):
                 unittest.mock.patch.object(planner, "PROJECTS", os.path.join(d, "Projects")), \
                 unittest.mock.patch.object(planner, "serve") as serve:
             planner.main(["planner.py", "--serve", "--port", "9001"])          # made if it's missing
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1")
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="127.0.0.1", hub=False, browser=True)
             self.assertTrue(os.path.isdir(planner.PROJECTS))
             serve.reset_mock()
             planner.main(["planner.py", "--serve", "--port", "9001", "--host", "0.0.0.0"])
-            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0")
+            serve.assert_called_once_with(9001, portfolio=planner.PROJECTS, host="0.0.0.0", hub=False, browser=True)
+            serve.reset_mock()
+            planner.main(["planner.py", "--serve", "--hub", "--no-browser"])              # 2.1.4: as --autostart runs it
+            serve.assert_called_once_with(8765, portfolio=planner.PROJECTS, host="127.0.0.1", hub=True, browser=False)
 
     def test_import_defaults_to_the_projects_folder(self):
         with tempfile.TemporaryDirectory() as d, \
@@ -2352,3 +2358,700 @@ class TestServerPortfolio(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMerge3(unittest.TestCase):                          # 2.1.0: two changes to one file, line by line
+    def m(self, base, mine, theirs):
+        return planner.merge3(base, mine, theirs)
+
+    def test_one_side_or_the_same(self):
+        b = "- a\n- b\n"
+        self.assertEqual(self.m(b, b, "!- a\n- b\n"), ("!- a\n- b\n", []))
+        self.assertEqual(self.m(b, "!- a\n- b\n", b), ("!- a\n- b\n", []))
+        self.assertEqual(self.m(b, "x\n", "x\n"), ("x\n", []))
+
+    def test_different_lines_are_both_kept(self):
+        b = "- a\n- b\n- c\n- d\n"
+        self.assertEqual(self.m(b, "!- a\n- b\n- c\n- d\n", "- a\n- b\n- c\n~- d\n"), ("!- a\n- b\n- c\n~- d\n", []))
+        # next to each other: a status on one side, a new subtask under it on the other
+        self.assertEqual(self.m(b, "- a\n!- b\n- c\n- d\n", "- a\n- b\n\t- sub\n- c\n- d\n"), ("- a\n!- b\n\t- sub\n- c\n- d\n", []))
+        self.assertEqual(self.m(b, "- a\n- b\n\t- sub\n- c\n- d\n", "- a\n!- b\n- c\n- d\n"), ("- a\n!- b\n\t- sub\n- c\n- d\n", []))
+        # a line deleted on one side, another changed on the other
+        self.assertEqual(self.m(b, "- a\n- c\n- d\n", "- a\n- b\n- c\n!- d\n"), ("- a\n- c\n!- d\n", []))
+
+    def test_lines_added_at_the_same_place_are_both_kept(self):
+        b = "@HDC\n- a\n"
+        self.assertEqual(self.m(b, b + "- mine\n", b + "- theirs\n"), (b + "- theirs\n- mine\n", []))
+        self.assertEqual(self.m(b, b + "- same\n", b + "- same\n"), (b + "- same\n", []))
+
+    def test_the_same_line_changed_twice_is_a_conflict(self):
+        text, clashes = self.m("- a\n- b\n", "!- a\n- b\n", "- a (KA)\n- b\n")
+        self.assertEqual(text, "- a (KA)\n- b\n")               # theirs kept; mine reported, never lost
+        self.assertEqual(clashes, [{"line": 1, "base": ["- a\n"], "mine": ["!- a\n"], "theirs": ["- a (KA)\n"]}])
+        text, clashes = self.m("- a\n- b\n", "- a\n- b\n", "- a\n- b\n")
+        self.assertEqual(clashes, [])
+        text, clashes = self.m("- a\n- b\n", "- b\n", "!- a\n- b\n")   # deleted here, changed there
+        self.assertEqual((text, clashes[0]["mine"], clashes[0]["theirs"]), ("!- a\n- b\n", [], ["!- a\n"]))
+
+    def test_line_endings_stay(self):
+        self.assertEqual(self.m("a\r\nb\r\n", "a\r\nB\r\n", "A\r\nb\r\n"), ("A\r\nB\r\n", []))
+        self.assertEqual(self.m("a\nb", "a\nb\nc", "A\nb"), ("A\nb\nc", []))     # no line ending at the end
+        self.assertEqual(self.m("a\nb", "a\nB", "a\nb\n- c"), ("a\nB\n- c", []))
+
+
+class TestLive(Base):                                         # 2.1.0: /api/events and saves that merge
+    write = TestPortfolio.write
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.write("HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.server = planner.make_server(0, None, portfolio=self.root)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+        super().tearDown()
+
+    post, send = TestServer.post, TestServer.send
+
+    def events(self):
+        """Open /api/events; -> a function returning the next `changed` event's data (or None after `wait` s)."""
+        r = urllib.request.urlopen(self.url + "/api/events", timeout=20)
+        self.addCleanup(r.close)
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream")
+        self.assertEqual(r.readline(), b"retry: 2000\n")
+
+        def next_change():
+            event = None
+            while True:
+                line = r.readline()
+                if not line:
+                    return None
+                if line.startswith(b"event: "):
+                    event = line[7:].strip()
+                elif line.startswith(b"data: ") and event == b"changed":
+                    return json.loads(line[6:])
+        return next_change
+
+    def test_a_change_on_disk_reaches_the_page(self):
+        nxt = self.events()
+        time.sleep(0.1)
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # edited by hand (or by sync)
+            f.write("- d\n")
+        t0 = time.time()
+        self.assertEqual(nxt(), {"paths": ["HDC/backlog.kf"], "tree": False})
+        self.assertLess(time.time() - t0, planner.SCAN_SECONDS + 1.5)
+        os.makedirs(os.path.join(self.root, "MDM"))                          # a new project: the drawer's tree
+        self.assertEqual(nxt(), {"paths": ["MDM"], "tree": True})
+
+    def test_an_edit_through_the_server_is_told_at_once(self):
+        nxt = self.events()
+        _, ver = planner.read_notes(os.path.join(self.root, "HDC", "backlog.kf"))
+        t0 = time.time()
+        self.assertEqual(self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n- c\n", "version": ver})[0], 200)
+        self.assertEqual(nxt()["paths"], ["HDC/backlog.kf"])
+        self.assertLess(time.time() - t0, 1)
+
+    def test_hidden_files_are_not_watched(self):
+        before = planner.scan_files(self.root)
+        self.write(".kafeen/state.json", "{}")
+        self.write("HDC/.DS_Store", "x")
+        self.assertEqual(planner.scan_files(self.root), before)
+
+    def test_a_save_on_an_old_version_merges(self):
+        path = os.path.join(self.root, "HDC", "backlog.kf")
+        base, ver = planner.read_notes(path)
+        with open(path, "w") as f:                                           # another device ticked c meanwhile
+            f.write("- a\n- b\n!- c\n")
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n- c\n", "version": ver, "base": base})
+        self.assertEqual((code, d["merged"], d["text"]), (200, True, "!- a\n- b\n!- c\n"))
+        self.assertEqual(planner.read_notes(path), ("!- a\n- b\n!- c\n", d["version"]))
+        # a clash on the same line is refused as before (the page asks)
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "~- a\n- b\n!- c\n", "version": ver, "base": base})
+        self.assertEqual((code, d["conflict"]), (409, True))
+        self.assertEqual(planner.read_notes(path)[0], "!- a\n- b\n!- c\n")
+        # without a base (an older page): refused as before
+        self.assertEqual(self.post("/api/file", {"path": "HDC/backlog.kf", "text": "x\n", "version": ver})[0], 409)
+
+    def test_a_merge_keeps_crlf(self):
+        path = os.path.join(self.root, "HDC", "backlog.kf")
+        with open(path, "wb") as f:
+            f.write(b"- a\r\n- b\r\n")
+        base, ver = planner.read_notes(path)
+        with open(path, "wb") as f:
+            f.write(b"- a\r\n!- b\r\n")
+        code, d = self.post("/api/file", {"path": "HDC/backlog.kf", "text": "!- a\n- b\n", "version": ver, "base": base.replace("\r\n", "\n")})
+        self.assertEqual(code, 200)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"!- a\r\n!- b\r\n")
+
+    def test_closing_the_server_ends_the_stream(self):
+        nxt = self.events()
+        self.server.shutdown()
+        self.server.server_close()
+        self.assertIsNone(nxt())
+        self.server = planner.make_server(0, None)                           # for tearDown
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+
+class TestHub(Base):                                          # 2.1.1: the sync hub (/sync/*)
+    write = TestPortfolio.write
+
+    def setUp(self):
+        super().setUp()
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.write("HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.write("HDC/notes/Kick.md", "# hi\n")
+        self.code = planner.setup_hub(self.root)
+        self.start()
+
+    def start(self):
+        self.server = planner.make_server(0, None, portfolio=self.root, hub=True)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def tearDown(self):
+        self.stop()
+        self.dir.cleanup()
+        super().tearDown()
+
+    def call(self, path, payload=None, code=None, device="Laptop"):
+        headers = {"Authorization": "Bearer " + (code or self.code), "X-Kafeen-Device": device}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self.url + path, None if payload is None else json.dumps(payload).encode(), headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read()
+                return r.status, (json.loads(body) if r.headers["Content-Type"] == "application/json" else body)
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def put(self, rel, text, base, device="Laptop"):
+        return self.call("/sync/put", {"path": rel, "base": base, "data": base64.b64encode(text.encode()).decode()}, device=device)
+
+    def disk(self, rel):
+        with open(os.path.join(self.root, *rel.split("/")), encoding="utf-8", newline="") as f:
+            return f.read()
+
+    def sha(self, text):
+        return planner._sha(text.encode())
+
+    def test_setup(self):
+        self.assertTrue(self.code.startswith("kfn-"))
+        with open(os.path.join(self.root, ".kafeen", "hub.json")) as f:
+            self.assertNotIn(self.code, f.read())                       # only its hash is kept
+        with self.assertRaises(ValueError):
+            planner.setup_hub(self.root)
+        self.assertNotEqual(planner.setup_hub(self.root, new=True), self.code)
+        with self.assertRaises(ValueError):                             # not a hub: refused
+            planner.make_server(0, None, portfolio=tempfile.mkdtemp(), hub=True)
+
+    def test_the_pairing_code_is_needed(self):
+        self.assertEqual(self.call("/sync/state", code="kfn-wrong")[0], 401)
+        req = urllib.request.Request(self.url + "/sync/state")
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        e.exception.close()
+        self.assertEqual(e.exception.code, 401)
+        self.assertEqual(self.call("/sync/put", {"path": "x.kf", "data": ""}, code="nope")[0], 401)
+        plain = planner.make_server(0, None, portfolio=self.root)       # not a hub: no /sync at all
+        threading.Thread(target=plain.serve_forever, daemon=True).start()
+        self.addCleanup(plain.server_close)
+        self.addCleanup(plain.shutdown)
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{plain.server_address[1]}/sync/state",
+                                                          headers={"Authorization": "Bearer " + self.code}))
+        e.exception.close()
+        self.assertEqual(e.exception.code, 404)
+
+    def test_state_and_blobs(self):
+        code, st = self.call("/sync/state")
+        self.assertEqual(code, 200)
+        self.assertEqual(st["files"], {"HDC/backlog.kf": self.sha("- a\n- b\n- c\n"), "HDC/notes/Kick.md": self.sha("# hi\n")})
+        self.assertEqual(st["dirs"], ["HDC", "HDC/notes"])               # .kafeen is never listed
+        self.assertEqual(self.call("/sync/blob/" + st["files"]["HDC/backlog.kf"]), (200, b"- a\n- b\n- c\n"))
+        self.assertEqual(self.call("/sync/blob/" + "0" * 64)[0], 404)
+        self.assertEqual(self.call("/sync/blob/../hub.json")[0], 404)
+
+    def test_put(self):
+        base = self.sha("- a\n- b\n- c\n")
+        code, d = self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", base)
+        self.assertEqual((code, d["status"], d["hash"]), (200, "ok", self.sha("!- a\n- b\n- c\n")))
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        # another device, still on the old base, ticked c: merged
+        code, d = self.put("HDC/backlog.kf", "- a\n- b\n!- c\n", base, device="Desktop")
+        self.assertEqual((d["status"], base64.b64decode(d["data"])), ("merged", b"!- a\n- b\n!- c\n"))
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n!- c\n")
+        # the same line changed differently: a conflict, the hub's file untouched
+        code, d = self.put("HDC/backlog.kf", "~- a\n- b\n- c\n", base, device="Phone")
+        self.assertEqual((d["status"], d["hash"]), ("conflict", self.sha("!- a\n- b\n!- c\n")))
+        self.assertEqual(d["clashes"][0]["mine"], ["~- a\n"])
+        self.assertEqual(self.disk("HDC/backlog.kf"), "!- a\n- b\n!- c\n")
+        # a new file, in a new folder
+        self.assertEqual(self.put("MDM/backlog.kf", "- x\r\n", None)[1]["status"], "ok")
+        self.assertEqual(self.disk("MDM/backlog.kf"), "- x\r\n")         # bytes exactly as sent
+        # unchanged: nothing logged
+        seq = self.call("/sync/state")[1]["seq"]
+        self.assertEqual(self.put("MDM/backlog.kf", "- x\r\n", None)[1]["status"], "ok")
+        self.assertEqual(self.call("/sync/state")[1]["seq"], seq)
+
+    def test_bad_paths_are_refused(self):
+        for rel in ("../x.kf", ".kafeen/hub.json", "HDC/.trash/x", "/etc/x", "HDC//x", "a\\b", ""):
+            self.assertEqual(self.put(rel, "x", None)[0], 400, rel)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.root), "x.kf")))
+
+    def test_delete_and_folders(self):
+        h = self.sha("# hi\n")
+        self.assertEqual(self.call("/sync/delete", {"path": "HDC/notes/Kick.md", "base": "0" * 64})[1]["status"], "changed")
+        self.assertEqual(self.call("/sync/delete", {"path": "HDC/notes/Kick.md", "base": h})[1]["status"], "ok")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "HDC", "notes", "Kick.md")))
+        self.assertEqual(self.disk(".trash/HDC/notes/Kick.md"), "# hi\n")  # moved, never removed
+        self.assertEqual(self.call("/sync/mkdir", {"path": "HDC/notes/Client"})[1]["status"], "ok")
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "HDC", "notes", "Client")))
+        self.assertEqual(self.call("/sync/rmdir", {"path": "HDC"})[1]["status"], "changed")   # still has files
+        self.assertEqual(self.call("/sync/rmdir", {"path": "HDC/notes/Client"})[1]["status"], "ok")
+        st = self.call("/sync/state")[1]
+        self.assertNotIn("HDC/notes/Kick.md", st["files"])
+        self.assertEqual(st["dirs"], ["HDC", "HDC/notes"])
+
+    def test_changes_are_numbered_and_wait(self):
+        seq = self.call("/sync/state")[1]["seq"]
+        self.assertEqual(self.call(f"/sync/changes?since={seq}&wait=0")[1]["changes"], [])
+        got = {}
+        t = threading.Thread(target=lambda: got.update(r=self.call(f"/sync/changes?since={seq}&wait=10")))
+        t.start()
+        time.sleep(0.3)
+        t0 = time.time()
+        self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", self.sha("- a\n- b\n- c\n"), device="Desktop")
+        t.join()
+        self.assertLess(time.time() - t0, 2)                            # woke at once
+        [e] = got["r"][1]["changes"]
+        self.assertEqual((e["seq"], e["kind"], e["path"], e["device"]), (seq + 1, "put", "HDC/backlog.kf", "Desktop"))
+        self.assertEqual(self.call("/sync/changes?since=999&wait=0")[1]["reset"], True)
+
+    def test_edits_on_the_hub_are_logged(self):
+        seq = self.call("/sync/state")[1]["seq"]
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # by hand, or on the hub's own page
+            f.write("- d\n")
+        d = self.call(f"/sync/changes?since={seq}&wait={planner.SCAN_SECONDS + 3}")[1]
+        self.assertEqual([(e["kind"], e["path"], e["device"]) for e in d["changes"]], [("put", "HDC/backlog.kf", "hub")])
+
+    def test_the_log_survives_a_restart(self):
+        self.put("HDC/backlog.kf", "!- a\n- b\n- c\n", self.sha("- a\n- b\n- c\n"))
+        seq = self.call("/sync/state")[1]["seq"]
+        self.stop()
+        with open(os.path.join(self.root, "HDC", "backlog.kf"), "a") as f:   # changed while the hub was off
+            f.write("- d\n")
+        self.start()
+        st = self.call("/sync/state")[1]
+        self.assertEqual(st["seq"], seq + 1)
+        self.assertEqual(st["files"]["HDC/backlog.kf"], self.sha("!- a\n- b\n- c\n- d\n"))
+        old = self.call(f"/sync/changes?since={seq - 1}&wait=0")[1]["changes"]
+        self.assertEqual([e["seq"] for e in old], [seq, seq + 1])
+
+    def test_cli_setup_hub(self):
+        folder = os.path.join(self.root, "Other")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            planner.main(["planner.py", "--setup-hub", folder])
+        self.assertIn("kfn-", out.getvalue())
+        self.assertTrue(os.path.exists(os.path.join(folder, ".kafeen", "hub.json")))
+        with self.assertRaises(SystemExit):
+            planner.main(["planner.py", "--setup-hub", folder])           # already one
+        with self.assertRaises(SystemExit):
+            planner.main(["planner.py", "--serve", "--hub", "notes.txt"])  # a hub serves the Projects folder
+
+
+class SyncBase(Base):                                         # a hub and two paired devices, A and B (2.1.2)
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        base = os.path.realpath(self.tmp.name)
+        self.hubdir, self.a, self.b = (os.path.join(base, n) for n in ("hub", "A", "B"))
+        for d in (self.hubdir, self.a, self.b):
+            os.makedirs(d)
+        self.put(self.hubdir, "HDC/backlog.kf", "- a\n- b\n- c\n")
+        self.code = planner.setup_hub(self.hubdir)
+        self.hub = planner.make_server(0, None, portfolio=self.hubdir, hub=True)
+        self.url = f"http://127.0.0.1:{self.hub.server_address[1]}"
+        threading.Thread(target=self.hub.serve_forever, daemon=True).start()
+        planner.pair(self.a, self.url, self.code, "A")
+        planner.pair(self.b, self.url, self.code, "B")
+        self.ca, self.cb = planner.SyncClient(self.a), planner.SyncClient(self.b)
+
+    def tearDown(self):
+        self.hub.shutdown()
+        self.hub.server_close()
+        self.tmp.cleanup()
+        super().tearDown()
+
+    @staticmethod
+    def put(root, rel, text):
+        p = os.path.join(root, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        st = os.stat(p)                                  # a new mtime even within the same clock tick
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+    @staticmethod
+    def get(root, rel):
+        p = os.path.join(root, *rel.split("/"))
+        if not os.path.exists(p):
+            return None
+        with open(p, encoding="utf-8", newline="") as f:
+            return f.read()
+
+
+
+class TestDeviceSync(SyncBase):                               # 2.1.2: devices paired with a hub
+    def test_pair(self):
+        with open(os.path.join(self.a, ".kafeen", "device.json")) as f:
+            conf = json.load(f)
+        self.assertEqual((conf["hub"], conf["name"], conf["base"]), (self.url, "A", {}))
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.a, ".kafeen", "device.json")).st_mode), 0o600)
+        with self.assertRaises(ValueError):
+            planner.pair(self.b, self.url, "kfn-wrong")
+        with self.assertRaises(ValueError):
+            planner.pair(self.hubdir, self.url, self.code)                # the hub itself
+        with self.assertRaises(ValueError):
+            planner.pair(self.b, "http://127.0.0.1:1", self.code)         # nobody there
+
+    def test_first_sync_and_edits_both_ways(self):
+        self.assertEqual(self.ca.round()["pulled"], 2)                    # HDC/ and its backlog
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")            # A ticks a
+        self.put(self.a, "MDM/notes/Plan.md", "# plan\n")                 # and makes a page in a new project
+        self.assertEqual(self.ca.round()["pushed"], 4)
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.assertEqual(self.get(self.b, "MDM/notes/Plan.md"), "# plan\n")
+        self.assertEqual(self.cb.round(), {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0})   # in step
+
+    def test_offline_edits_merge(self):
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")            # both edit while apart
+        self.put(self.b, "HDC/backlog.kf", "- a\n- b\n~- c\n")
+        self.ca.round()
+        self.assertEqual(self.cb.round()["merged"], 1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+        self.ca.round()
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n~- c\n")
+
+    def test_a_clash_keeps_both(self):
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "~- a\n- b\n- c\n")
+        self.ca.round()
+        self.assertEqual(self.cb.round()["conflicts"], 1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "!- a\n- b\n- c\n")      # the hub's version here
+        [name] = os.listdir(os.path.join(self.b, ".kafeen", "conflicts"))
+        with open(os.path.join(self.b, ".kafeen", "conflicts", name)) as f:
+            rec = json.load(f)
+        self.assertEqual((rec["path"], rec["device"]), ("HDC/backlog.kf", "B"))
+        self.assertEqual(self.cb.blob(rec["mine"]), b"~- a\n- b\n- c\n")             # B's version, kept aside
+        self.assertEqual(self.cb.status["conflicts"], 1)
+
+    def test_deletes_go_to_trash_everywhere(self):
+        self.put(self.hubdir, "HDC/notes/Old.md", "old\n")
+        self.ca.round(); self.cb.round()
+        os.remove(os.path.join(self.a, "HDC", "notes", "Old.md"))
+        self.ca.round()
+        self.assertIsNone(self.get(self.hubdir, "HDC/notes/Old.md"))
+        self.assertEqual(self.get(self.hubdir, ".trash/HDC/notes/Old.md"), "old\n")
+        self.cb.round()
+        self.assertIsNone(self.get(self.b, "HDC/notes/Old.md"))
+        self.assertEqual(self.get(self.b, ".trash/HDC/notes/Old.md"), "old\n")
+
+    def test_an_edit_beats_a_delete(self):
+        self.put(self.hubdir, "HDC/notes/Old.md", "old\n")
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/notes/Old.md", "old, edited\n")
+        self.ca.round()
+        os.remove(os.path.join(self.b, "HDC", "notes", "Old.md"))         # B deleted it meanwhile
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "HDC/notes/Old.md"), "old, edited\n")
+        self.assertEqual(self.get(self.hubdir, "HDC/notes/Old.md"), "old, edited\n")
+
+    def test_a_renamed_project_follows(self):
+        self.ca.round(); self.cb.round()
+        os.rename(os.path.join(self.a, "HDC"), os.path.join(self.a, "Harbour"))
+        self.ca.round()
+        self.assertEqual(self.get(self.hubdir, "Harbour/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertFalse(os.path.exists(os.path.join(self.hubdir, "HDC")))
+        self.cb.round()
+        self.assertEqual(self.get(self.b, "Harbour/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertFalse(os.path.exists(os.path.join(self.b, "HDC")))
+
+    def test_pairing_a_folder_with_different_notes(self):
+        self.put(self.a, "HDC/backlog.kf", "- mine\n")                    # this device had its own copy
+        n = self.ca.round()
+        self.assertEqual(n["conflicts"], 1)
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        self.assertEqual(len(os.listdir(os.path.join(self.a, ".kafeen", "conflicts"))), 1)
+
+    def test_offline_and_back(self):
+        self.ca.round()
+        self.hub.shutdown()
+        self.hub.server_close()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        with self.assertRaises(OSError):
+            self.ca.round()
+        self.assertEqual(self.ca.waiting(), 1)
+        port = int(self.url.rsplit(":", 1)[1])
+        self.hub = planner.make_server(port, None, portfolio=self.hubdir, hub=True)   # the hub is back
+        threading.Thread(target=self.hub.serve_forever, daemon=True).start()
+        self.assertEqual(self.ca.round()["pushed"], 1)
+        self.assertEqual(self.get(self.hubdir, "HDC/backlog.kf"), "!- a\n- b\n- c\n")
+        self.assertEqual(self.ca.waiting(), 0)
+
+    def test_live_between_two_servers(self):
+        sa = planner.make_server(0, None, portfolio=self.a)
+        sb = planner.make_server(0, None, portfolio=self.b)
+        for srv in (sa, sb):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+        deadline = time.time() + 10
+        while self.get(self.b, "HDC/backlog.kf") is None and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+        ua = f"http://127.0.0.1:{sa.server_address[1]}"
+        req = urllib.request.Request(ua + "/api/edit", json.dumps({"path": "HDC/backlog.kf", "version": planner.read_notes(
+            os.path.join(self.a, "HDC", "backlog.kf"))[1], "line": 2, "title": "b", "op": "status", "value": "done",
+            "name": "HDC"}).encode(), {"Content-Type": "application/json"})
+        t0 = time.time()
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.status, 200)
+        while self.get(self.b, "HDC/backlog.kf") != "- a\n!- b\n- c\n" and time.time() - t0 < 10:
+            time.sleep(0.05)
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n!- b\n- c\n")
+        self.assertLess(time.time() - t0, 3)                              # live: within a couple of seconds
+        with urllib.request.urlopen(f"http://127.0.0.1:{sb.server_address[1]}/api/sync") as r:
+            st = json.loads(r.read())
+        self.assertEqual((st["state"], st["name"]), ("synced", "B"))
+
+
+class TestClashes(SyncBase):                            # 2.1.3: choosing between the two versions of a clash
+    def clash(self, mine, theirs, base="- a\n- b\n- c\n"):
+        """A on the hub with `theirs`, B with `mine` while apart: B's round sets its version aside."""
+        self.put(self.hubdir, "HDC/backlog.kf", base)
+        self.ca.round(); self.cb.round()
+        self.put(self.a, "HDC/backlog.kf", theirs)
+        self.put(self.b, "HDC/backlog.kf", mine)
+        self.ca.round()
+        self.assertEqual(self.cb.round()["conflicts"], 1)
+        [c] = planner.list_clashes(self.b)
+        return c
+
+    def test_list(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.assertEqual((c["path"], c["device"], c["whole"]), ("HDC/backlog.kf", "B", False))
+        self.assertEqual(c["clashes"], [{"line": 1, "base": ["- a\n"], "mine": ["~- a\n"], "theirs": ["!- a\n"]}])
+        self.assertEqual(planner.list_clashes(self.a), [])
+
+    def test_keep_mine_theirs_or_both(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "!- a\n- b\n- c\n- d\n")           # edited since, elsewhere in the file
+        out = planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "~- a\n- b\n- c\n- d\n")
+        self.assertEqual(out["before"], "!- a\n- b\n- c\n- d\n")              # for Undo
+        self.assertEqual(planner.list_clashes(self.b), [])
+        self.assertTrue(os.listdir(os.path.join(self.b, ".kafeen", "conflicts", "resolved")))
+        with self.assertRaises(ValueError):
+            planner.resolve_clash(self.b, c["id"], ["mine"])                   # done already
+
+    def test_keep_both(self):
+        c = self.clash("- a (KA)\n- b\n- c\n", "- a (RT)\n- b\n- c\n")
+        planner.resolve_clash(self.b, c["id"], ["both"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a (RT)\n- a (KA)\n- b\n- c\n")
+
+    def test_keep_theirs_writes_nothing(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        before = os.stat(os.path.join(self.b, "HDC", "backlog.kf")).st_mtime_ns
+        planner.resolve_clash(self.b, c["id"], ["theirs"])
+        self.assertEqual(os.stat(os.path.join(self.b, "HDC", "backlog.kf")).st_mtime_ns, before)
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_changed_since_is_refused(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        self.put(self.b, "HDC/backlog.kf", "!- a, renamed\n- b\n- c\n")        # the kept line itself changed
+        with self.assertRaises(ValueError):
+            planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(len(planner.list_clashes(self.b)), 1)                 # still there to choose
+        planner.resolve_clash(self.b, c["id"], ["dismiss"])
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_a_deleted_line(self):
+        c = self.clash("- a\n- c\n", "!- b\n- a\n- c\n", base="- b\n- a\n- c\n")
+        self.assertEqual((c["clashes"][0]["mine"], c["clashes"][0]["theirs"]), ([], ["!- b\n"]))
+        planner.resolve_clash(self.b, c["id"], ["mine"])
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "- a\n- c\n")
+
+    def test_whole_files(self):
+        self.put(self.a, "HDC/backlog.kf", "- mine\n")                        # different from the start
+        self.ca.round()
+        [c] = planner.list_clashes(self.a)
+        self.assertEqual((c["whole"], c["mine"]), (True, "- mine\n"))
+        out = planner.resolve_clash(self.a, c["id"], ["both"])
+        self.assertEqual(out["copy"], "HDC/backlog (from A).kf")
+        self.assertEqual(self.get(self.a, "HDC/backlog (from A).kf"), "- mine\n")
+        self.assertEqual(self.get(self.a, "HDC/backlog.kf"), "- a\n- b\n- c\n")
+
+    def test_bad_requests(self):
+        for cid in ("../x", "", None, "20260101-000000-1"):
+            with self.assertRaises(ValueError):
+                planner.resolve_clash(self.b, cid, ["mine"])
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        for choices in (["nope"], "mine", ["mine", "mine"]):
+            with self.assertRaises(ValueError):
+                planner.resolve_clash(self.b, c["id"], choices)
+
+    def test_api(self):
+        c = self.clash("~- a\n- b\n- c\n", "!- a\n- b\n- c\n")
+        sb = planner.make_server(0, None, portfolio=self.b, sync=False)
+        threading.Thread(target=sb.serve_forever, daemon=True).start()
+        self.addCleanup(sb.server_close)
+        self.addCleanup(sb.shutdown)
+        url = f"http://127.0.0.1:{sb.server_address[1]}"
+        with urllib.request.urlopen(url + "/api/clashes") as r:
+            self.assertEqual([x["id"] for x in json.loads(r.read())["clashes"]], [c["id"]])
+        req = urllib.request.Request(url + "/api/clashes", json.dumps({"id": c["id"], "choices": ["mine"]}).encode(),
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read())["path"], "HDC/backlog.kf")
+        self.assertEqual(self.get(self.b, "HDC/backlog.kf"), "~- a\n- b\n- c\n")
+        self.assertEqual(sb.sync.status["conflicts"], 0)
+
+
+class TestInstall(SyncBase):                                  # 2.1.4: synced settings, backups, start at login
+    def test_settings(self):
+        self.assertEqual(planner.read_settings(self.a), ({}, None))
+        self.assertEqual(planner.write_settings(self.a, {"defWho": "KA", "hiddenProjects": ["Example"]}),
+                         {"defWho": "KA", "hiddenProjects": ["Example"]})
+        self.assertEqual(self.get(self.a, "settings.json"), '{\n  "defWho": "KA",\n  "hiddenProjects": ["Example"]\n}\n')
+        for bad in ({"theme": "dark"}, {"defEffort": "huge"}, {"defWho": 3}, {"hiddenProjects": "Example"}, "x"):
+            with self.assertRaises(ValueError):
+                planner.write_settings(self.a, bad)
+        self.put(self.a, "settings.json", '{"defWho": "KA", "evil": 1, "defEffort": 7}')   # edited by hand: the good ones
+        self.assertEqual(planner.read_settings(self.a)[0], {"defWho": "KA"})
+
+    def test_settings_follow_you(self):
+        self.ca.round(); self.cb.round()
+        planner.write_settings(self.a, {"defWho": "KA"})
+        planner.write_settings(self.b, {"defEffort": "m"})       # another setting, on another device, while apart
+        self.ca.round(); self.cb.round(); self.ca.round()
+        for d in (self.a, self.b):
+            self.assertEqual(planner.read_settings(d)[0], {"defWho": "KA", "defEffort": "m"})
+        planner.write_settings(self.a, {"defWho": "RT"})         # then both change the same setting: the device that
+        planner.write_settings(self.b, {"defWho": "JS", "hiddenProjects": ["Example"]})   # syncs later wins; no clash
+        self.ca.round(); self.cb.round(); self.ca.round()
+        for d in (self.a, self.b):
+            self.assertEqual(planner.read_settings(d)[0], {"defWho": "JS", "defEffort": "m", "hiddenProjects": ["Example"]})
+        self.assertEqual(planner.list_clashes(self.b), [])
+
+    def test_settings_api(self):
+        sa = planner.make_server(0, None, portfolio=self.a, sync=False)
+        threading.Thread(target=sa.serve_forever, daemon=True).start()
+        self.addCleanup(sa.server_close)
+        self.addCleanup(sa.shutdown)
+        url = f"http://127.0.0.1:{sa.server_address[1]}/api/settings"
+        req = urllib.request.Request(url, json.dumps({"set": {"defEffort": "s"}}).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read()), {"settings": {"defEffort": "s"}})
+        with urllib.request.urlopen(url) as r:
+            self.assertEqual(json.loads(r.read()), {"settings": {"defEffort": "s"}})
+        bad = urllib.request.Request(url, json.dumps({"set": {"x": 1}}).encode(), {"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(bad)
+        e.exception.close()
+        self.assertEqual(e.exception.code, 409)
+        with urllib.request.urlopen(f"http://127.0.0.1:{sa.server_address[1]}/api/portfolio") as r:
+            self.assertNotIn("settings.json", json.dumps(json.loads(r.read())))   # not a project
+
+    def test_backups(self):
+        import zipfile
+        self.put(self.hubdir, ".trash/old.kf", "gone\n")
+        shutil.rmtree(os.path.join(self.hubdir, ".kafeen", "backups"), ignore_errors=True)   # the hub's own, at start
+        self.assertTrue(planner.backup_due(self.hubdir))
+        p = planner.hub_backup(self.hubdir, datetime(2026, 11, 21, 3, 0))
+        with zipfile.ZipFile(p) as z:
+            self.assertEqual(z.namelist(), ["HDC/backlog.kf"])            # the notes, not .kafeen or .trash
+            self.assertEqual(z.read("HDC/backlog.kf"), b"- a\n- b\n- c\n")
+        self.assertFalse(planner.backup_due(self.hubdir, datetime(2026, 11, 21, 20, 0)))
+        self.assertTrue(planner.backup_due(self.hubdir, datetime(2026, 11, 22, 3, 0)))
+        for day in range(1, 35):                                         # only the newest 30 stay
+            planner.hub_backup(self.hubdir, datetime(2026, 10, 1) + timedelta(days=day))
+        names = sorted(os.listdir(os.path.join(self.hubdir, ".kafeen", "backups")))
+        self.assertEqual((len(names), names[-1]), (30, "2026-11-21-0300.zip"))
+
+    def test_old_versions_are_pruned(self):
+        hub = self.hub.hub
+        self.ca.round()
+        self.put(self.a, "HDC/backlog.kf", "!- a\n- b\n- c\n")
+        self.ca.round()
+        old = planner._sha(b"- a\n- b\n- c\n")
+        self.assertIsNotNone(hub.blob(old))
+        self.assertEqual(planner.prune_blobs(hub), 0)                    # not old yet
+        past = time.time() - 100 * 86400
+        for n in os.listdir(hub.blobs):
+            os.utime(os.path.join(hub.blobs, n), (past, past))
+        self.assertEqual(planner.prune_blobs(hub), 1)                    # the old version; the current one stays
+        self.assertIsNone(hub.blob(old))
+        self.assertIsNotNone(hub.blob(planner._sha(b"!- a\n- b\n- c\n")))
+
+    def test_autostart_files(self):
+        py, script, home = "/usr/bin/python3", "/opt/kafeen/planner.py", "/home/k"
+        path, unit, start, stop = planner.autostart_plan("Linux", True, 8765, py, script, home)
+        self.assertEqual(path, "/home/k/.config/systemd/user/kafeen-hub.service")
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/kafeen/planner.py --serve --no-browser --port 8765 --hub --host 0.0.0.0\n", unit)
+        self.assertIn("WantedBy=default.target", unit)
+        self.assertEqual(start[-1], ["systemctl", "--user", "enable", "--now", "kafeen-hub.service"])
+        path, plist, start, stop = planner.autostart_plan("Darwin", False, 8765, py, script, "/Users/k", uid=501)
+        self.assertEqual(path, "/Users/k/Library/LaunchAgents/com.kafeen.kafeen.plist")
+        self.assertIn("<array>\n\t\t<string>/usr/bin/python3</string>\n\t\t<string>/opt/kafeen/planner.py</string>\n"
+                      "\t\t<string>--serve</string>\n\t\t<string>--no-browser</string>\n\t\t<string>--port</string>\n"
+                      "\t\t<string>8765</string>\n\t</array>", plist)
+        self.assertIn("<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>", plist)
+        try:
+            import plistlib                                              # where the XML library works: a valid plist
+            self.assertEqual(plistlib.loads(plist.encode())["Label"], "com.kafeen.kafeen")
+        except ImportError:
+            pass
+        self.assertEqual(start, [["launchctl", "bootstrap", "gui/501", path]])
+        with unittest.mock.patch.dict(os.environ, {"APPDATA": r"C:\Users\k\AppData\Roaming"}):
+            path, cmd, start, stop = planner.autostart_plan("Windows", False, 8765, r"C:\Python\python.exe", r"C:\KAFEEN Planner\planner.py", r"C:\Users\k")
+        self.assertTrue(path.endswith("KAFEEN Planner.cmd") and "Startup" in path)
+        self.assertIn('"C:\\KAFEEN Planner\\planner.py" --serve --no-browser --port 8765', cmd)
+        with self.assertRaises(ValueError):
+            planner.autostart_plan("Plan9")
+
+    def test_autostart_on_and_off(self):
+        with tempfile.TemporaryDirectory() as home, \
+                unittest.mock.patch("os.path.expanduser", return_value=home), \
+                unittest.mock.patch("platform.system", return_value="Linux"), \
+                unittest.mock.patch("subprocess.run") as run:
+            run.return_value = unittest.mock.Mock(returncode=0, stdout="", stderr="")
+            out = planner.autostart(True)
+            unit = os.path.join(home, ".config", "systemd", "user", "kafeen.service")
+            self.assertTrue(os.path.exists(unit))
+            self.assertIn("http://localhost:8765", out[-1])
+            self.assertEqual(run.call_args_list[-1].args[0], ["systemctl", "--user", "enable", "--now", "kafeen.service"])
+            planner.autostart(False)
+            self.assertFalse(os.path.exists(unit))
+            self.assertEqual(planner.autostart(False), ["KAFEEN wasn't set to start at login."])

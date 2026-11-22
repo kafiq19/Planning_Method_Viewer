@@ -29,6 +29,13 @@ USAGE
                                        Date fields) to add tasks one after another, fold any level in Projects,
                                        sort a project's tasks by status from its heading,
                                        and plan tasks for days in Week (and print the plan on one page)
+                                       The page is live: notes changed on disk show at once (2.1.0)
+  --setup-hub [FOLDER] [--new-code]    make the Projects folder (or FOLDER) the sync hub; prints the pairing code
+  --serve --hub [--host ADDR]          serve the hub: paired devices keep their Projects folder in step (2.1.1)
+  --autostart on|off [--hub]           start KAFEEN (or the hub) when you log in: systemd (Linux), LaunchAgent
+                                       (macOS), Startup folder (Windows) (2.1.4). --no-browser: --serve opens none
+  --pair HUB CODE [--name NAME]        pair this computer's Projects folder with the hub (2.1.2); then --serve
+                                       keeps it in step, live, and catches up after being offline. --unpair stops
 
 NOTE FORMAT (quick reference)
   Fall Planning  Sep01--Dec19   heading: left edge, no marker, optional dates
@@ -55,7 +62,7 @@ NOTE FORMAT (quick reference)
 import os
 import re
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -80,6 +87,7 @@ RE_DATE = re.compile(r"(?<![\w*~>])(" + MON + r")(\d{1,2})\b")
 PAST_DAYS = 90      # a date up to ~3 months back counts as past (so overdue stays overdue);
                     # anything earlier in the calendar means next year
 UPCOMING_DAYS = 14  # window for the "upcoming" view
+SCAN_SECONDS = 2    # 2.1.0: how often the server looks for notes changed on disk (by hand, or by sync)
 BOX = {"open": "[ ]", "doing": "[~]", "done": "[x]", "hold": "[/]"}
 
 
@@ -2103,6 +2111,70 @@ def write_notes(path, text, version, force=False):
     return file_version(data)
 
 
+def _hunks(base, other):
+    """[(start, end, lines)]: where `other` replaces base[start:end] with `lines` (lists of lines)."""
+    import difflib
+    sm = difflib.SequenceMatcher(None, base, other, autojunk=False)
+    return [(i1, i2, other[j1:j2]) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
+
+
+def merge3(base, mine, theirs):
+    """2.1.0: merge two texts that both started from `base`, line by line; -> (text, conflicts).
+
+    Changes to different lines are both kept. Lines added at the same place on both sides are both kept
+    (theirs first). Where both sides changed the same lines differently, theirs is kept and the clash is
+    listed in `conflicts` as {line (1-based, in the result), base, mine, theirs} (each a list of lines). The
+    result is made only of whole lines from the three texts, with their line endings, so nothing is reworded.
+    """
+    if mine == theirs or base == mine:
+        return theirs, []
+    if base == theirs:
+        return mine, []
+    # a missing line ending at the very end doesn't make the last line a change: compare as if every text had
+    # one, and put back what the side that changed the end did (both sides agree, or one kept the base's)
+    eol = "\r\n" if "\r\n" in base + mine + theirs else "\n"
+    bare = [x != "" and not x.endswith(("\n", "\r")) for x in (base, mine, theirs)]
+    end_bare = bare[1] if bare[1] == bare[2] else bare[1] if bare[2] == bare[0] else bare[2]
+    b, m, t = ((x + eol if nb else x).splitlines(keepends=True) for x, nb in zip((base, mine, theirs), bare))
+    hunks = sorted([(s0, e0, ls, 0) for s0, e0, ls in _hunks(b, m)] + [(s0, e0, ls, 1) for s0, e0, ls in _hunks(b, t)],
+                   key=lambda h: (h[0], h[1]))
+    out, conflicts, pos, i = [], [], 0, 0
+    while i < len(hunks):
+        lo, hi, group = hunks[i][0], hunks[i][1], [hunks[i]]
+        i += 1
+        while i < len(hunks):                         # hunks that overlap, or lines added at the same place, form one group
+            s0, e0 = hunks[i][0], hunks[i][1]
+            if s0 < hi or (s0 == e0 == lo == hi):
+                group.append(hunks[i]); hi = max(hi, e0); i += 1
+            else:
+                break
+        out += b[pos:lo]
+        sides = [[h for h in group if h[3] == k] for k in (0, 1)]
+
+        def apply(hs):                                # one side's text for base[lo:hi]
+            res, at = [], lo
+            for s0, e0, ls, _ in hs:
+                res += b[at:s0] + ls; at = e0
+            return res + b[at:hi]
+        if not sides[0] or not sides[1]:
+            out += apply(group)                       # only one side changed here
+        else:
+            mm, tt = apply(sides[0]), apply(sides[1])
+            if mm == tt:
+                out += tt
+            elif lo == hi:                            # both only added lines at the same place: keep both
+                out += tt + [x for x in mm if x not in tt]
+            else:
+                conflicts.append({"line": len(out) + 1, "base": b[lo:hi], "mine": mm, "theirs": tt})
+                out += tt
+        pos = hi
+    out += b[pos:]
+    text = "".join(out)
+    if end_bare and text.endswith(eol):
+        text = text[:-len(eol)]
+    return text, conflicts
+
+
 # ---------- the portfolio (--serve: the Projects folder next to planner.py) ----------
 #
 # A portfolio is a folder (PROJECTS); each sub-folder is a project:
@@ -2455,7 +2527,1025 @@ def _hide(req):
     return tuple(hide)
 
 
-def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
+# ---------- sync (2.1.x): a hub on the user's home server keeps every device's Projects folder the same ----------
+#
+# The hub is an ordinary --serve with --hub: its Projects folder is the master copy. It logs every change to a file
+# or folder (made through it, on its own page, or by hand) with a number, keeps every version of every file by its
+# SHA-256 (blobs, the bases devices merge against), and answers /sync/* for devices that know the pairing code.
+# Its state lives in Projects/.kafeen/ (hidden: never listed, served or synced).
+
+SYNC_DIR = ".kafeen"
+
+
+def _sha(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def sync_path(root, rel):
+    """The real path of `rel` (a file or folder, "/" between parts) inside `root`; ValueError if it can't be synced:
+    empty or hidden parts (so no .., .kafeen, .trash), backslashes, or a way out (a symlink)."""
+    if not isinstance(rel, str) or not rel or "\\" in rel or "\0" in rel:
+        raise ValueError(f"{rel!r} can't be synced")
+    parts = rel.split("/")
+    if any(not x or x.startswith(".") for x in parts):
+        raise ValueError(f"{rel!r} can't be synced")
+    root = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(root, *parts))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        raise ValueError(f"{rel!r} is outside the folder")
+    return full
+
+
+def write_bytes(path, data):
+    """Write `data` to `path` exactly (atomic: a temp file, then rename), making its folder if needed."""
+    import tempfile
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".planner-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        mode = os.stat(path).st_mode & 0o7777 if os.path.exists(path) else 0o666 & ~_umask()
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def _umask():
+    m = os.umask(0)
+    os.umask(m)
+    return m
+
+
+def to_trash(root, rel):
+    """Move the file or folder `rel` to root/.trash/<rel> (" (2)" etc. if taken); -> where it went. Never deletes."""
+    root = os.path.realpath(root)
+    full = os.path.join(root, *rel.split("/"))
+    stem, ext = os.path.splitext(rel) if os.path.isfile(full) else (rel, "")
+    dest, n = f"{TRASH_DIR}/{rel}", 1
+    while os.path.lexists(os.path.join(root, *dest.split("/"))):
+        n += 1
+        dest = f"{TRASH_DIR}/{stem} ({n}){ext}"
+    target = os.path.join(root, *dest.split("/"))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.rename(full, target)
+    return dest
+
+
+def scan_tree(root, cache, keep):
+    """-> ({file: sha256}, {folder}, new cache) of everything under `root` but hidden names; `cache` {file: ((size,
+    mtime_ns), sha256)} saves reading files that didn't change; `keep(data)` stores a new version, -> its hash."""
+    files, dirs, stats = {}, set(), {}
+    for here, ds, fs in os.walk(root):
+        ds[:] = sorted(d for d in ds if not d.startswith("."))
+        rel = os.path.relpath(here, root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel + "/"
+        dirs.update(rel + d for d in ds)
+        for name in fs:
+            if name.startswith("."):
+                continue
+            p, key = os.path.join(here, name), rel + name
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            sig = (st.st_size, st.st_mtime_ns)
+            old = cache.get(key)
+            if old and old[0] == sig:
+                h = old[1]
+            else:
+                try:
+                    with open(p, "rb") as f:
+                        h = keep(f.read())
+                except OSError:
+                    continue
+            files[key], stats[key] = h, (sig, h)
+    return files, dirs, stats
+
+
+def setup_hub(root, new=False):
+    """Make this Projects folder a hub (2.1.1); -> the pairing code, shown once (only its hash is kept).
+    ValueError if it is one already, unless `new` (a new code: every device must pair again)."""
+    import json
+    import secrets
+    folder = os.path.join(root, SYNC_DIR)
+    conf = os.path.join(folder, "hub.json")
+    if os.path.exists(conf) and not new:
+        raise ValueError("this folder is a hub already (--setup-hub --new-code makes a new pairing code)")
+    os.makedirs(folder, exist_ok=True)
+    code = "kfn-" + secrets.token_urlsafe(18)
+    write_bytes(conf, json.dumps({"token": _sha(code.encode()), "made": datetime.now().isoformat(timespec="seconds")},
+                                 indent=1).encode())
+    return code
+
+
+class Hub:
+    """The hub's record of the folder (2.1.1): `files` {path: sha256}, `dirs` {path}, every change numbered in
+    `entries` (and .kafeen/log.jsonl), every version in .kafeen/blobs/. `refresh` takes in what changed on disk."""
+
+    def __init__(self, root):
+        import json
+        import threading
+        self.root, self.dir = os.path.realpath(root), os.path.join(os.path.realpath(root), SYNC_DIR)
+        try:
+            with open(os.path.join(self.dir, "hub.json")) as f:
+                self.token = json.load(f)["token"]
+        except (OSError, ValueError, KeyError):
+            raise ValueError("this folder isn't a hub yet: run planner.py --setup-hub first")
+        self.cond = threading.Condition()
+        self.files, self.dirs, self.entries, self.stats = {}, set(), [], {}
+        self.blobs, self.log = os.path.join(self.dir, "blobs"), os.path.join(self.dir, "log.jsonl")
+        os.makedirs(self.blobs, exist_ok=True)
+        try:
+            with open(self.log, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        self._apply(json.loads(line))
+                    except (ValueError, KeyError):
+                        pass                            # a line cut short by a crash
+        except FileNotFoundError:
+            pass
+        self.refresh("hub")                             # changes made while the hub wasn't running
+
+    @property
+    def seq(self):
+        return self.entries[-1]["seq"] if self.entries else 0
+
+    def allowed(self, header):
+        import hmac
+        code = header[7:].strip() if isinstance(header, str) and header.startswith("Bearer ") else ""
+        return bool(code) and hmac.compare_digest(_sha(code.encode()), self.token)
+
+    def _apply(self, e):
+        self.entries.append(e)
+        if e["kind"] == "put":
+            self.files[e["path"]] = e["hash"]
+        elif e["kind"] == "delete":
+            self.files.pop(e["path"], None)
+        elif e["kind"] == "mkdir":
+            self.dirs.add(e["path"])
+        elif e["kind"] == "rmdir":
+            self.dirs.discard(e["path"])
+
+    def _record(self, kind, path, h, device):
+        import json
+        e = {"seq": self.seq + 1, "kind": kind, "path": path, "hash": h, "device": device,
+             "time": datetime.now().isoformat(timespec="seconds")}
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write(json.dumps(e) + "\n")
+        self._apply(e)
+        return e
+
+    def blob(self, h):
+        """A version's bytes by its hash, or None."""
+        if not (isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h)):
+            return None
+        try:
+            with open(os.path.join(self.blobs, h), "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def keep(self, data):
+        h = _sha(data)
+        p = os.path.join(self.blobs, h)
+        if not os.path.exists(p):
+            write_bytes(p, data)
+        return h
+
+    def refresh(self, device="hub"):
+        """Log what differs between the record and the disk (files by content); -> the new entries."""
+        with self.cond:
+            files, dirs, self.stats = scan_tree(self.root, self.stats, self.keep)
+            new = []
+            for d in sorted(dirs - self.dirs):
+                new.append(self._record("mkdir", d, None, device))
+            for k in sorted(files):
+                if self.files.get(k) != files[k]:
+                    new.append(self._record("put", k, files[k], device))
+            for k in sorted(set(self.files) - set(files)):
+                new.append(self._record("delete", k, None, device))
+            for d in sorted(self.dirs - dirs, reverse=True):
+                new.append(self._record("rmdir", d, None, device))
+            if new:
+                self.cond.notify_all()
+            return new
+
+    def state(self):
+        with self.cond:
+            self.refresh("hub")                         # what's on disk now, edits on the hub included
+            return {"seq": self.seq, "files": dict(self.files), "dirs": sorted(self.dirs)}
+
+    def changes(self, since, wait):
+        """{seq, changes: [entries after `since`]}, waiting up to `wait` s for one; {reset: true} if `since` is
+        ahead of the hub (a hub set up again): the device then starts over from /sync/state."""
+        with self.cond:
+            if since > self.seq:
+                return {"seq": self.seq, "reset": True, "changes": []}
+            self.cond.wait_for(lambda: self.seq > since, wait)
+            return {"seq": self.seq, "changes": [e for e in self.entries[since:] if e["seq"] > since]}
+
+    def put(self, rel, base, data, device):
+        """A device's version of a file, made from `base` (the hash it last had; None: new). -> {status: ok | merged
+        | conflict, hash (the hub's now), data (merged: the merged bytes)}. Nothing is lost: a clash leaves the
+        hub's file as it is, and the device keeps its version."""
+        full = sync_path(self.root, rel)
+        with self.cond:
+            self.refresh("hub")                         # edits made on the hub itself come first
+            cur = self.files.get(rel)
+            if os.path.isdir(full):
+                return {"status": "conflict", "hash": None, "error": f"{rel} is a folder here"}
+            if cur == _sha(data):
+                return {"status": "ok", "hash": cur}
+            if cur is None or cur == base:              # new, unchanged here since, or deleted here (an edit wins)
+                write_bytes(full, data)
+                self.refresh(device)
+                return {"status": "ok", "hash": self.files.get(rel)}
+            if rel == SETTINGS_FILE:                    # 2.1.4: settings merge setting by setting
+                merged = merge_settings(None if base is None else self.blob(base), data, self.blob(cur))
+                if merged is not None:
+                    write_bytes(full, merged)
+                    self.refresh(device)
+                    return {"status": "merged", "hash": self.files.get(rel), "data": merged}
+            if base is None:                            # two different files that never had a common version
+                return {"status": "conflict", "hash": cur}
+            old, theirs = self.blob(base), self.blob(cur)
+            try:
+                if old is None or theirs is None:
+                    raise ValueError
+                merged, clashes = merge3(old.decode("utf-8"), data.decode("utf-8"), theirs.decode("utf-8"))
+            except ValueError:                          # not text, or a base the hub never had
+                return {"status": "conflict", "hash": cur}
+            if clashes:
+                return {"status": "conflict", "hash": cur, "clashes": clashes}
+            out = merged.encode("utf-8")
+            write_bytes(full, out)
+            self.refresh(device)
+            return {"status": "merged", "hash": self.files.get(rel), "data": out}
+
+    def delete(self, rel, base, device):
+        """A device deleted a file it had at `base`: it goes to .trash here too, unless it changed here since
+        (then it stays: {status: changed}, and the device takes it back)."""
+        full = sync_path(self.root, rel)
+        with self.cond:
+            self.refresh("hub")
+            cur = self.files.get(rel)
+            if cur is None:
+                return {"status": "ok", "hash": None}
+            if cur != base:
+                return {"status": "changed", "hash": cur}
+            to_trash(self.root, rel)
+            self.refresh(device)
+            return {"status": "ok", "hash": None}
+
+    def mkdir(self, rel, device):
+        full = sync_path(self.root, rel)
+        with self.cond:
+            if os.path.isfile(full):
+                return {"status": "conflict", "error": f"{rel} is a file here"}
+            os.makedirs(full, exist_ok=True)
+            self.refresh(device)
+            return {"status": "ok"}
+
+    def rmdir(self, rel, device):
+        """A device removed a folder: here it goes to .trash if nothing visible is left in it, else it stays."""
+        full = sync_path(self.root, rel)
+        with self.cond:
+            self.refresh("hub")
+            if not os.path.isdir(full):
+                return {"status": "ok"}
+            if any(not n.startswith(".") for _, ds, fs in os.walk(full) for n in fs):
+                return {"status": "changed"}
+            to_trash(self.root, rel)
+            self.refresh(device)
+            return {"status": "ok"}
+
+
+def _sync_request(hub, code, name, method, path, payload=None, timeout=15):
+    """One request to the hub; -> parsed JSON (or bytes for a blob). ValueError("unauthorized") for a wrong code;
+    OSError when the hub can't be reached (offline)."""
+    import json
+    import urllib.error
+    import urllib.request
+    headers = {"Authorization": "Bearer " + code, "X-Kafeen-Device": name}
+    data = None
+    if payload is not None:
+        data, headers["Content-Type"] = json.dumps(payload).encode(), "application/json"
+    req = urllib.request.Request(hub + path, data, headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+            return json.loads(body) if r.headers.get("Content-Type") == "application/json" else body
+    except urllib.error.HTTPError as e:
+        with e:
+            if e.code == 401:
+                raise ValueError("unauthorized: the pairing code is wrong (pair again with the hub's code)")
+            raise OSError(f"the hub answered {e.code}")
+
+
+def pair(root, hub, code, name=None):
+    """Pair the Projects folder `root` with the hub at `hub` (2.1.2): checks the code, writes .kafeen/device.json
+    (readable only by you: it holds the code); -> the hub's state. ValueError if refused or unreachable."""
+    import json
+    import socket
+    from urllib.parse import urlsplit
+    if os.path.exists(os.path.join(root, SYNC_DIR, "hub.json")):
+        raise ValueError("this folder is the hub itself")
+    hub = hub.strip().rstrip("/")
+    if "://" not in hub:
+        hub = "http://" + hub
+    u = urlsplit(hub)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError(f"{hub!r} isn't a hub address (like http://kafeen-hub:8765)")
+    if u.port is None and u.scheme == "http":
+        hub += ":8765"
+    name = (name or socket.gethostname().split(".")[0] or "a device")[:60]
+    try:
+        state = _sync_request(hub, code, name, "GET", "/sync/state")
+    except OSError as e:
+        raise ValueError(f"can't reach the hub at {hub} ({e}); is it running, and is Tailscale on?")
+    os.makedirs(os.path.join(root, SYNC_DIR), exist_ok=True)
+    path = os.path.join(root, SYNC_DIR, "device.json")
+    write_bytes(path, json.dumps({"hub": hub, "code": code, "name": name, "seq": 0, "base": {}, "dirs": []}, indent=1).encode())
+    os.chmod(path, 0o600)
+    return state
+
+
+class SyncClient:
+    """A paired device's sync (2.1.2): keeps `root` equal to the hub's folder. Each round compares, per path, the
+    file here (L), the version last agreed with the hub (B, the base) and the hub's (H): L = H agree; L = B: only the
+    hub changed (pull, or a delete goes to .trash here); else this device changed it (put, which the hub merges, or
+    delete). A clash keeps the hub's version here and saves this device's in .kafeen/conflicts/. Rounds run when
+    the hub says something changed (a long-poll), when a file here changes (`kick`), and every minute."""
+
+    BACKOFF = (1, 2, 5, 10, 30)
+
+    def __init__(self, root, lock=None, on_change=None, on_status=None):
+        import json
+        import threading
+        self.root = os.path.realpath(root)
+        self.dir = os.path.join(self.root, SYNC_DIR)
+        self.conf_path = os.path.join(self.dir, "device.json")
+        with open(self.conf_path) as f:
+            self.conf = json.load(f)
+        self.hub, self.code, self.name = self.conf["hub"], self.conf["code"], self.conf["name"]
+        self.base, self.bdirs = dict(self.conf.get("base", {})), set(self.conf.get("dirs", []))
+        self.seq = self.conf.get("seq", 0)
+        self.lock = lock or threading.RLock()
+        self.on_change, self.on_status = on_change, on_status
+        self.blobs = os.path.join(self.dir, "blobs")
+        self.conflicts = os.path.join(self.dir, "conflicts")
+        os.makedirs(self.blobs, exist_ok=True)
+        self.cache, self.wake, self.stop = {}, threading.Event(), threading.Event()
+        self.status = {"state": "syncing", "waiting": 0, "conflicts": self._conflict_count(), "hub": self.hub,
+                       "name": self.name, "last": None, "error": None}
+
+    @staticmethod
+    def paired(root):
+        return os.path.exists(os.path.join(root, SYNC_DIR, "device.json"))
+
+    # ---- storage ----
+    def keep(self, data):
+        h = _sha(data)
+        p = os.path.join(self.blobs, h)
+        if not os.path.exists(p):
+            write_bytes(p, data)
+        return h
+
+    def blob(self, h):
+        try:
+            with open(os.path.join(self.blobs, h), "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def _save(self):
+        import json
+        self.conf.update(seq=self.seq, base=self.base, dirs=sorted(self.bdirs))
+        write_bytes(self.conf_path, json.dumps(self.conf, indent=1).encode())
+
+    def _conflict_count(self):
+        try:
+            return len([n for n in os.listdir(self.conflicts) if n.endswith(".json")])
+        except OSError:
+            return 0
+
+    def recount(self):
+        """The clashes kept aside changed (one was resolved): tell the pages."""
+        self._set(conflicts=self._conflict_count())
+
+    def _set(self, **kw):
+        self.status.update(kw)
+        if self.on_status:
+            self.on_status(dict(self.status))
+
+    # ---- the hub ----
+    def _req(self, method, path, payload=None, timeout=15):
+        return _sync_request(self.hub, self.code, self.name, method, path, payload, timeout)
+
+    def _local(self, rel):
+        return os.path.join(self.root, *rel.split("/"))
+
+    def _hash_now(self, rel):
+        try:
+            with open(self._local(rel), "rb") as f:
+                return _sha(f.read())
+        except OSError:
+            return None
+
+    def _write(self, rel, data, expect):
+        """Write the hub's version here, unless the file changed since this round looked (then the next round
+        sees it); -> whether it was written."""
+        with self.lock:
+            if self._hash_now(rel) != expect:
+                return False
+            write_bytes(self._local(rel), data)
+            return True
+
+    def _pull(self, rel, h, expect):
+        data = self.blob(h)
+        if data is None:
+            data = self._req("GET", "/sync/blob/" + h)
+            self.keep(data)
+        if self._write(rel, data, expect):
+            self.base[rel] = h
+            return True
+        return False
+
+    def _clash(self, rel, mine, base, theirs, clashes):
+        import json
+        os.makedirs(self.conflicts, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        n = len(os.listdir(self.conflicts)) + 1
+        rec = {"path": rel, "device": self.name, "time": datetime.now().isoformat(timespec="seconds"),
+               "base": base, "theirs": theirs, "mine": self.keep(mine), "clashes": clashes or []}
+        write_bytes(os.path.join(self.conflicts, f"{stamp}-{n}.json"), json.dumps(rec, indent=1).encode())
+
+    def round(self):
+        """Bring this folder and the hub's into step once; -> {pulled, pushed, merged, conflicts}."""
+        import base64
+        st = self._req("GET", "/sync/state")
+        with self.lock:
+            files, dirs, self.cache = scan_tree(self.root, self.cache, self.keep)
+        H, HD = st["files"], set(st["dirs"])
+        n = {"pulled": 0, "pushed": 0, "merged": 0, "conflicts": 0}
+        for d in sorted(HD | dirs):                    # folders first (a new section, an empty archive/)
+            here, there, known = d in dirs, d in HD, d in self.bdirs
+            if here and there:
+                self.bdirs.add(d)
+            elif there and not known:
+                with self.lock:
+                    os.makedirs(self._local(d), exist_ok=True)
+                self.bdirs.add(d)
+                n["pulled"] += 1
+            elif here and not known:
+                self._req("POST", "/sync/mkdir", {"path": d})
+                self.bdirs.add(d)
+                n["pushed"] += 1
+        for rel in sorted(set(files) | set(H) | set(self.base)):
+            L, B, Hh = files.get(rel), self.base.get(rel), H.get(rel)
+            if L == Hh:
+                if L is None:
+                    self.base.pop(rel, None)
+                else:
+                    self.base[rel] = L
+                continue
+            if L == B:                                  # only the hub changed it
+                if Hh is None:
+                    with self.lock:
+                        if self._hash_now(rel) == L:
+                            to_trash(self.root, rel)
+                            self.base.pop(rel, None)
+                            n["pulled"] += 1
+                elif self._pull(rel, Hh, L):
+                    n["pulled"] += 1
+                continue
+            if L is None:                               # deleted here
+                r = self._req("POST", "/sync/delete", {"path": rel, "base": B})
+                if r["status"] == "ok":
+                    self.base.pop(rel, None)
+                    n["pushed"] += 1
+                elif self._pull(rel, r["hash"], None):  # changed on another device meanwhile: it comes back
+                    n["pulled"] += 1
+                continue
+            mine = self.blob(L)
+            r = self._req("POST", "/sync/put", {"path": rel, "base": B, "data": base64.b64encode(mine).decode()})
+            if r["status"] == "ok":
+                self.base[rel] = r["hash"]
+                n["pushed"] += 1
+            elif r["status"] == "merged":
+                merged = base64.b64decode(r["data"])
+                self.keep(merged)
+                if self._write(rel, merged, L):
+                    self.base[rel] = r["hash"]
+                n["merged"] += 1
+            else:                                       # a clash: the hub's version here, this one kept aside
+                self._clash(rel, mine, B, r["hash"], r.get("clashes"))
+                if r["hash"] is None or self._pull(rel, r["hash"], L):
+                    n["conflicts"] += 1
+        for d in sorted(self.bdirs - (HD & dirs), reverse=True):   # folders gone on one side
+            if d in dirs and d not in HD:               # removed on the hub: here too, if nothing visible is left
+                with self.lock:
+                    full = self._local(d)
+                    if not any(not x.startswith(".") for _, _, fs in os.walk(full) for x in fs):
+                        to_trash(self.root, d)
+                        self.bdirs.discard(d)
+            elif d in HD and d not in dirs:             # removed here
+                if self._req("POST", "/sync/rmdir", {"path": d})["status"] == "ok":
+                    self.bdirs.discard(d)
+                else:
+                    with self.lock:
+                        os.makedirs(self._local(d), exist_ok=True)
+            else:
+                self.bdirs.discard(d)
+        self.seq = max(self.seq, st["seq"])
+        self._save()
+        if any(n.values()) and self.on_change:
+            self.on_change()
+        self._set(state="synced", waiting=0, conflicts=self._conflict_count(), error=None,
+                  last=datetime.now().isoformat(timespec="seconds"))
+        return n
+
+    def waiting(self):
+        """How many files and folders here differ from the last version agreed with the hub (to send)."""
+        with self.lock:
+            files, dirs, self.cache = scan_tree(self.root, self.cache, self.keep)
+        return (sum(files.get(k) != self.base.get(k) for k in set(files) | set(self.base))
+                + len(dirs ^ self.bdirs))
+
+    # ---- the threads ----
+    def kick(self):
+        self.wake.set()
+
+    def start(self):
+        import threading
+        threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=self._poll, daemon=True).start()
+        self.kick()
+
+    def close(self):
+        self.stop.set()
+        self.wake.set()
+
+    def _run(self):
+        import time
+        fails = 0
+        while not self.stop.is_set():
+            self.wake.wait(self.BACKOFF[min(fails, len(self.BACKOFF)) - 1] if fails else 60)
+            if self.stop.is_set():
+                break
+            self.wake.clear()
+            time.sleep(0.3)                             # a burst of edits goes in one round
+            self._set(state="syncing")
+            try:
+                self.round()
+                fails = 0
+            except ValueError as e:                     # refused (a wrong code): wait for the user
+                self._set(state="error", error=str(e))
+                fails = len(self.BACKOFF)
+            except (OSError, KeyError) as e:
+                fails += 1
+                try:
+                    waiting = self.waiting()
+                except OSError:
+                    waiting = self.status.get("waiting", 0)
+                self._set(state="offline", waiting=waiting, error=str(e))
+
+    def _poll(self):
+        seq = self.seq
+        while not self.stop.is_set():
+            try:
+                d = self._req("GET", f"/sync/changes?since={seq}&wait=25", timeout=35)
+                if d.get("reset"):
+                    seq = 0
+                    self.kick()
+                    continue
+                if any(e.get("device") != self.name for e in d["changes"]):
+                    self.kick()                         # another device (or the hub) changed something
+                seq = d["seq"]
+            except (OSError, ValueError, KeyError):
+                if self.status.get("state") not in ("offline", "error"):
+                    self.kick()                         # let a round find out what's wrong and say so
+                self.stop.wait(5)
+
+
+# ---- clashes (2.1.3): a device's change that the hub couldn't merge, kept aside until the user chooses ----
+
+RE_CLASH_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9]+")
+
+
+def _clash_dir(root):
+    return os.path.join(root, SYNC_DIR, "conflicts")
+
+
+def list_clashes(root):
+    """[{id, path, device, time, whole, clashes: [{line, base, mine, theirs}]}] of the clashes kept aside on this
+    device, oldest first. `whole`: the files couldn't be merged line by line (different from the start, or not text):
+    the choice is between the two whole files."""
+    import json
+    folder, out = _clash_dir(root), []
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".json"))
+    except OSError:
+        return []
+    for n in names:
+        try:
+            with open(os.path.join(folder, n), encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        out.append({"id": n[:-5], "path": rec["path"], "device": rec.get("device"), "time": rec.get("time"),
+                    "whole": not rec.get("clashes"), "clashes": rec.get("clashes") or [],
+                    "mine": None if rec.get("clashes") else _blob_text(root, rec.get("mine"))})
+    return out
+
+
+def _blob_text(root, h):
+    try:
+        with open(os.path.join(root, SYNC_DIR, "blobs", h), "rb") as f:
+            return f.read().decode("utf-8")
+    except (OSError, TypeError, UnicodeDecodeError):
+        return None
+
+
+def _blob_bytes(root, h):
+    try:
+        with open(os.path.join(root, SYNC_DIR, "blobs", h), "rb") as f:
+            return f.read()
+    except (OSError, TypeError):
+        return None
+
+
+def _find_block(lines, block, near):
+    """Where the lines `block` stand in `lines` (ignoring line endings), the place nearest to `near`; None if not."""
+    key = [x.rstrip("\r\n") for x in block]
+    flat = [x.rstrip("\r\n") for x in lines]
+    if not key:
+        return min(max(near, 0), len(lines))
+    spots = [i for i in range(len(flat) - len(key) + 1) if flat[i:i + len(key)] == key]
+    return min(spots, key=lambda i: abs(i - near)) if spots else None
+
+
+def resolve_clash(root, cid, choices):
+    """Apply the user's choice for a clash kept aside (2.1.3) and file it under conflicts/resolved/.
+
+    Line clashes: `choices` has one of "theirs" (keep what's there now), "mine" (this device's lines instead) or
+    "both" (theirs, then this device's) per clash, applied to the file as it is now: the lines kept are found again
+    by their text, so later edits elsewhere in the file don't matter. A whole-file clash takes one choice: "theirs",
+    "mine" (this device's file instead) or "both" (this device's file saved beside it, as "NAME (from DEVICE)").
+    -> {path, before, version, copy} (before/version: for Undo; copy: the new file's path for "both"), or
+    ValueError if it can't be applied (the lines changed since: edit them by hand, then dismiss)."""
+    import json
+    if not isinstance(cid, str) or not RE_CLASH_ID.fullmatch(cid):
+        raise ValueError("no such clash")
+    rec_path = os.path.join(_clash_dir(root), cid + ".json")
+    try:
+        with open(rec_path, encoding="utf-8") as f:
+            rec = json.load(f)
+    except OSError:
+        raise ValueError("no such clash (resolved already?)")
+    rel, clashes = rec["path"], rec.get("clashes") or []
+    full = sync_path(root, rel)
+    text, version = read_notes(full) if os.path.isfile(full) else ("", None)
+    out = {"path": rel, "before": text, "version": version, "copy": None}
+    allowed = {"theirs", "mine", "both", "dismiss"}
+    if not isinstance(choices, list) or not all(c in allowed for c in choices):
+        raise ValueError("choose theirs, mine or both")
+    if choices == ["dismiss"] or all(c in ("theirs", "dismiss") for c in choices):
+        pass                                            # keep what's there: nothing to write
+    elif not clashes:                                   # the whole file
+        mine = _blob_bytes(root, rec.get("mine"))
+        if mine is None:
+            raise ValueError("this device's version is missing")
+        if choices[0] == "mine":
+            write_bytes(full, mine)
+        else:
+            stem, ext = os.path.splitext(rel)
+            copy, n = f"{stem} (from {rec.get('device') or 'another device'}){ext}", 1
+            while os.path.exists(sync_path(root, copy)):
+                n += 1
+                copy = f"{stem} (from {rec.get('device') or 'another device'} {n}){ext}"
+            write_bytes(sync_path(root, copy), mine)
+            out["copy"] = copy
+    else:
+        if len(choices) != len(clashes):
+            raise ValueError("one choice per clash")
+        lines = text.splitlines(keepends=True)
+        eol = "\r\n" if "\r\n" in text else "\n"
+        shift = 0
+        for c, k in sorted(zip(choices, clashes), key=lambda x: x[1]["line"]):
+            if c == "theirs":
+                continue
+            at = _find_block(lines, k["theirs"], k["line"] - 1 + shift)
+            if at is None:
+                raise ValueError(f"line {k['line']} of {rel} changed since; edit it by hand, then choose \"Keep what's there\"")
+            mine = [x.rstrip("\r\n") + eol for x in k["mine"]]
+            if at + len(k["theirs"]) == len(lines) and lines and not lines[-1].endswith(("\n", "\r")) and mine:
+                mine[-1] = mine[-1].rstrip("\r\n")    # the file had no line ending at the end: still none
+                if c == "both":
+                    lines[-1] += eol
+            new = (lines[at:at + len(k["theirs"])] if c == "both" else []) + mine
+            lines[at:at + len(k["theirs"])] = new
+            shift += len(new) - len(k["theirs"])
+        try:
+            out["version"] = write_notes(full, "".join(lines), version)
+        except FileConflict:
+            raise ValueError(f"{rel} changed just now; try again")
+    done = os.path.join(_clash_dir(root), "resolved")
+    os.makedirs(done, exist_ok=True)
+    rec["resolved"] = {"choices": choices, "time": datetime.now().isoformat(timespec="seconds")}
+    write_bytes(os.path.join(done, cid + ".json"), json.dumps(rec, indent=1).encode())
+    os.remove(rec_path)
+    return out
+
+
+# ---- settings that follow you across devices (2.1.4): Projects/settings.json, an ordinary synced file ----
+
+SETTINGS_FILE = "settings.json"
+SETTINGS = {"hiddenProjects": [], "defWho": "", "defEffort": ""}
+
+
+def _setting_ok(key, value):
+    if key == "hiddenProjects":
+        return isinstance(value, list) and len(value) <= 500 and all(isinstance(x, str) and 0 < len(x) <= 120 for x in value)
+    if key == "defWho":
+        return isinstance(value, str) and len(value) <= 14
+    if key == "defEffort":
+        return value in ("", *EFFORT)
+    return False
+
+
+def read_settings(root):
+    """-> ({setting: value} for the settings in Projects/settings.json, its version); bad or unknown ones left out."""
+    import json
+    text, version = read_notes(os.path.join(root, SETTINGS_FILE))
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {k: v for k, v in data.items() if k in SETTINGS and _setting_ok(k, v)}, version
+
+
+def write_settings(root, changes):
+    """Set some settings (ValueError for an unknown setting or a bad value); -> the settings now. One setting per line
+    (sorted), so two devices changing different settings merge line by line like any notes file."""
+    import json
+    if not isinstance(changes, dict) or not all(k in SETTINGS and _setting_ok(k, v) for k, v in changes.items()):
+        raise ValueError("unknown setting or bad value")
+    current, version = read_settings(root)
+    new = dict(current, **changes)
+    if new != current or version is None:
+        write_notes(os.path.join(root, SETTINGS_FILE), settings_text(new), version)
+    return new
+
+
+def settings_text(settings):
+    import json
+    lines = [f"  {json.dumps(k)}: {json.dumps(settings[k], ensure_ascii=False)}" for k in sorted(settings)]
+    return "{\n" + ",\n".join(lines) + "\n}\n"
+
+
+def merge_settings(base, mine, theirs):
+    """settings.json changed on two devices (bytes; base None: both made it): setting by setting, never a clash.
+    A setting this device changed is its; otherwise the hub's. -> the merged bytes, or None if not settings."""
+    import json
+    try:
+        b, m, t = (json.loads(x.decode("utf-8")) if x and x.strip() else {} for x in (base, mine, theirs))
+    except ValueError:
+        return None
+    if not all(isinstance(x, dict) for x in (b, m, t)):
+        return None
+    out = dict(t)
+    for k, v in m.items():
+        if b.get(k) != v:
+            out[k] = v
+    for k in b:
+        if k not in m and t.get(k) == b[k]:
+            out.pop(k, None)
+    return settings_text(out).encode("utf-8")
+
+
+# ---- backups on the hub (2.1.4): a zip of the notes once a day, the newest BACKUPS_KEPT kept ----
+
+BACKUPS_KEPT, BLOB_DAYS = 30, 90
+
+
+def hub_backup(root, now=None):
+    """Zip every visible file under `root` into .kafeen/backups/YYYY-MM-DD-HHMM.zip, keep the newest BACKUPS_KEPT;
+    -> the zip's path."""
+    import zipfile
+    now = now or datetime.now()
+    folder = os.path.join(root, SYNC_DIR, "backups")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, now.strftime("%Y-%m-%d-%H%M") + ".zip")
+    tmp = path + ".part"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for here, ds, fs in os.walk(root):
+            ds[:] = sorted(d for d in ds if not d.startswith("."))
+            for name in sorted(fs):
+                if not name.startswith("."):
+                    full = os.path.join(here, name)
+                    z.write(full, os.path.relpath(full, root).replace(os.sep, "/"))
+    os.replace(tmp, path)
+    for old in sorted(n for n in os.listdir(folder) if n.endswith(".zip"))[:-BACKUPS_KEPT]:
+        os.remove(os.path.join(folder, old))
+    return path
+
+
+def backup_due(root, now=None, hours=20):
+    """Whether the newest backup is older than `hours` (or there is none)."""
+    folder = os.path.join(root, SYNC_DIR, "backups")
+    try:
+        newest = max((n for n in os.listdir(folder) if n.endswith(".zip")), default=None)
+    except OSError:
+        newest = None
+    if newest is None:
+        return True
+    try:
+        made = datetime.strptime(newest[:15], "%Y-%m-%d-%H%M")
+    except ValueError:
+        return True
+    return ((now or datetime.now()) - made).total_seconds() > hours * 3600
+
+
+def prune_blobs(hub, days=BLOB_DAYS):
+    """Old versions on the hub: remove those older than `days` that no file is at now; -> how many went.
+    (A device away longer than that merges a clash as a whole-file choice instead.)"""
+    import time
+    limit, keep, n = time.time() - days * 86400, set(hub.files.values()), 0
+    for name in os.listdir(hub.blobs):
+        p = os.path.join(hub.blobs, name)
+        try:
+            if name not in keep and os.stat(p).st_mtime < limit:
+                os.remove(p)
+                n += 1
+        except OSError:
+            pass
+    return n
+
+
+# ---- start at login (2.1.4): --autostart on|off ----
+
+def autostart_plan(system, hub=False, port=8765, python=None, script=None, home=None, uid=None):
+    """-> (the file to write, its content, [commands to start it now], [commands to stop it]) for `system` ("Linux",
+    "Darwin" or "Windows"); ValueError for another."""
+    import shlex
+    python = python or sys.executable
+    script = script or os.path.abspath(__file__)
+    home = home or os.path.expanduser("~")
+    args = [python, script, "--serve", "--no-browser", "--port", str(port)] + (["--hub", "--host", "0.0.0.0"] if hub else [])
+    name = "kafeen-hub" if hub else "kafeen"
+    if system == "Linux":
+        path = os.path.join(home, ".config", "systemd", "user", name + ".service")
+        content = (f"[Unit]\nDescription=KAFEEN Planner{' sync hub' if hub else ''}\nAfter=network-online.target\n\n"
+                   f"[Service]\nExecStart={shlex.join(args)}\nWorkingDirectory={os.path.dirname(script)}\n"
+                   "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n")
+        return (path, content, [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", name + ".service"]],
+                [["systemctl", "--user", "disable", "--now", name + ".service"]])
+    if system == "Darwin":
+        label = "com.kafeen." + name
+        path = os.path.join(home, "Library", "LaunchAgents", label + ".plist")
+        log = os.path.join(home, "Library", "Logs", name + ".log")
+        x = lambda v: v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        content = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                   '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n'
+                   f"\t<key>Label</key>\n\t<string>{x(label)}</string>\n\t<key>ProgramArguments</key>\n\t<array>\n"
+                   + "".join(f"\t\t<string>{x(a)}</string>\n" for a in args)
+                   + "\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n"
+                   f"\t<key>WorkingDirectory</key>\n\t<string>{x(os.path.dirname(script))}</string>\n"
+                   f"\t<key>StandardOutPath</key>\n\t<string>{x(log)}</string>\n"
+                   f"\t<key>StandardErrorPath</key>\n\t<string>{x(log)}</string>\n</dict>\n</plist>\n")
+        target = f"gui/{os.getuid() if uid is None else uid}"
+        return path, content, [["launchctl", "bootstrap", target, path]], [["launchctl", "bootout", target, path]]
+    if system == "Windows":
+        appdata = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        path = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+                            "KAFEEN Planner" + (" hub" if hub else "") + ".cmd")
+        w = os.path.join(os.path.dirname(python), "pythonw.exe")
+        runner = w if os.path.exists(w) else python
+        quoted = " ".join([f'"{runner}"', f'"{script}"'] + args[2:])
+        return path, f'@echo off\r\nstart "" {quoted}\r\n', [["cmd", "/c", path]], []
+    raise ValueError(f"--autostart doesn't know {system} yet")
+
+
+def autostart(on, hub=False, port=8765):
+    """Turn starting at login on or off for this computer; -> lines to print."""
+    import platform
+    import subprocess
+    path, content, start, stop = autostart_plan(platform.system(), hub, port)
+    out = []
+    run = lambda cmd: subprocess.run(cmd, capture_output=True, text=True)
+    if on:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):
+            for cmd in stop:
+                run(cmd)                                # replace a running one
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        out.append(f"KAFEEN{' (the sync hub)' if hub else ''} now starts when you log in ({path}).")
+        for cmd in start:
+            try:
+                r = run(cmd)
+                if r.returncode:
+                    out.append(f"Couldn't start it now ({' '.join(cmd)}: {(r.stderr or r.stdout).strip()}); it starts at the next login.")
+                    break
+            except OSError as e:
+                out.append(f"Couldn't start it now ({e}); it starts at the next login.")
+                break
+        else:
+            out.append(f"It's running: open http://localhost:{port}")
+        if hub and platform.system() == "Linux":
+            out.append("So the hub runs even before you log in (after a power cut), run once:  loginctl enable-linger $USER")
+    else:
+        if not os.path.exists(path):
+            return ["KAFEEN wasn't set to start at login."]
+        for cmd in stop:
+            try:
+                run(cmd)
+            except OSError:
+                pass
+        os.remove(path)
+        out.append("KAFEEN no longer starts at login (it stopped now too).")
+    return out
+
+
+class Changes:
+    """2.1.0: what changed on disk, for the pages listening on /api/events: a counter and the last changes."""
+
+    def __init__(self):
+        import threading
+        self.cond, self.seq, self.log, self.closed = threading.Condition(), 0, [], False
+        self.status = None                              # 2.1.2: the sync status, for the pages ({state, waiting, ...})
+
+    def publish(self, paths, tree=False):
+        with self.cond:
+            self.seq += 1
+            self.log = self.log[-199:] + [(self.seq, sorted(paths), tree)]
+            self.cond.notify_all()
+
+    def publish_status(self, status):
+        """2.1.2: a new sync status (an entry with no paths: the pages get the latest status)."""
+        with self.cond:
+            if status == self.status:
+                return
+            self.status, self.seq = status, self.seq + 1
+            self.log = self.log[-199:] + [(self.seq, None, False)]
+            self.cond.notify_all()
+
+    def since(self, n, wait):
+        """-> (the newest number, [(number, paths, tree)] after `n`), waiting up to `wait` seconds for one."""
+        with self.cond:
+            self.cond.wait_for(lambda: self.seq > n or self.closed, wait)
+            return self.seq, [e for e in self.log if e[0] > n]
+
+    def close(self):
+        with self.cond:
+            self.closed = True
+            self.cond.notify_all()
+
+
+def scan_files(root=None, path=None):
+    """{name: (size, mtime_ns)} of the notes the page can show: every file and folder under `root` (a portfolio;
+    names relative to it, folders ending in "/", hidden ones skipped), or the one file `path`."""
+    out = {}
+    if path is not None:
+        try:
+            st = os.stat(path)
+            out[path] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            pass
+        return out
+    for here, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        rel = os.path.relpath(here, root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel + "/"
+        for d in dirs:
+            out[rel + d + "/"] = (0, 0)
+        for f in files:
+            if f.startswith("."):
+                continue
+            try:
+                st = os.stat(os.path.join(here, f))
+            except OSError:
+                continue
+            out[rel + f] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def changed_files(old, new):
+    """-> (names added, removed or changed, whether files or folders came or went)."""
+    paths = {k for k in old.keys() | new.keys() if old.get(k) != new.get(k)}
+    return {k.rstrip("/") for k in paths}, old.keys() != new.keys()
+
+
+def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False, sync=True):
     """The server: 127.0.0.1 only unless `host` says otherwise (`--host 0.0.0.0`: every network interface, for a
     trusted LAN; no Host/Origin check or login then). Port 0 picks a free port.
 
@@ -2464,7 +3554,11 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     /api/file reads and saves any file in it by its path relative to the folder.
 
     With `notes_path`, GET/POST /api/file read and save that one file. Nothing else is ever written.
+
+    With `hub` (2.1.1, a portfolio that `setup_hub` made a hub; ValueError otherwise), /sync/* lets paired devices
+    read and change the folder (a Bearer pairing code; no Host/Origin check, devices aren't browsers).
     """
+    import base64
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2481,6 +3575,42 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
     # Requests run on their own threads, so a stalled browser connection can't block the others. TODAY and
     # LOG_END are module globals set per request, and files are read-modify-written, so API work takes turns.
     lock = threading.RLock()
+    if hub and folio is None:
+        raise ValueError("a hub serves a Projects folder, not one notes file")
+    hub = Hub(folio) if hub else None
+    # 2.1.2: a paired folder keeps itself in step with the hub (sync=False: built but not started, for the tests)
+    client = SyncClient(folio, lock) if folio is not None and hub is None and SyncClient.paired(folio) else None
+    # 2.1.0: watch the notes on disk (every SCAN_SECONDS, and right after each POST) and tell the open pages
+    changes, stop, watched = Changes(), threading.Event(), (folio is not None or notes_path is not None)
+    seen = {"files": scan_files(folio) if folio is not None else scan_files(path=notes_path) if notes_path else {}}
+    scan_lock = threading.Lock()
+
+    def rescan():
+        if not watched:
+            return
+        if hub is not None:
+            try:
+                hub.refresh("hub")                     # edits made on the hub (its page, by hand) go in its log
+            except OSError:
+                pass
+        with scan_lock:
+            try:
+                now = scan_files(folio) if folio is not None else scan_files(path=notes_path)
+            except OSError:                            # a folder that vanished mid-scan: try again next time
+                return
+            paths, tree = changed_files(seen["files"], now)
+            seen["files"] = now
+        if paths:
+            changes.publish(paths, tree)
+            if client is not None:
+                client.kick()                          # 2.1.2: send it to the hub
+
+    def watch():
+        while not stop.wait(SCAN_SECONDS):
+            try:
+                rescan()
+            except Exception:                          # a folder that vanished mid-scan: try again next time
+                pass
 
     class Handler(BaseHTTPRequestHandler):
         timeout = 10                                   # seconds a connection may sit silent before it is dropped
@@ -2511,6 +3641,8 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
 
         def do_GET(self):
             path = self.path.split("?")[0]
+            if path.startswith("/sync/"):
+                return self._sync_get(path)
             if path in statics:
                 name, ctype = statics[path]
                 self._send(200, (web / name).read_bytes(), ctype)
@@ -2524,11 +3656,92 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                     return
                 with lock:
                     self._file(parse_qs(urlsplit(self.path).query).get("path", [None])[0])
+            elif path == "/api/events":
+                if self._trusted():
+                    self._events()
+            elif path == "/api/settings":              # 2.1.4: settings that follow you across devices
+                if self._trusted():
+                    if folio is None:
+                        return self._json(200, {"settings": None})
+                    with lock:
+                        self._json(200, {"settings": read_settings(folio)[0]})
+            elif path == "/api/clashes":               # 2.1.3: the clashes kept aside on this device
+                if self._trusted():
+                    self._json(200, {"clashes": list_clashes(folio) if client is not None else []})
+            elif path == "/api/sync":                  # 2.1.2: where sync stands ({state: "unpaired"} if not paired)
+                if self._trusted():
+                    self._json(200, changes.status or {"state": "hub" if hub is not None else "unpaired"})
             else:
                 self._send(404, b"not found", "text/plain")
 
+        def _sync_ok(self):
+            """A /sync/ request: only on a hub, only with the pairing code."""
+            if hub is None:
+                self._send(404, b"not found", "text/plain")
+                return False
+            if not hub.allowed(self.headers.get("Authorization")):
+                self._json(401, {"error": "wrong or missing pairing code"})
+                return False
+            return True
+
+        def _sync_get(self, path):
+            if not self._sync_ok():
+                return
+            q = parse_qs(urlsplit(self.path).query)
+            try:
+                if path == "/sync/state":
+                    return self._json(200, hub.state())
+                if path == "/sync/changes":
+                    since = int(q.get("since", ["0"])[0])
+                    wait = min(max(float(q.get("wait", ["0"])[0]), 0), 30)
+                    return self._json(200, hub.changes(since, wait))
+                if path.startswith("/sync/blob/"):
+                    data = hub.blob(path[len("/sync/blob/"):])
+                    if data is None:
+                        return self._json(404, {"error": "no such version"})
+                    return self._send(200, data, "application/octet-stream")
+            except ValueError:
+                return self._json(400, {"error": "bad request"})
+            except OSError:
+                return
+            self._send(404, b"not found", "text/plain")
+
+        def _sync_post(self):
+            if not self._sync_ok():
+                return
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+                if not 0 <= length <= self.MAX_BODY:
+                    raise ValueError
+                req = json.loads(self.rfile.read(length))
+                device = str(self.headers.get("X-Kafeen-Device") or "a device")[:60]
+                op, rel = self.path[len("/sync/"):], req.get("path")
+                with lock:
+                    if op == "put":
+                        out = hub.put(rel, req.get("base"), base64.b64decode(req.get("data", ""), validate=True), device)
+                        if "data" in out:
+                            out["data"] = base64.b64encode(out["data"]).decode()
+                    elif op == "delete":
+                        out = hub.delete(rel, req.get("base"), device)
+                    elif op == "mkdir":
+                        out = hub.mkdir(rel, device)
+                    elif op == "rmdir":
+                        out = hub.rmdir(rel, device)
+                    else:
+                        return self._send(404, b"not found", "text/plain")
+                out["seq"] = hub.seq
+                self._json(200, out)
+            except (ValueError, TypeError) as e:
+                self._json(400, {"error": f"bad request: {e}"})
+            except OSError:
+                pass
+            finally:
+                rescan()                                # the hub's own pages see a device's change at once
+
         def do_POST(self):
-            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive"):
+            if self.path.startswith("/sync/"):
+                return self._sync_post()
+            if self.path not in ("/api/parse", "/api/edit", "/api/file", "/api/portfolio", "/api/archive", "/api/clashes", "/api/settings"):
                 return self._send(404, b"not found", "text/plain")
             if not self._trusted():
                 return
@@ -2553,6 +3766,8 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                 pass                                    # the browser left before the answer was sent
             except Exception as e:                      # one bad request must never take the server down
                 self._json(500, {"error": f"server error: {type(e).__name__}: {e}"})
+            finally:
+                rescan()                                # tell the other open pages at once, not at the next scan
 
         def _post(self, raw):
             global TODAY, LOG_END
@@ -2563,6 +3778,22 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                     return self._save(req)
                 if self.path == "/api/portfolio":
                     return self._portfolio(req)
+                if self.path == "/api/settings":           # 2.1.4: {set: {setting: value}}
+                    if folio is None:
+                        return self._json(409, {"error": "settings are kept in a Projects folder"})
+                    try:
+                        return self._json(200, {"settings": write_settings(folio, req.get("set"))})
+                    except (ValueError, FileConflict) as e:
+                        return self._json(409, {"error": str(e)})
+                if self.path == "/api/clashes":            # 2.1.3: {id, choices}
+                    if client is None:
+                        return self._json(409, {"error": "this folder isn't paired with a hub"})
+                    try:
+                        out = resolve_clash(folio, req.get("id"), req.get("choices"))
+                    except ValueError as e:
+                        return self._json(409, {"error": str(e)})
+                    client.recount()
+                    return self._json(200, out)
                 TODAY = default_today or date.today()
                 if req.get("today"):
                     set_today(req["today"])
@@ -2724,6 +3955,38 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                 return self._json(500, {"error": f"can't read {p}: {e}"})
             self._json(200, {"name": os.path.basename(p), "path": path if folio else p, "text": text, "version": version})
 
+        def _events(self):
+            """2.1.0: a stream of Server-Sent Events: `changed` {paths, tree} whenever notes change on disk (paths as
+            the page names them: portfolio paths, or the command-line file's path), and a comment every
+            15 s so the connection stays open. The page's EventSource reconnects by itself."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            n = changes.seq
+            try:
+                self.wfile.write(b"retry: 2000\n\n")
+                if changes.status:                      # 2.1.2: where sync stands, at once
+                    self.wfile.write(f"event: sync\ndata: {json.dumps(changes.status)}\n\n".encode())
+                self.wfile.flush()
+                while not stop.is_set():
+                    n2, entries = changes.since(n, 15)
+                    if stop.is_set():
+                        break
+                    if entries:
+                        paths = sorted({p for e in entries if e[1] is not None for p in e[1]})
+                        if paths:
+                            msg = json.dumps({"paths": paths, "tree": any(e[2] for e in entries)})
+                            self.wfile.write(f"event: changed\ndata: {msg}\n\n".encode())
+                        if any(e[1] is None for e in entries):   # 2.1.2: the sync status changed
+                            self.wfile.write(f"event: sync\ndata: {json.dumps(changes.status)}\n\n".encode())
+                    else:
+                        self.wfile.write(b": still here\n\n")
+                    self.wfile.flush()
+                    n = n2
+            except OSError:
+                pass                                    # the page went away
+
         def _save(self, req):
             p = self._target(req.get("path"))
             if p is None:
@@ -2735,7 +3998,17 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
                     os.makedirs(os.path.dirname(p), exist_ok=True)
                 version = write_notes(p, req["text"], req.get("version"), bool(req.get("force")))
             except FileConflict as e:
-                _, current = read_notes(p)
+                disk, current = read_notes(p)
+                base = req.get("base")
+                if isinstance(base, str) and current is not None:   # 2.1.0: changed on disk meanwhile: merge if the
+                    crlf = "\r\n" in disk and disk.count("\r\n") == disk.count("\n")   # changes don't clash
+                    merged, clashes = merge3(base, req["text"], disk.replace("\r\n", "\n") if crlf else disk)
+                    if not clashes:
+                        try:
+                            version = write_notes(p, merged, current)
+                        except (FileConflict, OSError) as e2:
+                            return self._json(409, {"error": str(e2), "conflict": True, "version": read_notes(p)[1]})
+                        return self._json(200, {"version": version, "text": merged, "merged": True})
                 return self._json(409, {"error": str(e), "conflict": True, "version": current})
             except OSError as e:
                 return self._json(500, {"error": f"can't save {p}: {e}"})
@@ -2748,14 +4021,50 @@ def make_server(port, notes_path=None, portfolio=None, host="127.0.0.1"):
         daemon_threads = True                          # a stuck request never keeps the program from exiting
         request_queue_size = 128                       # the default 5 resets connections when a browser opens a burst
 
-    return Server((host, port), Handler)
+        def server_close(self):
+            stop.set()
+            if client is not None:
+                client.close()
+            changes.close()                            # wakes the event streams, which then end
+            super().server_close()
+
+    server = Server((host, port), Handler)
+    if client is not None:
+        client.on_change, client.on_status = rescan, changes.publish_status
+        changes.status = dict(client.status)
+    elif hub is not None:
+        changes.status = {"state": "hub"}
+    server.changes, server.rescan, server.hub, server.sync = changes, rescan, hub, client
+    if watched:
+        threading.Thread(target=watch, daemon=True).start()
+    if hub is not None and sync:                       # 2.1.4: a backup a day, old versions pruned
+        def backups():
+            while True:
+                try:
+                    if backup_due(folio):
+                        with lock:
+                            hub_backup(folio)
+                            prune_blobs(hub)
+                except OSError:
+                    pass
+                if stop.wait(3600):
+                    break
+        threading.Thread(target=backups, daemon=True).start()
+    if client is not None and sync:
+        client.start()
+    return server
 
 
-def serve(port, notes_path=None, portfolio=None, host="127.0.0.1"):
+def serve(port, notes_path=None, portfolio=None, host="127.0.0.1", hub=False, browser=True):
     import threading
     import webbrowser
 
-    server = make_server(port, notes_path, portfolio=portfolio, host=host)
+    try:
+        server = make_server(port, notes_path, portfolio=portfolio, host=host, hub=hub)
+    except ValueError as e:
+        sys.exit(f"planner.py: {e}")
+    if hub:
+        print(f"Sync hub: paired devices keep {portfolio} in step (log and versions in {os.path.join(portfolio, SYNC_DIR)})")
     local = host == "127.0.0.1"
     url = f"http://localhost:{port}"
     print(f"Planner running at {url if local else f'http://{host}:{port}  (anyone on the network can use it and change the files)'}  (Ctrl-C to stop)")
@@ -2763,7 +4072,7 @@ def serve(port, notes_path=None, portfolio=None, host="127.0.0.1"):
         print(f"Projects in {portfolio}")
     if notes_path:
         print(f"Editing {notes_path}" + ("" if os.path.exists(notes_path) else " (new file, created on first Save)"))
-    if local:                                          # a server on the network is usually headless
+    if local and browser:                              # a server on the network is usually headless
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
@@ -2816,8 +4125,82 @@ def main(argv):
             sys.exit(f"planner.py: can't import {args[0]!r}: {e}")
         print(f"Imported into {folder}: " + ", ".join(made))
         return
+    if "--setup-hub" in args:                                  # 2.1.1: this machine's Projects folder becomes the hub
+        args.remove("--setup-hub")
+        new = "--new-code" in args
+        if new:
+            args.remove("--new-code")
+        folder = args[0] if len(args) == 1 else PROJECTS if not args else None
+        if folder is None:
+            sys.exit("planner.py: use --setup-hub [FOLDER] [--new-code]")
+        try:
+            os.makedirs(folder, exist_ok=True)
+            code = setup_hub(folder, new)
+        except (OSError, ValueError) as e:
+            sys.exit(f"planner.py: {e}")
+        print(f"""This computer's projects ({os.path.realpath(folder)}) are now the sync hub.
+
+Pairing code (keep it secret; you type it once on each of your devices):
+
+    {code}
+
+Start the hub (and keep it running):
+    python3 planner.py --serve --hub --host 0.0.0.0
+
+Then, on each computer:
+    python3 planner.py --pair http://THIS-COMPUTER:8765 {code}
+(THIS-COMPUTER: its Tailscale name, like kafeen-hub.)""")
+        return
+    if "--pair" in args:                                       # 2.1.2: this computer's Projects folder follows the hub
+        args.remove("--pair")
+        name = take_option(args, "--name")
+        if len(args) not in (2, 3):
+            sys.exit("planner.py: use --pair HUB-ADDRESS PAIRING-CODE [FOLDER] [--name NAME]")
+        folder = args[2] if len(args) == 3 else PROJECTS
+        try:
+            os.makedirs(folder, exist_ok=True)
+            state = pair(folder, args[0], args[1], name)
+            client = SyncClient(folder)
+            print(f"Paired with the hub at {client.hub} as {client.name!r} (the hub has {len(state['files'])} files).")
+            n = client.round()
+        except (OSError, ValueError) as e:
+            sys.exit(f"planner.py: {e}")
+        print(f"First sync: {n['pulled']} from the hub, {n['pushed']} sent, {n['merged']} merged"
+              + (f", {n['conflicts']} clashes (kept in {os.path.join(folder, SYNC_DIR, 'conflicts')})" if n["conflicts"] else "")
+              + ".\nFrom now on, python3 planner.py --serve keeps this folder in step with the hub, live.")
+        return
+    if "--unpair" in args:
+        args.remove("--unpair")
+        folder = args[0] if len(args) == 1 else PROJECTS
+        conf = os.path.join(folder, SYNC_DIR, "device.json")
+        if not os.path.exists(conf):
+            sys.exit("planner.py: this folder isn't paired with a hub")
+        os.remove(conf)
+        print("Unpaired: the files stay as they are and no longer sync. Pair again with --pair.")
+        return
+    if "--autostart" in args:                                  # 2.1.4: start KAFEEN (or the hub) at login
+        args.remove("--autostart")
+        hub = "--hub" in args
+        if hub:
+            args.remove("--hub")
+        port = take_option(args, "--port") or "8765"
+        if len(args) != 1 or args[0] not in ("on", "off") or not port.isdigit():
+            sys.exit("planner.py: use --autostart on|off [--hub] [--port N]")
+        if hub and args[0] == "on" and not os.path.exists(os.path.join(PROJECTS, SYNC_DIR, "hub.json")):
+            sys.exit("planner.py: make this computer the hub first: python3 planner.py --setup-hub")
+        try:
+            print("\n".join(autostart(args[0] == "on", hub, int(port))))
+        except (OSError, ValueError) as e:
+            sys.exit(f"planner.py: {e}")
+        return
     if "--serve" in args:
         args.remove("--serve")
+        hub = "--hub" in args
+        if hub:
+            args.remove("--hub")
+        browser = "--no-browser" not in args
+        if not browser:
+            args.remove("--no-browser")
         port = take_option(args, "--port") or "8765"
         host = take_option(args, "--host") or "127.0.0.1"
         if not port.isdigit() or not 0 < int(port) < 65536:
@@ -2829,7 +4212,9 @@ def main(argv):
                 os.makedirs(PROJECTS, exist_ok=True)
             except OSError as e:
                 sys.exit(f"planner.py: can't make the folder {PROJECTS!r}: {e.strerror or e}")
-            return serve(int(port), portfolio=PROJECTS, host=host)
+            return serve(int(port), portfolio=PROJECTS, host=host, hub=hub, browser=browser)
+        if hub:
+            sys.exit("planner.py: --hub serves the Projects folder, not one notes file")
         notes = os.path.realpath(args[0])                      # follow a symlink to the real file
         if os.path.isdir(notes):
             sys.exit(f"planner.py: --serve takes no folder: your projects live in {PROJECTS}")
@@ -2839,7 +4224,7 @@ def main(argv):
             read_notes(notes)
         except (OSError, UnicodeDecodeError) as e:
             sys.exit(f"planner.py: can't read {args[0]!r}: {e}")
-        return serve(int(port), notes, host=host)
+        return serve(int(port), notes, host=host, browser=browser)
     for a in args:
         if a.lower() in VIEWS:
             chosen.append(a.lower())
